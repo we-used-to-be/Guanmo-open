@@ -99,6 +99,23 @@ VITE_GUANMO_WEB_SEARCH_API_KEY_SECRET=guanmo.web-search.api-key
 - **记忆管理**：查看、锁定、删除、确认候选记忆
 - **数据备份**：一键导出 / 导入全部数据
 
+### 🖥 本地优先 · Local-First
+
+观墨无需后端服务，安装后即可在本地运行。
+
+- 文档编辑、预览与管理均在本地完成
+- 知识库索引保存在本机
+- 不强制上传用户文档
+- AI 功能需用户自行配置模型接口
+
+### 📂 文件关联 · File Association
+
+安装 MSI 版本后：
+
+- 双击 Markdown 文件直接打开
+- 支持拖放打开文件
+- 自动注册系统关联
+
 ---
 
 ## 🛠️ 技术栈 · Tech Stack
