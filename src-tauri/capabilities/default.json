@@ -12,10 +12,11 @@
     "fs:allow-mkdir",
     "fs:allow-remove",
     "fs:allow-rename",
-    {
-      "identifier": "fs:scope",
-      "allow": []
-    },
+    "fs:scope",
+    "fs:scope-home",
+    "fs:scope-document",
+    "fs:scope-desktop",
+    "fs:scope-download",
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-save",
