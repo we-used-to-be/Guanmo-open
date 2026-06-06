@@ -10,7 +10,7 @@ import type { ChatMessage, ChatMessageTag } from '@/services/ai/types'
 import { searchMemories, buildMemoryContext } from '@/services/memory/memoryService'
 import { persistMemory, loadAllMemories, listEmbeddingJobs } from '@/services/database/persistence'
 import { readFile } from '@/hooks/useTauri'
-import { resolveAnchoredReplacementRange, type TextRange } from './editTarget'
+import type { TextRange } from './editTarget'
 import { normalizeFilePath } from '@/services/pathIdentity'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { getEmbeddingClient, isEmbeddingReady } from '@/services/ai/aiClient'
@@ -112,6 +112,25 @@ function getLatestEditForTab(tabId: string) {
 function getSelectionRange(tag: ContextTag): TextRange | undefined {
   if (typeof tag.selectionFrom !== 'number' || typeof tag.selectionTo !== 'number') return undefined
   return { from: tag.selectionFrom, to: tag.selectionTo }
+}
+
+function isValidRange(content: string, range?: TextRange): range is TextRange {
+  return Boolean(
+    range
+    && range.from >= 0
+    && range.to >= range.from
+    && range.to <= content.length
+  )
+}
+
+function getCurrentSelectionTargetRange(
+  content: string,
+  initialRange: TextRange,
+  latestAppliedRange?: TextRange
+): TextRange | null {
+  if (isValidRange(content, latestAppliedRange)) return latestAppliedRange
+  if (isValidRange(content, initialRange)) return initialRange
+  return null
 }
 
 function getLatestAppliedRangeForSelection(tabId: string, tag: ContextTag): TextRange | undefined {
@@ -431,9 +450,9 @@ export function registerBuiltinTools() {
 
   registerTool({
     name: 'replace_current_tab_text',
-    description: '为用户本轮明确添加的 file 或 selection 标签生成文本替换确认卡片。必须传入该标签文件的 path；selection 使用授权范围内当前完整原文作为 oldText。整文替换应设置 replaceWholeDocument=true。工具不会直接写入文件。',
+    description: '为用户本轮明确添加的 file/selection 标签生成文本替换确认卡片。必须传入目标文件 path；selection 会由工具读取授权范围内当前完整原文，整文替换应设置 replaceWholeDocument=true。工具不会直接写入文件。',
     parameters: [
-      { name: 'oldText', type: 'string', description: '片段替换时要被替换的原文，必须与文档内容完全匹配；整文替换时省略', required: false },
+      { name: 'oldText', type: 'string', description: 'file 片段替换时要被替换的原文，必须与文档内容完全匹配；selection 修改和整文替换时省略', required: false },
       { name: 'newText', type: 'string', description: '替换后的新文本', required: true },
       { name: 'path', type: 'string', description: '目标文件绝对路径；必须是用户本轮添加到聊天框且已打开的 file 或 selection 标签', required: true },
       { name: 'replaceWholeDocument', type: 'boolean', description: '是否替换目标标签页整份内容；为 true 时由工具自动使用完整原文', required: false },
@@ -467,21 +486,22 @@ export function registerBuiltinTools() {
       if (!tab) return '当前没有打开的编辑标签页。'
 
       const replaceWholeDocument = args.replaceWholeDocument === true
-      if (!replaceWholeDocument) {
+      const selectionRange = targetedSelection && getSelectionRange(targetedSelection)
+      if (!replaceWholeDocument && !selectionRange) {
         const oldTextErr = validateString(args.oldText, 'oldText')
         if (oldTextErr) return oldTextErr
       }
 
-      const oldText = replaceWholeDocument ? tab.content : args.oldText as string
+      let oldText = replaceWholeDocument ? tab.content : args.oldText as string
       let replaceRange: TextRange
-      const selectionRange = targetedSelection && getSelectionRange(targetedSelection)
       if (!replaceWholeDocument && targetedSelection && selectionRange) {
         const latestAppliedRange = getLatestAppliedRangeForSelection(tab.id, targetedSelection)
-        const anchoredRange = resolveAnchoredReplacementRange(tab.content, oldText, selectionRange, latestAppliedRange)
+        const anchoredRange = getCurrentSelectionTargetRange(tab.content, selectionRange, latestAppliedRange)
         if (!anchoredRange) {
-          return '替换失败：授权选区中的文本已变化，或 oldText 不是该选区的完整当前原文。请重新框选目标文本后再次发起修改。'
+          return '替换失败：授权选区范围已失效。请重新框选目标文本后再次发起修改。'
         }
         replaceRange = anchoredRange
+        oldText = tab.content.slice(replaceRange.from, replaceRange.to)
       } else {
         const index = tab.content.indexOf(oldText)
         if (index < 0) {

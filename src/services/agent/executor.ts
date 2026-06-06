@@ -45,6 +45,8 @@ const DEFAULT_CONFIG: AgentConfig = {
 {"needsEditConfirmation": true, "path": "本轮已授权且已打开的文件绝对路径", "oldText": "当前编辑器中要替换的原文", "newText": "替换后的新文本"}
 修改用户添加到聊天框的 selection 或 file 标签所指向的文件时，必须附带路径：
 {"needsEditConfirmation": true, "path": "已授权且已打开的文件绝对路径", "oldText": "目标文件中的原文", "newText": "替换后的新文本"}
+修改 selection 标签时不要回传 oldText，由工具读取授权范围内的当前原文：
+{"needsEditConfirmation": true, "path": "已授权且已打开的文件绝对路径", "newText": "替换后的新文本"}
 修改整份已授权文件时，不要回传完整 oldText，使用：
 {"needsEditConfirmation": true, "path": "已授权且已打开的文件绝对路径", "replaceWholeDocument": true, "newText": "替换后的完整新稿"}
 
@@ -58,11 +60,11 @@ const DEFAULT_CONFIG: AgentConfig = {
 5. 本轮携带 selection 或 file 标签且用户要求修改时，必须调用 replace_current_tab_text 生成确认卡片，禁止只输出修改后的文本或口头说明。
 5.1 如果本轮有多个 selection 或 file 目标，且用户要求分别修改多个目标，应按目标逐个调用 replace_current_tab_text，生成多张独立确认卡片；每次调用只处理一个 path，不要把多个文件或选区合并到一张卡片。
 6. 调用 replace_current_tab_text 或输出 needsEditConfirmation 时必须传入本轮目标标签的 path；目标文件还必须已在标签页打开。
-6.1 selection 标签包含精确字符范围。修改 selection 时，oldText 必须是该授权选区当前完整原文；不得改写文档内其他相同文本。
+6.1 selection 标签包含精确字符范围。修改 selection 时不要回传 oldText，工具会读取授权选区当前完整原文；不得改写文档内其他相同文本。
 7. 如果用户要求改写或覆写整份文件，必须传入 replaceWholeDocument=true，由工具读取已打开目标文件的完整原文；不要把整份原文复制到 oldText。
-8. 如果本轮用户消息里带有 [上下文]、tag 或选中文本，优先把该段上下文原文作为 oldText。
+8. 如果本轮用户消息里带有 file 标签并要求片段替换，oldText 必须来自目标文件当前内容；如果是 selection 标签，省略 oldText。
 9. get_recent_context_tag 仅可用于查看历史上下文，不得用于生成修改确认卡片；不得在没有本轮目标 tag 时通过 get_current_tab_text 修改当前活动标签。
-10. oldText 必须与目标标签页内容完全一致；newText 是修改后的完整替换片段。
+10. file 片段替换时 oldText 必须与目标标签页内容完全一致；selection 修改由工具读取 oldText。newText 是修改后的完整替换片段。
 11. replace_current_tab_text 只会生成用户确认卡片，不会直接写入文件。调用该工具后，等待用户在确认卡片中确认或拒绝。
 12. 对携带本轮目标 tag 的修改意图，最终必须输出工具 JSON 或 needsEditConfirmation JSON；未携带时只提示用户重新添加 tag。
 13. 调用 replace_current_tab_text 或输出 needsEditConfirmation 时只输出 JSON，不要同时输出解释文本。
@@ -414,9 +416,9 @@ export async function runAgent(
             '你必须重新输出以下两种 JSON 之一：',
             '{"needsEditConfirmation": true, "path": "本轮已授权且已打开的文件绝对路径", "oldText": "当前编辑器中要替换的原文", "newText": "替换后的新文本"}',
             '修改已添加的 selection 或 file 标签时必须在上述 JSON 中增加 "path": "已授权且已打开的文件绝对路径"。',
-            '修改 selection 标签时，oldText 必须是授权选区当前完整原文，不得选择文档内其他相同文本。',
+            '修改 selection 标签时省略 oldText，由工具读取授权选区当前完整原文，不得选择文档内其他相同文本。',
             '修改整份已授权文件时增加 "replaceWholeDocument": true，并省略 oldText。',
-            '或 {"tool": "replace_current_tab_text", "args": {"path": "本轮已授权且已打开的文件绝对路径", "oldText": "当前编辑器中要替换的原文", "newText": "替换后的新文本", "replaceWholeDocument": false}}',
+            '或 {"tool": "replace_current_tab_text", "args": {"path": "本轮已授权且已打开的文件绝对路径", "newText": "替换后的新文本", "replaceWholeDocument": false}}',
           ].join('\n'),
         })
         continue

@@ -107,8 +107,9 @@ export async function buildContextFromTags(options: BuildContextOptions): Promis
   let usedChars = 0
 
   for (const { tag } of orderedTags) {
-    const rawContent = (await resolveTagContent(tag, readFile)).trim()
-    if (!rawContent) continue
+    const resolvedContent = await resolveTagContent(tag, readFile)
+    const rawContent = tag.type === 'selection' ? resolvedContent : resolvedContent.trim()
+    if (!rawContent.trim()) continue
 
     const remaining = maxChars - usedChars
     if (remaining <= 180) break
