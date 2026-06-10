@@ -88,6 +88,7 @@ export async function searchScopedKnowledge(
     topK: 3,
     similarityThreshold: 0.5,
     filePaths: scopeFilePaths,
+    currentFilePath: scopeFilePaths[0],
     signal,
   })
 

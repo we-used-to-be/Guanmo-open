@@ -45,6 +45,8 @@ export interface EditConfirmation {
   tabTitle: string
   replaceFrom?: number
   replaceTo?: number
+  replaceWholeDocument?: boolean
+  changeSummary?: string
   selectionFrom?: number
   selectionTo?: number
   status: 'pending' | 'applied' | 'rejected'

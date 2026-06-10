@@ -1,12 +1,18 @@
-export type RetrievalMode = 'vector' | 'keyword'
+export type RetrievalMode = 'vector' | 'keyword' | 'hybrid'
 
 export interface Chunk {
   id: string
   documentId: string
   content: string
+  contentHash?: string
   index: number
   startLine: number
   endLine: number
+  titlePath?: string[]
+  heading?: string
+  sourceType?: 'markdown' | 'text'
+  createdAt?: number
+  updatedAt?: number
   embedding?: number[]
 }
 
@@ -24,6 +30,8 @@ export interface SearchResult {
   score: number
   document: Document
   retrievalMode: RetrievalMode
+  keywordScore?: number
+  vectorScore?: number
 }
 
 export interface Memory {
@@ -40,4 +48,7 @@ export interface RAGConfig {
   chunkOverlap: number
   topK: number
   similarityThreshold: number
+  keywordSearchEnabled: boolean
+  preferCurrentFile: boolean
+  preferRecentDocuments: boolean
 }

@@ -543,6 +543,11 @@ function PendingEditCard({ edit, actionable }: { edit: PendingEdit; actionable: 
         <p className="text-micro text-gm-text-secondary mb-2">
           AI 要求修改文件「{edit.tabTitle}」中的文本
         </p>
+        {edit.changeSummary && (
+          <div className="mb-2 rounded-lg border border-gm-border bg-gm-surface px-2 py-1 text-micro text-gm-text-secondary">
+            {edit.changeSummary}
+          </div>
+        )}
         <details className="mb-2">
           <summary className="text-micro text-gm-text-tertiary cursor-pointer hover:text-gm-text-secondary">
             查看变更详情

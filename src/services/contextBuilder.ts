@@ -6,7 +6,7 @@ export interface BuildContextOptions {
   maxChars?: number
 }
 
-export const CONTEXT_BLOCK_PREFIX = '以下是用户提供的上下文：'
+export const CONTEXT_BLOCK_PREFIX = '【当前文档上下文】'
 
 const TAG_PRIORITY: Record<ContextTag['type'], number> = {
   selection: 0,

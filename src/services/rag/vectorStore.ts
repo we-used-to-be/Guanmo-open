@@ -6,6 +6,15 @@ import {
   persistEmbedding,
 } from '@/services/database/persistence'
 import { normalizeFilePath } from '@/services/pathIdentity'
+import { createContentHash } from './contentHash'
+
+interface SearchRankingOptions {
+  filePaths?: string[]
+  keywordSearchEnabled?: boolean
+  currentFilePath?: string
+  preferCurrentFile?: boolean
+  preferRecentDocuments?: boolean
+}
 
 /**
  * In-memory vector store for RAG with optional DB persistence.
@@ -70,6 +79,7 @@ class VectorStore {
     }
     this.documents.set(doc.id, doc)
     for (const chunk of doc.chunks) {
+      chunk.contentHash = chunk.contentHash || createContentHash(chunk.content)
       this.chunks.set(chunk.id, chunk)
     }
     // Persist in background (non-blocking)
@@ -150,7 +160,16 @@ class VectorStore {
    * Sort results by score descending and truncate to topK.
    */
   private sortAndTruncate(results: SearchResult[], topK: number): SearchResult[] {
-    results.sort((a, b) => b.score - a.score)
+    const bestByContent = new Map<string, SearchResult>()
+    for (const result of results) {
+      const key = result.chunk.contentHash || createContentHash(result.chunk.content)
+      const existing = bestByContent.get(key)
+      if (!existing || result.score > existing.score) {
+        bestByContent.set(key, result)
+      }
+    }
+
+    results = Array.from(bestByContent.values()).sort((a, b) => b.score - a.score)
     const byDocument = new Map<string, SearchResult[]>()
     for (const result of results) {
       const key = normalizeFilePath(result.document.filePath)
@@ -198,20 +217,89 @@ class VectorStore {
 
       const score = this.cosineSimilarity(queryEmbedding, chunk.embedding)
       if (score >= threshold) {
-        results.push({ chunk, score, document: doc, retrievalMode: 'vector' })
+        results.push({ chunk, score, vectorScore: score, document: doc, retrievalMode: 'vector' })
       }
     }
 
     return this.sortAndTruncate(results, topK)
   }
 
+  private tokenize(text: string): string[] {
+    const normalized = text.toLowerCase()
+    const rawTerms = normalized.match(/[a-z0-9_+#./-]{2,}|[\u4e00-\u9fff]{2,}/g) || []
+    const terms = new Set<string>()
+
+    for (const term of rawTerms) {
+      terms.add(term)
+      if (/^[\u4e00-\u9fff]+$/.test(term) && term.length > 3) {
+        for (let i = 0; i < term.length - 1; i += 1) {
+          terms.add(term.slice(i, i + 2))
+        }
+      }
+    }
+
+    return Array.from(terms)
+  }
+
+  private getKeywordScore(query: string, chunk: Chunk, doc: Document): number {
+    const terms = this.tokenize(query)
+    if (terms.length === 0) return 0
+
+    const content = chunk.content.toLowerCase()
+    const heading = (chunk.heading || '').toLowerCase()
+    const titlePath = (chunk.titlePath || []).join(' > ').toLowerCase()
+    const fileName = doc.filePath.split(/[/\\]/).pop()?.toLowerCase() || doc.title.toLowerCase()
+    const docTitle = doc.title.toLowerCase()
+
+    let score = 0
+    for (const term of terms) {
+      if (content.includes(term)) score += 1
+      if (heading.includes(term)) score += 1.8
+      if (titlePath.includes(term)) score += 1.5
+      if (fileName.includes(term)) score += 1.4
+      if (docTitle.includes(term)) score += 1.2
+    }
+
+    const normalizedQuery = query.trim().toLowerCase()
+    if (normalizedQuery.length >= 3) {
+      if (content.includes(normalizedQuery)) score += 1.2
+      if (titlePath.includes(normalizedQuery) || fileName.includes(normalizedQuery)) score += 1.6
+    }
+
+    return Math.min(1, score / Math.max(terms.length, 1))
+  }
+
+  private applyRankingBoosts(result: SearchResult, options?: SearchRankingOptions): SearchResult {
+    let score = result.score
+    if (
+      options?.preferCurrentFile
+      && options.currentFilePath
+      && normalizeFilePath(result.document.filePath) === normalizeFilePath(options.currentFilePath)
+    ) {
+      score += 0.08
+    }
+
+    if (options?.preferRecentDocuments) {
+      const ageMs = Math.max(0, Date.now() - result.document.lastModified)
+      const sevenDaysMs = 7 * 24 * 60 * 60 * 1000
+      if (ageMs < sevenDaysMs) {
+        score += 0.04 * (1 - ageMs / sevenDaysMs)
+      }
+    }
+
+    return { ...result, score: Math.min(1, score) }
+  }
+
   /**
    * Simple keyword search (fallback when no embeddings).
    */
-  keywordSearch(query: string, topK: number = 5, filePaths?: string[]): SearchResult[] {
-    const queryLower = query.toLowerCase()
-    const queryTerms = queryLower.split(/\s+/).filter(Boolean)
-    if (queryTerms.length === 0) return []
+  keywordSearch(
+    query: string,
+    topK: number = 5,
+    filePaths?: string[],
+    options?: SearchRankingOptions
+  ): SearchResult[] {
+    if (this.tokenize(query).length === 0) return []
 
     const results: SearchResult[] = []
 
@@ -221,18 +309,62 @@ class VectorStore {
       // Scope 过滤
       if (filePaths && filePaths.length > 0 && !this.isInScope(doc.filePath, filePaths)) continue
 
-      const contentLower = chunk.content.toLowerCase()
-      let matchCount = 0
-      for (const term of queryTerms) {
-        if (contentLower.includes(term)) matchCount++
-      }
-      if (matchCount > 0) {
-        const score = matchCount / queryTerms.length
-        results.push({ chunk, score, document: doc, retrievalMode: 'keyword' })
+      const keywordScore = this.getKeywordScore(query, chunk, doc)
+      if (keywordScore > 0) {
+        results.push(this.applyRankingBoosts({
+          chunk,
+          score: keywordScore,
+          keywordScore,
+          document: doc,
+          retrievalMode: 'keyword',
+        }, options))
       }
     }
 
     return this.sortAndTruncate(results, topK)
+  }
+
+  hybridSearch(
+    query: string,
+    queryEmbedding: number[] | null,
+    topK: number = 5,
+    threshold: number = 0.5,
+    options: SearchRankingOptions = {}
+  ): SearchResult[] {
+    const candidateLimit = Math.max(topK * 3, topK)
+    const vectorResults = queryEmbedding
+      ? this.search(queryEmbedding, candidateLimit, threshold, options.filePaths)
+      : []
+    const keywordResults = options.keywordSearchEnabled === false
+      ? []
+      : this.keywordSearch(query, candidateLimit, options.filePaths)
+
+    const byChunk = new Map<string, SearchResult>()
+    for (const result of [...vectorResults, ...keywordResults]) {
+      const existing = byChunk.get(result.chunk.id)
+      if (!existing) {
+        byChunk.set(result.chunk.id, this.applyRankingBoosts(result, options))
+        continue
+      }
+
+      const vectorScore = Math.max(existing.vectorScore || 0, result.vectorScore || 0)
+      const keywordScore = Math.max(existing.keywordScore || 0, result.keywordScore || 0)
+      const hasVector = vectorScore > 0
+      const hasKeyword = keywordScore > 0
+      const score = hasVector && hasKeyword
+        ? Math.min(1, vectorScore * 0.72 + keywordScore * 0.28 + 0.04)
+        : Math.max(vectorScore, keywordScore)
+
+      byChunk.set(result.chunk.id, this.applyRankingBoosts({
+        ...existing,
+        vectorScore,
+        keywordScore,
+        score,
+        retrievalMode: hasVector && hasKeyword ? 'hybrid' : existing.retrievalMode,
+      }, options))
+    }
+
+    return this.sortAndTruncate(Array.from(byChunk.values()), topK)
   }
 
   /**

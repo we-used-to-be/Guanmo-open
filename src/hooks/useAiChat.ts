@@ -13,7 +13,7 @@ import { buildContextFromTags } from '@/services/contextBuilder'
 import { readFile as readTauriFile } from '@/hooks/useTauri'
 import { setAgentScopeContext } from '@/services/aiScope'
 import { searchScopedKnowledge, shouldTriggerScopedRag, streamFinalAnswer } from '@/services/aiChatFlow'
-import { appendRagContext, buildChatMessageTags, countRagSourcesInContext, createContextMeta, createUserChatMessage, prepareChatHistoryForModel } from '@/services/aiChatMessages'
+import { appendRagContext, buildChatMessageTags, buildSupplementalAiContext, countRagSourcesInContext, createContextMeta, createUserChatMessage, prepareChatHistoryForModel } from '@/services/aiChatMessages'
 import { stripToolCallJson } from '@/services/agent/toolCallParser'
 import { buildMemoryContext, classifyMemoryRetrievalIntent, processMemoryCandidateExtraction, searchMemories } from '@/services/memory/memoryService'
 import type { Memory } from '@/services/database/persistence'
@@ -231,13 +231,14 @@ export function useAiChat() {
       ]))
 
       // 构建候选工具
-      const candidateToolNames = buildCandidateTools(mergedCandidates)
+      let candidateToolNames = buildCandidateTools(mergedCandidates)
 
       // 检查是否需要记忆写入
       const explicitMemoryWriteIntent = shouldAllowMemoryWrite(content.trim())
       if (explicitMemoryWriteIntent && !candidateToolNames.includes('save_memory')) {
         candidateToolNames.push('save_memory', 'list_memories')
       }
+      candidateToolNames = Array.from(new Set(candidateToolNames))
 
       // 判断是否使用 Agent 模式
       const matchesAgentRule = candidateToolNames.length > 0 || isCancelLastAppliedEdit(content, messages)
@@ -391,6 +392,8 @@ export function useAiChat() {
                   tabTitle: parsed.tabTitle,
                   replaceFrom: parsed.replaceFrom,
                   replaceTo: parsed.replaceTo,
+                  replaceWholeDocument: parsed.replaceWholeDocument,
+                  changeSummary: parsed.changeSummary,
                   selectionFrom: parsed.selectionFrom,
                   selectionTo: parsed.selectionTo,
                   status: 'pending',
@@ -465,6 +468,8 @@ export function useAiChat() {
                     tabTitle: parsed.tabTitle,
                     replaceFrom: parsed.replaceFrom,
                     replaceTo: parsed.replaceTo,
+                    replaceWholeDocument: parsed.replaceWholeDocument,
+                    changeSummary: parsed.changeSummary,
                     selectionFrom: parsed.selectionFrom,
                     selectionTo: parsed.selectionTo,
                     status: 'pending',
@@ -597,7 +602,10 @@ export function useAiChat() {
       }
 
       // 注入 RAG 上下文和 Memory 上下文
-      const injectedContext = [ragContext, memoryContext].filter(Boolean).join('\n\n')
+      const injectedContext = buildSupplementalAiContext({
+        knowledgeContext: ragContext,
+        memoryContext,
+      })
       const finalMessages = appendRagContext(allMessages, userMsg, injectedContext)
 
       const contextMeta = createContextMeta({

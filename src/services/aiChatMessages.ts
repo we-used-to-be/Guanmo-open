@@ -70,6 +70,19 @@ export function appendRagContext(
   return [...messages.slice(0, -1), { ...userMessage, content: `${userMessage.content}\n\n${ragContext}` }]
 }
 
+export function buildSupplementalAiContext(options: {
+  knowledgeContext?: string
+  memoryContext?: string
+}): string {
+  const parts = [
+    options.knowledgeContext?.trim(),
+    options.memoryContext?.trim(),
+  ].filter((part): part is string => Boolean(part))
+
+  if (parts.length === 0) return ''
+  return `【补充上下文】\n${parts.join('\n\n')}`
+}
+
 export function createContextMeta(options: {
   tagCount: number
   ragSourceCount: number
@@ -83,5 +96,5 @@ export function createContextMeta(options: {
 }
 
 export function countRagSourcesInContext(ragContext: string): number {
-  return ragContext ? (ragContext.match(/\[来源/g) || []).length : 0
+  return ragContext ? (ragContext.match(/\[知识来源/g) || []).length : 0
 }

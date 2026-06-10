@@ -346,6 +346,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       messageId: undoMessageId,
       oldText: edit.newText,
       newText: edit.oldText,
+      replaceWholeDocument: edit.replaceWholeDocument,
+      changeSummary: `撤销修改：将恢复 ${edit.oldText.length} 字符的原文`,
       status: 'pending',
     }
     const assistantMessage: ChatMessage = {
@@ -584,6 +586,8 @@ function sanitizeEditConfirmation(value: unknown): EditConfirmation | undefined 
     tabTitle: value.tabTitle,
     replaceFrom: typeof value.replaceFrom === 'number' ? value.replaceFrom : undefined,
     replaceTo: typeof value.replaceTo === 'number' ? value.replaceTo : undefined,
+    replaceWholeDocument: typeof value.replaceWholeDocument === 'boolean' ? value.replaceWholeDocument : undefined,
+    changeSummary: typeof value.changeSummary === 'string' ? value.changeSummary : undefined,
     selectionFrom: typeof value.selectionFrom === 'number' ? value.selectionFrom : undefined,
     selectionTo: typeof value.selectionTo === 'number' ? value.selectionTo : undefined,
     status: value.status as EditConfirmation['status'],

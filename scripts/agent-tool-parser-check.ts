@@ -88,7 +88,7 @@ assert.equal(shouldTriggerScopedRag('总结这个文件', []), false)
 const preparedHistory = prepareChatHistoryForModel([
   {
     role: 'user',
-    content: '总结旧文件\n\n以下是用户提供的上下文：\n\n[上下文1: old.md]\n---\n旧文件全文',
+    content: '总结旧文件\n\n【当前文档上下文】\n\n[上下文1: old.md]\n---\n旧文件全文',
     displayContent: '总结旧文件',
   },
   {

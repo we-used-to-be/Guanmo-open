@@ -72,7 +72,7 @@ const DEFAULT_CONFIG: AgentConfig = {
 保存记忆的规则：
 1. 当用户要求记住、保存记忆、记下来时，调用 save_memory 工具保存。
 2. 调用 save_memory 后，必须用自然语言回复，说明保存了什么内容，并告知用户可以基于这个记忆做什么。
-3. 记忆内容应简洁明确，分类准确（preference/project/context/general）。
+3. 记忆内容应简洁明确，分类准确（preference/project/learning/profile/instruction）。
 
 检索记忆的规则：
 1. 长期记忆是按需读取的数据源，不得把未检索到的信息当作不存在。
@@ -306,10 +306,58 @@ export async function runAgent(
   let toolCalls = 0
   let editToolCalls = 0
   const calledToolNames: string[] = []
+  if (hasPrefetchedMemoryLookup) {
+    calledToolNames.push('search_memory')
+  }
 
   const pushStep = (step: AgentStep) => {
     steps.push(step)
     onStep?.(step)
+  }
+
+  const repairUnmetReadCapabilities = async (): Promise<boolean> => {
+    const unmetCapabilities = checkRequiredCapabilities(mergedRequired, calledToolNames)
+    const repairTools = getRepairTools(unmetCapabilities)
+      .filter((name) => candidateTools.includes(name))
+
+    if (repairTools.length === 0) return false
+
+    pushStep({
+      type: 'action',
+      content: `补调工具: ${repairTools.join(', ')}`,
+      toolName: repairTools[0],
+      toolArgs: {},
+      timestamp: Date.now(),
+    })
+
+    const repairResults = await executeToolCalls(
+      repairTools.map(name => ({
+        name,
+        args: name === 'search_memory' ? { query: userIntent, topK: 5 }
+          : name === 'search_knowledge' ? { query: userIntent, topK: 8 }
+          : name === 'get_current_time' ? {}
+          : { query: userIntent },
+      })),
+      mergedConfig.stepTimeout,
+      userIntent,
+      signal
+    )
+
+    for (const { name, result } of repairResults) {
+      calledToolNames.push(name)
+      toolCalls++
+      pushStep({
+        type: 'observation',
+        content: result,
+        timestamp: Date.now(),
+      })
+      messages.push({
+        role: 'user',
+        content: `系统已补调 ${name} 工具。请依据结果回答：\n${result}`,
+      })
+    }
+
+    return repairResults.length > 0
   }
 
   // 如果没有候选工具，直接普通流式回复
@@ -403,8 +451,24 @@ export async function runAgent(
       }
     }
 
+    const disallowedToolCalls = parsedToolCalls.filter((tc) => !candidateTools.includes(tc.name as AgentToolName))
+    if (disallowedToolCalls.length > 0) {
+      parsedToolCalls = parsedToolCalls.filter((tc) => candidateTools.includes(tc.name as AgentToolName))
+      if (parsedToolCalls.length === 0) {
+        messages.push({ role: 'assistant', content })
+        messages.push({
+          role: 'user',
+          content: `系统拒绝了不在本轮候选集合内的工具：${disallowedToolCalls.map((tc) => tc.name).join(', ')}。请直接回答，或只使用本轮可用工具。`,
+        })
+        continue
+      }
+    }
+
     // 如果没有工具调用
     if (parsedToolCalls.length === 0) {
+      const repaired = !requiresEditConfirmation && await repairUnmetReadCapabilities()
+      if (repaired) continue
+
       // 检查是否需要编辑确认
       if (requiresEditConfirmation && editToolCalls === 0) {
         messages.push({ role: 'assistant', content })
@@ -556,52 +620,7 @@ export async function runAgent(
   }
 
   // 达到最大步数，检查强依赖
-  const unmetCapabilities = checkRequiredCapabilities(mergedRequired, calledToolNames)
-
-  // 如果有未满足的强依赖，尝试补调
-  if (unmetCapabilities.length > 0) {
-    const repairTools = getRepairTools(unmetCapabilities)
-
-    if (repairTools.length > 0) {
-      pushStep({
-        type: 'action',
-        content: `补调工具: ${repairTools.join(', ')}`,
-        toolName: repairTools[0],
-        toolArgs: {},
-        timestamp: Date.now(),
-      })
-
-      // 执行补调
-      const repairResults = await executeToolCalls(
-        repairTools.map(name => ({
-          name,
-          args: name === 'search_memory' ? { query: userIntent, topK: 5 }
-            : name === 'search_knowledge' ? { query: userIntent, topK: 8 }
-            : name === 'get_current_time' ? {}
-            : { query: userIntent },
-        })),
-        mergedConfig.stepTimeout,
-        userIntent,
-        signal
-      )
-
-      // 添加补调结果
-      for (const { name, result } of repairResults) {
-        calledToolNames.push(name)
-        toolCalls++
-
-        pushStep({
-          type: 'observation',
-          content: result,
-          timestamp: Date.now(),
-        })
-
-        messages.push({
-          role: 'user',
-          content: `系统已补调 ${name} 工具。请依据结果回答：\n${result}`,
-        })
-      }
-
+  if (await repairUnmetReadCapabilities()) {
       // 二次生成最终答案
       try {
         const finalResponse = await client.chat({
@@ -633,7 +652,6 @@ export async function runAgent(
           reason: 'error',
         }
       }
-    }
   }
 
   // 正常结束

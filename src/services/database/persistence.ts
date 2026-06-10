@@ -57,12 +57,35 @@ export async function persistDocument(doc: Document): Promise<void> {
     [doc.id, doc.filePath, doc.title, doc.content, doc.lastModified]
   )
 
+  const now = Date.now()
+
   // Insert chunks
   for (const chunk of doc.chunks) {
     await db.execute(
-      `INSERT OR REPLACE INTO chunks (id, document_id, content, chunk_index, start_line, end_line)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [chunk.id, doc.id, chunk.content, chunk.index, chunk.startLine, chunk.endLine]
+      `INSERT OR REPLACE INTO chunks (
+        id, document_id, content, content_hash, chunk_index, start_line, end_line,
+        title_path, heading, source_type, created_at, updated_at
+      )
+       VALUES (
+        $1, $2, $3, $4, $5, $6, $7,
+        $8, $9, $10,
+        COALESCE((SELECT created_at FROM chunks WHERE id = $1), $11),
+        $12
+      )`,
+      [
+        chunk.id,
+        doc.id,
+        chunk.content,
+        chunk.contentHash || null,
+        chunk.index,
+        chunk.startLine,
+        chunk.endLine,
+        chunk.titlePath ? JSON.stringify(chunk.titlePath) : null,
+        chunk.heading || null,
+        chunk.sourceType || 'markdown',
+        chunk.createdAt || now,
+        chunk.updatedAt || now,
+      ]
     )
 
     // Persist embedding as JSON blob
@@ -146,9 +169,15 @@ async function loadChunksForDocument(docId: string): Promise<Chunk[]> {
     id: string
     document_id: string
     content: string
+    content_hash?: string | null
     chunk_index: number
     start_line: number
     end_line: number
+    title_path?: string | null
+    heading?: string | null
+    source_type?: 'markdown' | 'text' | null
+    created_at?: number
+    updated_at?: number
   }>('SELECT * FROM chunks WHERE document_id = $1 ORDER BY chunk_index', [docId])
 
   const chunks: Chunk[] = []
@@ -168,13 +197,31 @@ async function loadChunksForDocument(docId: string): Promise<Chunk[]> {
       }
     }
 
+    let titlePath: string[] | undefined
+    if (row.title_path) {
+      try {
+        const parsed = JSON.parse(row.title_path)
+        if (Array.isArray(parsed) && parsed.every((item) => typeof item === 'string')) {
+          titlePath = parsed
+        }
+      } catch {
+        console.warn(`Failed to parse titlePath for chunk ${row.id}`)
+      }
+    }
+
     chunks.push({
       id: row.id,
       documentId: row.document_id,
       content: row.content,
+      contentHash: row.content_hash || undefined,
       index: row.chunk_index,
       startLine: row.start_line,
       endLine: row.end_line,
+      titlePath,
+      heading: row.heading || undefined,
+      sourceType: row.source_type || 'markdown',
+      createdAt: row.created_at || undefined,
+      updatedAt: row.updated_at || undefined,
       embedding,
     })
   }

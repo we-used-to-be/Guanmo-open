@@ -7,8 +7,8 @@ import { useChatStore } from '@/stores/chatStore'
 import { getAgentScopeContext } from '@/services/aiScope'
 import type { ContextTag } from '@/types/contextTag'
 import type { ChatMessage, ChatMessageTag } from '@/services/ai/types'
-import { searchMemories, buildMemoryContext } from '@/services/memory/memoryService'
-import { persistMemory, loadAllMemories, listEmbeddingJobs } from '@/services/database/persistence'
+import { searchMemories, buildMemoryContext, upsertExplicitMemory } from '@/services/memory/memoryService'
+import { loadAllMemories, listEmbeddingJobs } from '@/services/database/persistence'
 import { readFile } from '@/hooks/useTauri'
 import type { TextRange } from './editTarget'
 import { normalizeFilePath } from '@/services/pathIdentity'
@@ -195,8 +195,13 @@ async function formatKnowledgeSearchResultsStructured(results: SearchResult[]): 
       filePath: result.document.filePath,
       title: result.document.title || result.document.filePath,
       chunkId: result.chunk.id,
+      contentHash: result.chunk.contentHash,
       score: Number(result.score.toFixed(4)),
+      vectorScore: typeof result.vectorScore === 'number' ? Number(result.vectorScore.toFixed(4)) : undefined,
+      keywordScore: typeof result.keywordScore === 'number' ? Number(result.keywordScore.toFixed(4)) : undefined,
       snippet: limitText(result.chunk.content, 240),
+      titlePath: result.chunk.titlePath || [],
+      heading: result.chunk.heading,
       embeddingStatus: stateByPath.get(result.document.filePath) || (result.chunk.embedding ? 'INDEXED' : 'CHUNKED'),
       retrievalMode: result.retrievalMode,
       startLine: result.chunk.startLine,
@@ -208,7 +213,7 @@ async function formatKnowledgeSearchResultsStructured(results: SearchResult[]): 
 export function registerBuiltinTools() {
   registerTool({
     name: 'search_knowledge',
-    description: '在本地 RAG 数据库中检索用户要找的信息位于哪些文件。此工具只返回命中的文件路径和行号，不返回文件正文，不用于直接总结或分析未添加到聊天框的文件内容。',
+    description: '在本地 RAG 数据库中检索用户要找的信息位于哪些文件。此工具返回命中的文件路径、行号、标题路径和短片段；短片段可用于判断相关性，若要总结或改写整篇文件仍需用户把目标文件加入上下文。',
     parameters: [
       { name: 'query', type: 'string', description: '搜索查询', required: true },
       { name: 'topK', type: 'number', description: '返回结果数量（1-20），默认 5', required: false },
@@ -217,7 +222,13 @@ export function registerBuiltinTools() {
       const err = validateString(args.query, 'query')
       if (err) return err
       const topK = clampNumber(args.topK, 1, 20, 5)
-      const results = await searchRelevant(args.query as string, { topK, signal: context?.signal })
+      const editorState = useEditorStore.getState()
+      const activeTab = editorState.tabs.find((tab) => tab.id === editorState.activeTabId)
+      const results = await searchRelevant(args.query as string, {
+        topK,
+        currentFilePath: activeTab?.filePath || undefined,
+        signal: context?.signal,
+      })
       return formatKnowledgeSearchResultsStructured(results)
     },
   })
@@ -511,6 +522,11 @@ export function registerBuiltinTools() {
       }
 
       const newText = args.newText as string
+      const changeSummary = replaceWholeDocument
+        ? `整文替换：将替换当前文档全部 ${oldText.length} 字符`
+        : oldText.length >= 1200
+          ? `大段替换：将替换 ${oldText.length} 字符`
+          : `将替换 ${oldText.length} 字符`
       // 返回待确认内容，不直接修改编辑器
       return JSON.stringify({
         __pendingEdit: true,
@@ -520,11 +536,13 @@ export function registerBuiltinTools() {
         tabTitle: tab.title,
         replaceFrom: replaceRange.from,
         replaceTo: replaceRange.to,
+        replaceWholeDocument,
+        changeSummary,
         ...(selectionRange ? {
           selectionFrom: selectionRange.from,
           selectionTo: selectionRange.to,
         } : {}),
-        preview: `将替换 ${oldText.length} 字符的内容`,
+        preview: changeSummary,
       })
     },
   })
@@ -597,26 +615,17 @@ export function registerBuiltinTools() {
     description: '主动保存长期记忆。用于记录用户偏好、项目信息、重要上下文等需要跨会话记住的内容。',
     parameters: [
       { name: 'content', type: 'string', description: '记忆内容（简洁明确）', required: true },
-      { name: 'category', type: 'string', description: '分类: preference(偏好) | project(项目) | context(上下文) | general(其他)，默认 general', required: false },
+      { name: 'category', type: 'string', description: '分类: preference(偏好) | project(项目) | learning(学习进度) | profile(稳定背景) | instruction(长期指令)，默认 preference', required: false },
     ],
     execute: async (args) => {
       const err = validateString(args.content, 'content')
       if (err) return err
-      const validCategories = ['preference', 'project', 'context', 'general']
+      const validCategories = ['preference', 'project', 'learning', 'profile', 'instruction']
       const category = validCategories.includes(args.category as string)
         ? (args.category as string)
-        : 'general'
-      await persistMemory({
-        id: `mem-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        content: args.content as string,
-        category,
-        source: 'user_explicit',
-        locked: false,
-        status: 'active',
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      })
-      return `已保存记忆：「${args.content}」（分类：${category}）`
+        : 'preference'
+      const result = await upsertExplicitMemory(args.content as string, category)
+      return `${result.action === 'updated' ? '已更新已有记忆' : '已保存新记忆'}：「${result.memory.content}」（分类：${result.memory.category}）`
     },
   })
 }

@@ -43,10 +43,13 @@ export interface KnowledgeDocumentState {
 }
 
 const DEFAULT_CONFIG: RAGConfig = {
-  chunkSize: 1000,
-  chunkOverlap: 200,
+  chunkSize: 900,
+  chunkOverlap: 150,
   topK: 5,
   similarityThreshold: 0.5,
+  keywordSearchEnabled: true,
+  preferCurrentFile: true,
+  preferRecentDocuments: false,
 }
 
 let ragConfig: RAGConfig = { ...DEFAULT_CONFIG }
@@ -91,6 +94,11 @@ export function ingestDocument(
     chunkSize: ragConfig.chunkSize,
     overlap: ragConfig.chunkOverlap,
   })
+
+  if (chunks.length === 0) {
+    console.warn('ingestDocument: no meaningful chunks, skipping')
+    return null
+  }
 
   const doc: Document = {
     id: docId,
@@ -379,32 +387,39 @@ export async function embedPendingChunks(): Promise<EmbedResult> {
  */
 export async function searchRelevant(
   query: string,
-  options?: Partial<RAGConfig> & { filePaths?: string[]; signal?: AbortSignal }
+  options?: Partial<RAGConfig> & { filePaths?: string[]; currentFilePath?: string; signal?: AbortSignal }
 ): Promise<SearchResult[]> {
   if (!query.trim()) return []
 
   const topK = options?.topK ?? ragConfig.topK
   const threshold = options?.similarityThreshold ?? ragConfig.similarityThreshold
   const filePaths = options?.filePaths
+  const keywordSearchEnabled = options?.keywordSearchEnabled ?? ragConfig.keywordSearchEnabled
+  const preferCurrentFile = options?.preferCurrentFile ?? ragConfig.preferCurrentFile
+  const preferRecentDocuments = options?.preferRecentDocuments ?? ragConfig.preferRecentDocuments
 
   if (vectorStore.documentCount === 0) {
     await hydrateVectorStoreFromDatabase()
   }
 
-  // Try vector search first
+  let queryEmbedding: number[] | null = null
   if (isEmbeddingReady()) {
     try {
       const client = getEmbeddingClient()
       const response = await client.embedding(query, options?.signal)
-      const results = vectorStore.search(response.embedding, topK, threshold, filePaths)
-      if (results.length > 0) return results
+      queryEmbedding = response.embedding
     } catch (err) {
-      console.warn('Vector search failed, falling back to keyword search:', err)
+      console.warn('Vector search failed, using keyword-only search:', err)
     }
   }
 
-  // Fallback to keyword search
-  return vectorStore.keywordSearch(query, topK, filePaths)
+  return vectorStore.hybridSearch(query, queryEmbedding, topK, threshold, {
+    filePaths,
+    keywordSearchEnabled,
+    currentFilePath: options?.currentFilePath,
+    preferCurrentFile,
+    preferRecentDocuments,
+  })
 }
 
 export async function getRagStatsAsync(): Promise<RAGStats> {
@@ -426,20 +441,38 @@ export async function getRagStatsAsync(): Promise<RAGStats> {
 /**
  * Build context string from search results for AI prompt.
  */
-export function buildContext(results: SearchResult[]): string {
+export function buildContext(results: SearchResult[], maxChars = 6000): string {
   if (results.length === 0) return ''
 
-  const parts = results.map((r, i) => {
+  const parts: string[] = []
+  let usedChars = 0
+
+  for (const [i, r] of results.entries()) {
     const source = r.document.title || r.document.filePath
-    return [
-      `[来源 ${i + 1}: ${source}]`,
-      `文件: ${r.document.filePath}`,
-      `行: ${r.chunk.startLine}-${r.chunk.endLine}`,
+    const titlePath = r.chunk.titlePath?.length ? r.chunk.titlePath.join(' > ') : r.chunk.heading || '未命名位置'
+    const part = [
+      `[知识来源 ${i + 1}]`,
+      `来源：${source}`,
+      `文件：${r.document.filePath}`,
+      `位置：${titlePath}`,
+      `行号：${r.chunk.startLine}-${r.chunk.endLine}`,
+      `检索：${r.retrievalMode}，相关度 ${r.score.toFixed(3)}`,
+      '内容：',
       r.chunk.content,
     ].join('\n')
-  })
 
-  return `以下是从用户本地文档中检索到的相关内容：\n\n${parts.join('\n\n---\n\n')}`
+    const remaining = maxChars - usedChars
+    if (remaining <= 240) break
+    if (part.length > remaining) {
+      parts.push(`${part.slice(0, remaining)}\n...（知识库上下文已截断）`)
+      break
+    }
+    parts.push(part)
+    usedChars += part.length
+  }
+
+  if (parts.length === 0) return ''
+  return `【知识库检索结果】\n${parts.join('\n\n---\n\n')}`
 }
 
 /**

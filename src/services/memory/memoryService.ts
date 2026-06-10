@@ -8,7 +8,7 @@ import {
   removeOldestAutoMemories,
 } from '@/services/database/persistence'
 
-const AUTO_CATEGORIES = ['preference', 'project', 'context'] as const
+const AUTO_CATEGORIES = ['preference', 'project', 'learning', 'profile', 'instruction'] as const
 const MAX_MEMORIES = 200
 const LIGHT_MEMORY_TOP_K = 3
 const STRONG_MEMORY_TOP_K = 10
@@ -20,10 +20,13 @@ const CATEGORY_PRIORITY: Record<string, number> = {
   project_memory: 0,
   project: 0,
   profile_memory: 1,
-  preference: 1,
-  session_memory: 2,
-  context: 2,
-  general: 3,
+  instruction: 1,
+  preference: 2,
+  profile: 2,
+  learning: 3,
+  session_memory: 4,
+  context: 4,
+  general: 5,
 }
 
 interface ExtractedMemory {
@@ -134,6 +137,46 @@ function isDuplicateMemory(newContent: string, existing: Memory[]): boolean {
   return false
 }
 
+function normalizeMemoryCategory(category: string | undefined): string {
+  const normalized = (category || '').trim()
+  if (AUTO_CATEGORIES.includes(normalized as (typeof AUTO_CATEGORIES)[number])) return normalized
+  if (normalized === 'context' || normalized === 'general') return 'project'
+  return 'preference'
+}
+
+function findSimilarMemory(
+  content: string,
+  category: string,
+  existing: Memory[],
+  threshold = 0.72
+): Memory | undefined {
+  return existing
+    .filter((memory) => memory.category === category && !memory.locked)
+    .map((memory) => ({ memory, similarity: lexicalSimilarity(content, memory.content) }))
+    .filter((item) => item.similarity >= threshold)
+    .sort((a, b) => b.similarity - a.similarity)[0]?.memory
+}
+
+function shouldAttemptMemoryCandidateExtraction(messages: ChatMessage[]): boolean {
+  const recentUserText = messages
+    .filter((message) => message.role === 'user' && !message.hidden)
+    .slice(-3)
+    .map((message) => message.displayContent || message.content)
+    .join('\n')
+    .trim()
+
+  if (!recentUserText) return false
+
+  return [
+    /(?:记住|记下来|保存为长期记忆|以后记得|以后都|之后都)/,
+    /(?:我喜欢|我偏好|我的习惯|我的风格|默认用|每次都|总是)/,
+    /(?:称呼我|叫我|我的称呼|用中文|中文回答)/,
+    /(?:项目约定|项目规则|长期项目|目录职责|工程边界|技术栈)/,
+    /(?:我正在学|我开始学|我学完了|学习进度|学习路线)/,
+    /(?:我的背景|我的身份|我是.+(?:工程师|学生|设计师|作者|开发者))/,
+  ].some((pattern) => pattern.test(recentUserText))
+}
+
 function buildExtractPrompt(existingMemories: Memory[]): string {
   const existingBlock = existingMemories.length > 0
     ? `\n\n当前已有记忆（用于避免重复）：\n${existingMemories.map((item) => `- [${item.id}] ${item.content}`).join('\n')}`
@@ -155,11 +198,13 @@ function buildExtractPrompt(existingMemories: Memory[]): string {
 
 分类规则：
 - preference: 偏好、习惯、称呼、语言风格
-- project: 项目规则、目录职责、工程约定
-- context: 会长期影响后续协作的背景上下文
+- project: 长期项目、技术栈、目录职责、工程边界
+- learning: 学习进度、学习路线、阶段变化
+- profile: 稳定身份、背景信息
+- instruction: 长期指令、协作规则、输出格式
 
 请只输出 JSON 数组，每项格式：
-{"action":"add","content":"记忆内容","category":"preference|project|context"}
+{"action":"add","content":"记忆内容","category":"preference|project|learning|profile|instruction"}
 
 拿不准时输出空数组 []。不要输出任何解释。${existingBlock}`
 }
@@ -247,6 +292,11 @@ export async function processMemoryCandidateExtraction(
   options?: ExtractionOptions
 ): Promise<number> {
   const triggerReason = options?.triggerReason || 'unknown'
+  if (!shouldAttemptMemoryCandidateExtraction(messages)) {
+    console.info('[Memory] extraction skipped: no long-term signal', { triggerReason })
+    return 0
+  }
+
   const extracted = await extractMemories(messages, client, temperature)
   console.info('[Memory] extraction triggered', {
     triggerReason,
@@ -271,6 +321,14 @@ export async function processMemoryCandidateExtraction(
       }
 
       if (item.action === 'add') {
+        item.category = normalizeMemoryCategory(item.category)
+        const similar = findSimilarMemory(item.content, item.category, allMemories)
+        if (similar && similar.source === 'auto_extracted' && similar.status === 'candidate') {
+          await updateMemoryContent(similar.id, item.content.trim())
+          saved += 1
+          continue
+        }
+
         if (isDuplicateMemory(item.content, allMemories)) {
           console.info('[Memory] candidate skipped as duplicate', {
             triggerReason,
@@ -328,6 +386,48 @@ export async function processMemoryCandidateExtraction(
     saved,
   })
   return saved
+}
+
+export interface ExplicitMemoryUpsertResult {
+  memory: Memory
+  action: 'created' | 'updated'
+}
+
+export async function upsertExplicitMemory(
+  content: string,
+  category: string
+): Promise<ExplicitMemoryUpsertResult> {
+  const normalizedContent = content.trim()
+  const normalizedCategory = normalizeMemoryCategory(category)
+  const allMemories = await loadAllMemories(undefined, ['active', 'candidate'])
+  const similar = findSimilarMemory(normalizedContent, normalizedCategory, allMemories, 0.68)
+  const now = Date.now()
+
+  if (similar) {
+    const memory: Memory = {
+      ...similar,
+      content: normalizedContent,
+      category: normalizedCategory,
+      source: 'user_explicit',
+      status: 'active',
+      updatedAt: now,
+    }
+    await persistMemory(memory)
+    return { memory, action: 'updated' }
+  }
+
+  const memory: Memory = {
+    id: `mem-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    content: normalizedContent,
+    category: normalizedCategory,
+    source: 'user_explicit',
+    locked: false,
+    status: 'active',
+    createdAt: now,
+    updatedAt: now,
+  }
+  await persistMemory(memory)
+  return { memory, action: 'created' }
 }
 
 export function isStrongMemoryRetrievalQuery(query: string): boolean {
@@ -492,11 +592,18 @@ export function buildMemoryContext(memories: Memory[]): string {
       session_memory: '会话',
       preference: '偏好',
       project: '项目',
+      learning: '学习进度',
+      profile: '用户画像',
+      instruction: '长期指令',
       context: '上下文',
       general: '其他',
     }[memory.category] || memory.category
-    return `[记忆 ${index + 1} · ${categoryLabel}] ${memory.content}`
+    return [
+      `[记忆 ${index + 1}]`,
+      `分类：${categoryLabel}`,
+      `内容：${memory.content}`,
+    ].join('\n')
   })
 
-  return `以下是关于用户的长期记忆：\n\n${parts.join('\n')}`
+  return `【长期记忆】\n${parts.join('\n\n')}`
 }
