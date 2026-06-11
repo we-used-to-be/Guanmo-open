@@ -1,11 +1,11 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { useEditorStore, type Tab } from '@/stores/editorStore'
 import { useChatStore } from '@/stores/chatStore'
 import { exportMarkdownAsHtml } from '@/services/markdownExport'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { addFileContextTag } from '@/services/aiContext'
 import { indexMarkdownDocument } from '@/services/rag/indexer'
-import { ContextMenu, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
+import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { renameFileEntry, saveTabAsFile, validateFileName } from '@/services/fileEntryActions'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { toast } from '@/services/toast'
@@ -14,9 +14,14 @@ interface TabBarProps {
   onOpenSettings?: () => void
 }
 
+type ViewMode = 'edit' | 'preview' | 'edit-preview' | 'dual-preview' | 'diff-preview'
+const TOPBAR_COMPACT_WIDTH = 720
+
 export function TabBar({ onOpenSettings }: TabBarProps) {
   const { tabs, activeTabId, setActiveTab, closeTab, reorderTabs, viewMode, setViewMode, rightPaneTabId, setRightPaneTabId, favorites, toggleFavorite, togglePinTab } = useEditorStore()
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null)
+  const [modeMenu, setModeMenu] = useState<{ x: number; y: number } | null>(null)
+  const [compactControls, setCompactControls] = useState(false)
   const [dragState, setDragState] = useState<{ tabId: string; startX: number } | null>(null)
   const [dragOverTabId, setDragOverTabId] = useState<string | null>(null)
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
@@ -24,7 +29,22 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
   const renameCancelledRef = useRef(false)
   const renameSubmittingRef = useRef(false)
   const tabBarRef = useRef<HTMLDivElement>(null)
+  const modeMenuButtonRef = useRef<HTMLButtonElement>(null)
   const draggedTabIdRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    const node = tabBarRef.current
+    if (!node || typeof ResizeObserver === 'undefined') return
+
+    const updateCompactControls = (width: number) => {
+      setCompactControls(width < TOPBAR_COMPACT_WIDTH)
+      setModeMenu(null)
+    }
+
+    const observer = new ResizeObserver(([entry]) => updateCompactControls(entry.contentRect.width))
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
 
   const handleContextMenu = useCallback((e: React.MouseEvent, tabId: string) => {
     e.preventDefault()
@@ -199,7 +219,7 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
     }
   }, [renameValue])
 
-  const handleModeChange = useCallback((mode: 'edit' | 'preview' | 'edit-preview' | 'dual-preview' | 'diff-preview') => {
+  const handleModeChange = useCallback((mode: ViewMode) => {
     setViewMode(mode)
   }, [setViewMode])
 
@@ -212,6 +232,27 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
       toast.error(err instanceof Error ? err.message : 'HTML export failed')
     }
   }, [activeTabId, tabs])
+
+  const openModeMenu = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation()
+    if (modeMenu) {
+      setModeMenu(null)
+      return
+    }
+    const rect = modeMenuButtonRef.current?.getBoundingClientRect()
+    if (!rect) return
+    setModeMenu({ x: rect.right - 184, y: rect.bottom + 4 })
+  }, [modeMenu])
+
+  const selectModeFromMenu = useCallback((mode: ViewMode) => {
+    setModeMenu(null)
+    handleModeChange(mode)
+  }, [handleModeChange])
+
+  const exportFromModeMenu = useCallback(() => {
+    setModeMenu(null)
+    void handleExportHtml()
+  }, [handleExportHtml])
 
   if (tabs.length === 0) return null
 
@@ -230,17 +271,25 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
           }).map((tab) => {
             const isFav = tab.filePath ? favorites.some((path) => isSameFilePath(path, tab.filePath)) : false
             return (
-              <button
+              <div
                 key={tab.id}
-                draggable
+                role="button"
+                tabIndex={0}
+                draggable={renamingTabId !== tab.id}
                 onClick={() => setActiveTab(tab.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    setActiveTab(tab.id)
+                  }
+                }}
                 onContextMenu={(e) => handleContextMenu(e, tab.id)}
                 onDragStart={(e) => handleDragStart(e, tab.id)}
                 onDragOver={(e) => handleDragOver(e, tab.id)}
                 onDragLeave={handleDragLeave}
                 onDrop={(e) => handleDrop(e, tab.id)}
                 onDragEnd={handleDragEnd}
-                className={`h-full px-3 flex items-center gap-1.5 text-caption border-r border-gm-border-subtle transition-all duration-200 group select-none ${
+                className={`h-full px-3 flex items-center gap-1.5 text-caption border-r border-gm-border-subtle transition-all duration-200 group select-none cursor-pointer ${
                   activeTabId === tab.id
                     ? 'bg-gm-canvas text-gm-text font-bold border-b-2 border-b-gm-primary'
                     : 'text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover'
@@ -290,6 +339,9 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
                       isFav ? 'opacity-100' : ''
                     }`}
                     title={isFav ? '取消收藏' : '收藏'}
+                    draggable={false}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onDragStart={(e) => e.preventDefault()}
                   >
                     <svg width="12" height="12" viewBox="0 0 24 24" fill={isFav ? '#f5c31c' : 'none'} stroke={isFav ? '#f5c31c' : 'currentColor'} strokeWidth="1.5">
                       <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
@@ -302,25 +354,30 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
                     closeTab(tab.id)
                   }}
                   className="opacity-0 group-hover:opacity-100 hover:bg-gm-surface-overlay rounded-full p-0.5 transition-opacity"
+                  draggable={false}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onDragStart={(e) => e.preventDefault()}
                 >
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M18 6L6 18M6 6l12 12" />
                   </svg>
                 </span>
-              </button>
+              </div>
             )
           })}
         </div>
 
         {/* View mode switcher */}
         <div className="flex items-center gap-0.5 px-2 border-l border-gm-border-subtle flex-shrink-0">
-          <button
-            onClick={handleExportHtml}
-            disabled={!activeTabId}
-            className="mr-2 rounded-lg border border-gm-border bg-gm-surface-elevated px-2.5 py-1 text-caption font-bold text-gm-text-secondary transition-colors hover:text-gm-primary disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            导出 HTML
-          </button>
+          {!compactControls && (
+            <button
+              onClick={handleExportHtml}
+              disabled={!activeTabId}
+              className="mr-2 rounded-lg border border-gm-border bg-gm-surface-elevated px-2.5 py-1 text-caption font-bold text-gm-text-secondary transition-colors hover:text-gm-primary disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              导出 HTML
+            </button>
+          )}
           <ModeButton
             active={viewMode === 'edit'}
             onClick={() => handleModeChange('edit')}
@@ -341,44 +398,95 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
               <circle cx="12" cy="12" r="3" />
             </svg>
           </ModeButton>
-          <ModeButton
-            active={viewMode === 'edit-preview'}
-            onClick={() => handleModeChange('edit-preview')}
-            title="编辑+预览"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <rect x="3" y="3" width="7" height="18" rx="1" />
-              <rect x="14" y="3" width="7" height="18" rx="1" />
-            </svg>
-          </ModeButton>
-          <ModeButton
-            active={viewMode === 'dual-preview'}
-            onClick={() => handleModeChange('dual-preview')}
-            title="对照阅读"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <rect x="3" y="3" width="7" height="18" rx="1" />
-              <path d="M7 7h-1M7 11h-1M7 15h-1" />
-              <rect x="14" y="3" width="7" height="18" rx="1" />
-              <path d="M18 7h-1M18 11h-1M18 15h-1" />
-            </svg>
-          </ModeButton>
-          <ModeButton
-            active={viewMode === 'diff-preview'}
-            onClick={() => handleModeChange('diff-preview')}
-            title="Diff 对比"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M6 3v18M18 3v18M9 8h6M9 16h6" />
-            </svg>
-          </ModeButton>
+          {compactControls ? (
+            <button
+              type="button"
+              ref={modeMenuButtonRef}
+              onClick={openModeMenu}
+              title="更多操作"
+              aria-label="更多视图操作"
+              aria-haspopup="menu"
+              aria-expanded={Boolean(modeMenu)}
+              className={`p-1.5 rounded-lg transition-all duration-200 ${
+                modeMenu || (viewMode !== 'edit' && viewMode !== 'preview')
+                  ? 'bg-gm-primary-subtle text-gm-primary'
+                  : 'text-gm-text-tertiary hover:text-gm-text-secondary hover:bg-gm-surface-hover'
+              }`}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+                <circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none" />
+                <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
+                <circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none" />
+              </svg>
+            </button>
+          ) : (
+            <>
+              <ModeButton
+                active={viewMode === 'edit-preview'}
+                onClick={() => handleModeChange('edit-preview')}
+                title="编辑+预览"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <rect x="3" y="3" width="7" height="18" rx="1" />
+                  <rect x="14" y="3" width="7" height="18" rx="1" />
+                </svg>
+              </ModeButton>
+              <ModeButton
+                active={viewMode === 'dual-preview'}
+                onClick={() => handleModeChange('dual-preview')}
+                title="对照阅读"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <rect x="3" y="3" width="7" height="18" rx="1" />
+                  <path d="M7 7h-1M7 11h-1M7 15h-1" />
+                  <rect x="14" y="3" width="7" height="18" rx="1" />
+                  <path d="M18 7h-1M18 11h-1M18 15h-1" />
+                </svg>
+              </ModeButton>
+              <ModeButton
+                active={viewMode === 'diff-preview'}
+                onClick={() => handleModeChange('diff-preview')}
+                title="Diff 对比"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M6 3v18M18 3v18M9 8h6M9 16h6" />
+                </svg>
+              </ModeButton>
+            </>
+          )}
         </div>
       </div>
 
+      {modeMenu && (
+        <ContextMenu position={modeMenu} onClose={() => setModeMenu(null)} minWidth={184} maxWidth={184}>
+          <ContextMenuGroupTitle>文件操作</ContextMenuGroupTitle>
+          <ContextMenuItem onClick={exportFromModeMenu} disabled={!activeTabId}>
+            导出 HTML
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuGroupTitle>视图模式</ContextMenuGroupTitle>
+          <ContextMenuItem onClick={() => selectModeFromMenu('edit')}>
+            编辑模式
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => selectModeFromMenu('preview')}>
+            预览模式
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => selectModeFromMenu('edit-preview')}>
+            编辑+预览
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => selectModeFromMenu('dual-preview')}>
+            对照阅读
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => selectModeFromMenu('diff-preview')}>
+            Diff 对比
+          </ContextMenuItem>
+        </ContextMenu>
+      )}
+
       {/* Context Menu */}
       {contextMenu && (
-        <ContextMenu position={contextMenu} onClose={() => setContextMenu(null)} minWidth={150} maxWidth={150}>
-          {/* 标签操作 */}
+        <ContextMenu position={contextMenu} onClose={() => setContextMenu(null)} minWidth={176} maxWidth={176}>
+          <ContextMenuGroupTitle>标签操作</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => handleContextAction('pinTab')}>
             {contextTab?.pinned ? '取消固定' : '固定标签'}
           </ContextMenuItem>
@@ -392,7 +500,7 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
             另存为
           </ContextMenuItem>
           <ContextMenuSeparator />
-          {/* AI 操作 */}
+          <ContextMenuGroupTitle>AI 助手</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => handleContextAction('aiSummarize')}>
             AI 总结该文件
           </ContextMenuItem>
@@ -400,7 +508,7 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
             添加文件到 AI 上下文
           </ContextMenuItem>
           <ContextMenuSeparator />
-          {/* 复制 */}
+          <ContextMenuGroupTitle>复制与索引</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => handleContextAction('copyContent')}>
             复制内容
           </ContextMenuItem>
@@ -415,7 +523,7 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
             </ContextMenuItem>
           )}
           <ContextMenuSeparator />
-          {/* 关闭 */}
+          <ContextMenuGroupTitle>关闭标签</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => handleContextAction('close')}>
             关闭
           </ContextMenuItem>

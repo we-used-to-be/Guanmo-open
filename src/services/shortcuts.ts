@@ -17,6 +17,11 @@ export const SHORTCUTS: ShortcutItem[] = [
   { id: 'toggle-ai', key: 'Ctrl+J', label: '切换 AI 面板', category: '视图' },
   { id: 'toggle-preview', key: 'Ctrl+Shift+V', label: '切换编辑/预览', category: '视图' },
   { id: 'toggle-diff', key: 'Ctrl+Shift+D', label: '切换 Markdown Diff', category: '视图' },
+  { id: 'view-edit', key: 'Ctrl+Shift+1', label: '切换到编辑模式', category: '视图' },
+  { id: 'view-preview', key: 'Ctrl+Shift+2', label: '切换到预览模式', category: '视图' },
+  { id: 'view-edit-preview', key: 'Ctrl+Shift+3', label: '切换到编辑+预览', category: '视图' },
+  { id: 'view-dual-preview', key: 'Ctrl+Shift+4', label: '切换到对照阅读', category: '视图' },
+  { id: 'view-diff-preview', key: 'Ctrl+Shift+5', label: '切换到 Diff 对比', category: '视图' },
   { id: 'search', key: 'Ctrl+F', label: '搜索当前文档', category: '编辑' },
 ]
 

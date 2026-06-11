@@ -175,7 +175,7 @@ function formatKnowledgeSearchResults(results: SearchResult[]): string {
   ].join('\n'))
 
   return [
-    '数据库检索命中以下文件。仅返回文件位置，未返回文件正文；如需基于具体文件总结或改写，请先把对应文件添加到聊天框上下文。',
+    '数据库检索命中以下文件。知识库检索可用于未打开、未添加到聊天框上下文的已索引文档问答；如需精确读取整份原文或改写文件，再请用户添加目标文件上下文。',
     '',
     ...lines,
   ].join('\n')
@@ -191,6 +191,7 @@ async function formatKnowledgeSearchResultsStructured(results: SearchResult[]): 
   return JSON.stringify({
     status: results.length > 0 ? 'ok' : 'empty',
     resultCount: results.length,
+    usage: '这些结果来自本地知识库索引，可用于回答未打开或未添加上下文的已索引文档问题；如果片段不足以覆盖整篇文章，请说明范围并建议用户添加目标文件以读取完整原文。',
     results: results.map((result) => ({
       filePath: result.document.filePath,
       title: result.document.title || result.document.filePath,
@@ -199,7 +200,7 @@ async function formatKnowledgeSearchResultsStructured(results: SearchResult[]): 
       score: Number(result.score.toFixed(4)),
       vectorScore: typeof result.vectorScore === 'number' ? Number(result.vectorScore.toFixed(4)) : undefined,
       keywordScore: typeof result.keywordScore === 'number' ? Number(result.keywordScore.toFixed(4)) : undefined,
-      snippet: limitText(result.chunk.content, 240),
+      snippet: limitText(result.chunk.content, 800),
       titlePath: result.chunk.titlePath || [],
       heading: result.chunk.heading,
       embeddingStatus: stateByPath.get(result.document.filePath) || (result.chunk.embedding ? 'INDEXED' : 'CHUNKED'),
@@ -213,7 +214,7 @@ async function formatKnowledgeSearchResultsStructured(results: SearchResult[]): 
 export function registerBuiltinTools() {
   registerTool({
     name: 'search_knowledge',
-    description: '在本地 RAG 数据库中检索用户要找的信息位于哪些文件。此工具返回命中的文件路径、行号、标题路径和短片段；短片段可用于判断相关性，若要总结或改写整篇文件仍需用户把目标文件加入上下文。',
+    description: '在本地 RAG 数据库中检索已索引文档内容。可查询未打开、未添加到聊天框上下文的文档；工具返回文件路径、行号、标题路径和正文片段，可直接用于基于知识库的问答、归纳和局部总结。只有需要精确读取整份原文或改写文件时，才要求用户添加目标文件上下文。',
     parameters: [
       { name: 'query', type: 'string', description: '搜索查询', required: true },
       { name: 'topK', type: 'number', description: '返回结果数量（1-20），默认 5', required: false },

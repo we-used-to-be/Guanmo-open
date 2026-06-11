@@ -17,7 +17,7 @@ import { toast } from '@/services/toast'
 export function AppLayout() {
   const { sidebarCollapsed, aiPanelOpen, sidebarWidth, aiPanelWidth, toggleSidebar, toggleAiPanel, setAiPanelWidth } =
     useAppStore()
-  const { togglePreview, toggleDiffPreview } = useEditorStore()
+  const { togglePreview, toggleDiffPreview, setViewMode } = useEditorStore()
   const { handleNewFile, handleOpenFile, handleSaveFile } = useFileOperations()
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [commandPaletteMode, setCommandPaletteMode] = useState<'commands' | 'files'>('commands')
@@ -35,7 +35,7 @@ export function AppLayout() {
           setSettingsOpen(true)
           return
         }
-        if (key === 's' || key === 'f' || key === 'g' || key === 'h' || key === 'p' || key === 'j' || key === 'e' || key === 'd') {
+        if (key === 's' || key === 'f' || key === 'g' || key === 'h' || key === 'p' || key === 'j' || key === 'e' || key === 'd' || ['1', '2', '3', '4', '5'].includes(key)) {
           e.preventDefault()
           e.stopPropagation()
         }
@@ -112,6 +112,11 @@ export function AppLayout() {
     'CTRL+S': () => handleSaveFile(),
     'CTRL+SHIFT+V': () => togglePreview(),
     'CTRL+SHIFT+D': () => toggleDiffPreview(),
+    'CTRL+SHIFT+1': () => setViewMode('edit'),
+    'CTRL+SHIFT+2': () => setViewMode('preview'),
+    'CTRL+SHIFT+3': () => setViewMode('edit-preview'),
+    'CTRL+SHIFT+4': () => setViewMode('dual-preview'),
+    'CTRL+SHIFT+5': () => setViewMode('diff-preview'),
     'CTRL+SHIFT+E': () => handleExportHtml(),
     'CTRL+,': () => setSettingsOpen(true),
   }

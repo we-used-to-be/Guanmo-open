@@ -27,7 +27,7 @@ export function describeFileOperationError(err: unknown, fallback: string): stri
     return '没有权限完成该文件操作'
   }
   if (lower.includes('extension is not allowed')) {
-    return '只支持操作允许的文本文件扩展名'
+    return '只支持操作允许的文本或图片文件扩展名'
   }
   return message ? `${fallback}: ${message}` : fallback
 }

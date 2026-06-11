@@ -1,6 +1,7 @@
 import type { ChatMessage, ChatMessageContextMeta, ChatMessageTag } from '@/services/ai/types'
 import type { ContextTag } from '@/types/contextTag'
 import { CONTEXT_BLOCK_PREFIX } from '@/services/contextBuilder'
+import { buildSystemMessages, buildUntrustedContextMessage } from '@/services/ai/systemPrompts'
 
 export function buildChatMessageTags(contextTags: ContextTag[] = []): ChatMessageTag[] {
   return contextTags.map((tag) => ({
@@ -67,7 +68,38 @@ export function appendRagContext(
   ragContext: string
 ): ChatMessage[] {
   if (!ragContext) return messages
-  return [...messages.slice(0, -1), { ...userMessage, content: `${userMessage.content}\n\n${ragContext}` }]
+  const contextMessage = buildUntrustedContextMessage(ragContext)
+  if (!contextMessage) return messages
+  return [...messages.slice(0, -1), contextMessage, userMessage]
+}
+
+export function buildMessagesForModel(options: {
+  history: ChatMessage[]
+  userMessage: ChatMessage
+  supplementalContext?: string
+  customPreferencePrompt?: string
+}): ChatMessage[] {
+  const strippedUserContent = stripInjectedTagContext(options.userMessage.content)
+  const latestUserMessage: ChatMessage = {
+    role: 'user',
+    content: options.userMessage.displayContent && !options.userMessage.hidden
+      ? options.userMessage.displayContent
+      : strippedUserContent,
+  }
+  const contextText = [
+    strippedUserContent === options.userMessage.content
+      ? ''
+      : options.userMessage.content.slice(strippedUserContent.length).trim(),
+    options.supplementalContext?.trim(),
+  ].filter(Boolean).join('\n\n')
+  const contextMessage = buildUntrustedContextMessage(contextText)
+
+  return [
+    ...buildSystemMessages(options.customPreferencePrompt),
+    ...options.history,
+    ...(contextMessage ? [contextMessage] : []),
+    latestUserMessage,
+  ]
 }
 
 export function buildSupplementalAiContext(options: {

@@ -51,7 +51,7 @@ const KEYWORD_CONFIG: Record<Capability, { weak: string[]; strong: string[] }> =
     strong: ['查询记忆', '搜索记忆', '我的记忆', '记住', '保存记忆', '添加记忆', 'remember'],
   },
   knowledge: {
-    weak: ['知识', '文档', '笔记', '资料', '索引', 'rag', '文件内容', '总结', '解释', '分析', '概述', '归纳'],
+    weak: ['知识', '文档', '笔记', '资料', '索引', 'rag', '文件内容', '文章', '这篇', '提到', '总结', '解释', '分析', '概述', '归纳'],
     strong: ['知识库', '本地知识', '本地文档', '文档库', '资料库', '笔记库', 'search_knowledge', '查找文档', '搜索文档'],
   },
   file_read: {
@@ -86,6 +86,8 @@ const REGEX_PATTERNS: Record<Capability, RegExp[]> = {
     /(总结|解释|分析|概述|归纳).*(文件|文档|笔记|内容|这篇)/i,
     /(这个文件|这篇).*(什么|说|讲|内容)/i,
     /(什么|说|讲|内容).*(这个文件|这篇)/i,
+    /(?:[\w\u4e00-\u9fff ._-]+\.(?:md|markdown|mdx|txt)).*(?:总结|解释|分析|概述|归纳|说了什么|讲了什么|提到|内容)/i,
+    /(?:总结|解释|分析|概述|归纳|看看|查询|检索).*(?:[\w\u4e00-\u9fff ._-]+\.(?:md|markdown|mdx|txt))/i,
   ],
   file_read: [
     /(读取|查看|打开|看看).*(文件|文档)/i,
@@ -163,6 +165,10 @@ function scoreCapability(
   if (capability === 'file_read' && context.hasOpenFile) {
     score += 1
     signals.push('context:open_file')
+  }
+  if (capability === 'file_read' && context.hasContextTags && /(总结|解释|分析|概述|归纳|这篇|这个文件|文章|全文|内容)/.test(query)) {
+    score += 2
+    signals.push('context:tagged_file_read')
   }
   if (capability === 'memory' && context.hasContextTags) {
     score += 1

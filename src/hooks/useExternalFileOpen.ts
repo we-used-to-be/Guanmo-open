@@ -3,10 +3,11 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { isTauri } from '@/hooks/useTauri'
-import { openExternalFilePaths, type ExternalFileOpenSource } from '@/services/externalFileOpen'
+import { isImagePath, isMarkdownPath, openExternalFilePaths, type ExternalFileOpenSource } from '@/services/externalFileOpen'
 import { toast } from '@/services/toast'
 
 const OPEN_FILES_EVENT = 'guanmo:open-files'
+const DROP_IMAGES_EVENT = 'guanmo:drop-image-paths'
 
 function getFileName(path: string): string {
   return path.split(/[/\\]/).pop() || path
@@ -24,8 +25,15 @@ export function useExternalFileOpen(appReady: boolean) {
     let unlistenDragDrop: (() => void) | undefined
 
     const openPaths = async (paths: string[], source: ExternalFileOpenSource) => {
-      const result = await openExternalFilePaths(paths, source)
-      if (result.ignored.length > 0) {
+      const imagePaths = source === 'drag-drop' ? paths.filter(isImagePath) : []
+      const openablePaths = source === 'drag-drop' ? paths.filter((path) => !isImagePath(path)) : paths
+
+      if (imagePaths.length > 0) {
+        window.dispatchEvent(new CustomEvent(DROP_IMAGES_EVENT, { detail: { paths: imagePaths } }))
+      }
+
+      const result = await openExternalFilePaths(openablePaths, source)
+      if (result.ignored.some((path) => !isMarkdownPath(path))) {
         toast.warning('仅支持拖入 .md 文件')
       }
       for (const failure of result.failed) {

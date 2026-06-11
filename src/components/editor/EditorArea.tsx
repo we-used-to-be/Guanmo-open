@@ -9,15 +9,17 @@ import { saveFile } from '@/services/fileSystem'
 import { indexMarkdownDocument } from '@/services/rag/indexer'
 import { extractToc, type TocItem } from '@/services/markdownToc'
 import { toggleMarkdownTaskAtLine } from '@/services/markdownTasks'
+import { saveExternalImageForMarkdown, saveImageFileForMarkdown } from '@/services/markdownImages'
 import { toast } from '@/services/toast'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
+import { openFileDialog } from '@/hooks/useTauri'
 import { CodeMirrorEditor } from './CodeMirrorEditor'
 import { EditorContextMenu } from './EditorContextMenu'
 import { MarkdownDiffView } from './MarkdownDiffView'
 import { MarkdownPreview, MarkdownToc } from './MarkdownPreview'
 import { SearchOverlay } from './SearchOverlay'
 import { TabBar } from './TabBar'
-import { ContextMenu, ContextMenuItem } from '@/components/common/ContextMenu'
+import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem } from '@/components/common/ContextMenu'
 
 interface PreviewMenuState {
   x: number
@@ -27,6 +29,7 @@ interface PreviewMenuState {
 }
 
 const PREVIEW_CONTEXT_HIGHLIGHT = 'preview-context-selection'
+const DROP_IMAGES_EVENT = 'guanmo:drop-image-paths'
 
 export function EditorArea() {
   const { tabs, activeTabId, updateTabContent, viewMode, setViewMode, rightPaneTabId, setRightPaneTabId } = useEditorStore()
@@ -163,6 +166,100 @@ export function EditorArea() {
     jumpToLine(item.line)
   }, [jumpToLine])
 
+  const insertMarkdownAtCursor = useCallback((markdown: string, insertAt?: number) => {
+    const view = editorViewRef.current
+    if (!view || !activeTabId) return false
+    const selection = view.state.selection.main
+    const from = typeof insertAt === 'number' ? insertAt : selection.from
+    const to = typeof insertAt === 'number' ? insertAt : selection.to
+    view.dispatch({
+      changes: { from, to, insert: markdown },
+      selection: { anchor: from + markdown.length },
+      scrollIntoView: true,
+    })
+    view.focus()
+    return true
+  }, [activeTabId])
+
+  const handleChooseImage = useCallback(async () => {
+    if (!activeTab) return
+    if (!activeTab.filePath) {
+      toast.info('请先保存当前 Markdown 文件，再插入图片')
+      return
+    }
+
+    try {
+      const selected = await openFileDialog([
+        { name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'] },
+      ])
+      const imagePath = Array.isArray(selected) ? selected[0] : selected
+      if (!imagePath) return
+
+      const relativePath = await saveExternalImageForMarkdown(activeTab.filePath, imagePath)
+      if (insertMarkdownAtCursor(`![图片描述](${relativePath})`)) {
+        toast.success('图片已插入')
+      }
+    } catch (err) {
+      console.error('Insert image failed:', err)
+      toast.error(describeFileOperationError(err, '插入图片失败'))
+    }
+  }, [activeTab, insertMarkdownAtCursor])
+
+  const handleInsertImageFiles = useCallback(async (files: File[], insertAt?: number) => {
+    if (!activeTab) return
+    if (!activeTab.filePath) {
+      toast.info('请先保存当前 Markdown 文件，再插入图片')
+      return
+    }
+
+    try {
+      const snippets: string[] = []
+      for (const file of files) {
+        const relativePath = await saveImageFileForMarkdown(activeTab.filePath, file)
+        snippets.push(`![图片描述](${relativePath})`)
+      }
+      if (snippets.length > 0 && insertMarkdownAtCursor(snippets.join('\n'), insertAt)) {
+        toast.success(snippets.length > 1 ? `已插入 ${snippets.length} 张图片` : '图片已插入')
+      }
+    } catch (err) {
+      console.error('Insert dropped/pasted image failed:', err)
+      toast.error(describeFileOperationError(err, '插入图片失败'))
+    }
+  }, [activeTab, insertMarkdownAtCursor])
+
+  const handleInsertImagePaths = useCallback(async (paths: string[]) => {
+    if (!activeTab) return
+    if (!activeTab.filePath) {
+      toast.info('请先保存当前 Markdown 文件，再插入图片')
+      return
+    }
+
+    try {
+      const snippets: string[] = []
+      for (const path of paths) {
+        const relativePath = await saveExternalImageForMarkdown(activeTab.filePath, path)
+        snippets.push(`![图片描述](${relativePath})`)
+      }
+      if (snippets.length > 0 && insertMarkdownAtCursor(snippets.join('\n'))) {
+        toast.success(snippets.length > 1 ? `已插入 ${snippets.length} 张图片` : '图片已插入')
+      }
+    } catch (err) {
+      console.error('Insert dragged image path failed:', err)
+      toast.error(describeFileOperationError(err, '插入图片失败'))
+    }
+  }, [activeTab, insertMarkdownAtCursor])
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ paths?: string[] }>).detail
+      if (detail?.paths?.length) {
+        void handleInsertImagePaths(detail.paths)
+      }
+    }
+    window.addEventListener(DROP_IMAGES_EVENT, handler)
+    return () => window.removeEventListener(DROP_IMAGES_EVENT, handler)
+  }, [handleInsertImagePaths])
+
   const jumpToPreviewHeading = useCallback((item: TocItem) => {
     const container = leftPreviewRef.current
     const heading = container?.querySelector<HTMLElement>(`[data-md-line="${item.line}"]`)
@@ -273,6 +370,7 @@ export function EditorArea() {
             >
               <MarkdownPreview
                 content={activeTab?.content || ''}
+                filePath={activeTab?.filePath}
                 fontSize={editorFontSize}
                 lineHeight={editorLineHeight}
                 onTaskToggle={
@@ -299,6 +397,7 @@ export function EditorArea() {
               <PaneHeader title={activeTab?.title || ''} />
               <MarkdownPreview
                 content={activeTab?.content || ''}
+                filePath={activeTab?.filePath}
                 fontSize={editorFontSize}
                 lineHeight={editorLineHeight}
                 onTaskToggle={
@@ -331,6 +430,7 @@ export function EditorArea() {
               {rightTab ? (
                 <MarkdownPreview
                   content={rightTab.content}
+                  filePath={rightTab.filePath}
                   fontSize={editorFontSize}
                   lineHeight={editorLineHeight}
                   onTaskToggle={(line, checked) => void handleTaskToggle(rightTab.id, rightTab.content, line, checked)}
@@ -350,10 +450,25 @@ export function EditorArea() {
                   content={activeTab.content}
                   onChange={handleEditorChange}
                   onSave={handleSave}
+                  onImageFiles={(files, insertAt) => void handleInsertImageFiles(files, insertAt)}
                   viewRef={editorViewRef}
                   documentKey={activeTab.id}
                   tabId={activeTab.id}
                 />
+              )}
+              {activeTab && (
+                <button
+                  type="button"
+                  onClick={() => void handleChooseImage()}
+                  className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-lg border border-gm-border bg-gm-surface/90 text-gm-text-secondary shadow-sm transition-colors hover:border-gm-primary/50 hover:text-gm-primary"
+                  title="选择图片插入"
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                    <circle cx="8.5" cy="8.5" r="1.5" />
+                    <path d="M21 15l-5-5L5 21" />
+                  </svg>
+                </button>
               )}
               <EditorContextMenu viewRef={editorViewRef} />
             </div>
@@ -366,8 +481,10 @@ export function EditorArea() {
               >
                 <MarkdownPreview
                   content={activeTab?.content || ''}
+                  filePath={activeTab?.filePath}
                   fontSize={editorFontSize}
                   lineHeight={editorLineHeight}
+                  onHeadingClick={jumpToLine}
                   onTaskToggle={
                     activeTab
                       ? (line, checked) => void handleTaskToggle(activeTab.id, activeTab.content, line, checked)
@@ -395,7 +512,8 @@ export function EditorArea() {
           <ContextMenu position={previewMenu} onClose={() => {
             clearPreviewContextHighlight()
             setPreviewMenu(null)
-          }} minWidth={120} maxWidth={120}>
+          }} minWidth={144} maxWidth={144}>
+            <ContextMenuGroupTitle>预览操作</ContextMenuGroupTitle>
             <ContextMenuItem onClick={handleCopyPreviewSelection} disabled={!previewMenu.selectedText}>
               复制
             </ContextMenuItem>

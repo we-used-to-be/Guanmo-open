@@ -74,7 +74,7 @@ export const useEditorStore = create<EditorState>()(
             savedContent: tab.savedContent ?? tab.content,
           }
           set((s) => ({
-            tabs: [...s.tabs, hydratedTab],
+            tabs: [hydratedTab, ...s.tabs],
             activeTabId: hydratedTab.id,
           }))
         }
@@ -97,7 +97,7 @@ export const useEditorStore = create<EditorState>()(
           modified: false,
         }
         set((s) => ({
-          tabs: [...s.tabs, tab],
+          tabs: [tab, ...s.tabs],
           activeTabId: id,
         }))
         if (filePath && title) {
@@ -110,7 +110,7 @@ export const useEditorStore = create<EditorState>()(
           const tabs = s.tabs.filter((t) => t.id !== id)
           let activeTabId = s.activeTabId
           if (activeTabId === id) {
-            activeTabId = tabs.length > 0 ? tabs[tabs.length - 1].id : null
+            activeTabId = tabs.length > 0 ? tabs[0].id : null
           }
           let rightPaneTabId = s.rightPaneTabId
           if (rightPaneTabId === id) {
@@ -274,7 +274,7 @@ export const useEditorStore = create<EditorState>()(
             const validIds = new Set(validTabs.map((t) => t.id))
             let activeTabId = state.activeTabId
             if (activeTabId && !validIds.has(activeTabId)) {
-              activeTabId = validTabs.length > 0 ? validTabs[validTabs.length - 1].id : null
+              activeTabId = validTabs.length > 0 ? validTabs[0].id : null
             }
             let rightPaneTabId = state.rightPaneTabId
             if (rightPaneTabId && !validIds.has(rightPaneTabId)) {

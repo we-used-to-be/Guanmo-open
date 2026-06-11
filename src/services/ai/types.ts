@@ -10,6 +10,7 @@ export interface AiConfig {
   chatModel: string
   streamEnabled: boolean
   webSearchEnabled: boolean
+  customPreferencePrompt: string
   timeout: number
   maxContextLength: number
   temperature: number
@@ -36,6 +37,15 @@ export interface ChatMessageContextMeta {
   webSearchUsed: boolean
 }
 
+export interface ChatMessageSource {
+  filePath: string
+  fileName: string
+  titlePath?: string[]
+  heading?: string
+  startLine: number
+  endLine: number
+}
+
 export interface EditConfirmation {
   id: string
   messageId?: string
@@ -60,6 +70,7 @@ export interface ChatMessage {
   tags?: ChatMessageTag[]
   displayContent?: string
   contextMeta?: ChatMessageContextMeta
+  sources?: ChatMessageSource[]
   editConfirmation?: EditConfirmation
   hidden?: boolean
   sessionId?: string
@@ -134,6 +145,7 @@ export const DEFAULT_AI_CONFIG: AiConfig = {
   chatModel: '',
   streamEnabled: true,
   webSearchEnabled: false,
+  customPreferencePrompt: '',
   timeout: 60000,
   maxContextLength: 8192,
   temperature: 0.7,

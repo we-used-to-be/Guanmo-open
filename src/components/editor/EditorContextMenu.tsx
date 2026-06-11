@@ -3,7 +3,7 @@ import type { EditorView } from '@codemirror/view'
 import { useEditorStore } from '@/stores/editorStore'
 import { addSelectionContextTag } from '@/services/aiContext'
 import { useChatStore } from '@/stores/chatStore'
-import { ContextMenu, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
+import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { toast } from '@/services/toast'
 
 interface MenuState {
@@ -141,18 +141,22 @@ export function EditorContextMenu({ viewRef }: EditorContextMenuProps) {
   return (
     <div ref={wrapperRef}>
     {menu && (
-    <ContextMenu position={menu} onClose={() => setMenu(null)} minWidth={130} maxWidth={130}>
+    <ContextMenu position={menu} onClose={() => setMenu(null)} minWidth={176} maxWidth={176}>
       {menu.hasSelection ? (
         /* 选中文本右键菜单 */
         <>
+          <ContextMenuGroupTitle>基础操作</ContextMenuGroupTitle>
           <ContextMenuItem onClick={handleCopy}>复制</ContextMenuItem>
           <ContextMenuItem onClick={handleAddSelectionToAi}>添加到 AI 上下文</ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuGroupTitle>AI 助手</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => handleAiAction('请解释这段内容')}>AI 解释这段</ContextMenuItem>
           <ContextMenuItem onClick={() => handleAiAction('请总结这段内容')}>AI 总结这段</ContextMenuItem>
           <ContextMenuItem onClick={() => handleAiAction('请改写这段内容，使其更清晰')}>AI 改写这段</ContextMenuItem>
-          <ContextMenuItem onClick={() => handleAiAction('请根据这段内容生成笔记')}>AI 生成笔记</ContextMenuItem>
+          <ContextMenuItem onClick={() => handleAiAction('请只把选中文本整理为标准 Markdown 格式：可以调整标题、列表、引用、代码块、表格等 Markdown 标记；不得改变原文内容、语义和顺序，不得新增信息。')}>AI 优化格式</ContextMenuItem>
           <ContextMenuItem onClick={() => handleAiAction('请翻译这段内容')}>AI 翻译</ContextMenuItem>
           <ContextMenuSeparator />
+          <ContextMenuGroupTitle>Markdown 格式</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => wrapSelection('**', '**')}>加粗</ContextMenuItem>
           <ContextMenuItem onClick={() => wrapSelection('*', '*')}>斜体</ContextMenuItem>
           <ContextMenuItem onClick={() => wrapSelection('`', '`')}>行内代码</ContextMenuItem>
@@ -163,9 +167,11 @@ export function EditorContextMenu({ viewRef }: EditorContextMenuProps) {
       ) : (
         /* 编辑器空白处右键菜单 */
         <>
+          <ContextMenuGroupTitle>基础操作</ContextMenuGroupTitle>
           <ContextMenuItem onClick={handlePaste}>粘贴</ContextMenuItem>
           <ContextMenuItem onClick={handleSelectAll}>全选</ContextMenuItem>
           <ContextMenuSeparator />
+          <ContextMenuGroupTitle>插入 Markdown</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => insertAtCursor('# 标题\n')}>插入标题</ContextMenuItem>
           <ContextMenuItem onClick={() => insertAtCursor('> 引用\n')}>插入引用</ContextMenuItem>
           <ContextMenuItem onClick={() => insertAtCursor('\n```\n\n```\n')}>插入代码块</ContextMenuItem>

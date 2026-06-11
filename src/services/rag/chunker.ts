@@ -22,6 +22,7 @@ interface TextBlock {
 }
 
 const MIN_MEANINGFUL_CHARS = 30
+const MIN_MEANINGFUL_CHARS_WITH_HEADING = 6
 
 function cleanLine(line: string): string | null {
   const trimmed = line.trim()
@@ -71,6 +72,15 @@ function isMeaningful(content: string): boolean {
   return /```|`[^`]+`|\b[A-Z][A-Z0-9_-]{2,}\b|\b[a-z]+[A-Z][A-Za-z0-9]*\b/.test(content)
 }
 
+function isMeaningfulWithHeading(content: string, titlePath: string[], heading?: string): boolean {
+  if (isMeaningful(content)) return true
+
+  const metadata = titlePath.length > 0 ? titlePath.join('\n') : heading || ''
+  if (!metadata.trim()) return false
+
+  return meaningfulLength([metadata, content].filter(Boolean).join('\n')) >= MIN_MEANINGFUL_CHARS_WITH_HEADING
+}
+
 function splitSections(lines: string[]): MarkdownSection[] {
   const sections: MarkdownSection[] = []
   const headingStack: HeadingEntry[] = []
@@ -82,7 +92,7 @@ function splitSections(lines: string[]): MarkdownSection[] {
 
   const flush = (endLine: number) => {
     const text = normalizeChunkText(currentLines)
-    if (text && isMeaningful(text)) {
+    if (text && isMeaningfulWithHeading(text, currentTitlePath, currentHeading)) {
       sections.push({
         lines: text.split('\n'),
         startLine: currentStartLine,
@@ -164,7 +174,7 @@ function splitBlocks(section: MarkdownSection): TextBlock[] {
   }
 
   if (current.length > 0) flush(section.endLine)
-  return blocks.filter((block) => isMeaningful(block.text))
+  return blocks.filter((block) => isMeaningfulWithHeading(block.text, section.titlePath, section.heading))
 }
 
 function splitLongTextBlock(block: TextBlock, chunkSize: number, overlap: number): TextBlock[] {
@@ -224,7 +234,7 @@ function pushChunk(
   chunkIndex: number
 ): number {
   const content = normalizeChunkText(blocks.map((block) => block.text))
-  if (!content || !isMeaningful(content)) return chunkIndex
+  if (!content || !isMeaningfulWithHeading(content, section.titlePath, section.heading)) return chunkIndex
 
   const contentHash = createContentHash(content)
   if (seenHashes.has(contentHash)) return chunkIndex

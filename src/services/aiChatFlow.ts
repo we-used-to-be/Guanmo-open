@@ -54,6 +54,9 @@ export function toRagSources(results: SearchResult[]) {
   return results.map((result) => ({
     title: result.document.title || result.document.filePath,
     filePath: result.document.filePath,
+    fileName: result.document.filePath.split(/[/\\]/).pop() || result.document.title || result.document.filePath,
+    titlePath: result.chunk.titlePath,
+    heading: result.chunk.heading,
     score: result.score,
     startLine: result.chunk.startLine,
     endLine: result.chunk.endLine,

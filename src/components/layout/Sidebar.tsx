@@ -10,7 +10,7 @@ import { isSameFilePath } from '@/services/pathIdentity'
 import { toast } from '@/services/toast'
 import { Button, Collapse, Divider } from 'animal-island-ui'
 import { FileTree, RecentFiles, FileIconSVG } from '@/components/file-tree/FileTree'
-import { ContextMenu, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
+import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { addFileContextTag } from '@/services/aiContext'
 import { useChatStore } from '@/stores/chatStore'
 import { renameFileEntry, saveExistingFileAs, validateFileName } from '@/services/fileEntryActions'
@@ -286,7 +286,7 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
 
   return (
     <div
-      className="animal-cursor flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col overflow-hidden"
+      className="animal-cursor relative flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col overflow-hidden"
       style={{ width }}
     >
       {/* Header */}
@@ -309,7 +309,7 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
       </div>
 
       {/* File Sections with Collapse */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-2">
+      <div className="flex-1 overflow-y-auto p-3 pb-16 space-y-2">
         <Collapse
           question="最近文件"
           defaultExpanded
@@ -424,43 +424,44 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
         />
       </div>
 
-      <Divider type="line-brown" />
-
       {/* Bottom Actions */}
-      <div className="p-2 flex items-center gap-1">
-        <Button type="text" size="small" title="打开文件" onClick={handleOpenFile}
-          icon={
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
-            </svg>
-          }
-        />
-        <Button type="text" size="small" title="搜索" onClick={onOpenSearch}
-          icon={
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="8" />
-              <path d="M21 21l-4.35-4.35" />
-            </svg>
-          }
-        />
-        <Button type="text" size="small" title="打开文件夹" onClick={handleOpenFolder}
-          icon={
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
-              <path d="M12 11v6M9 14l3-3 3 3" />
-            </svg>
-          }
-        />
-        <div className="flex-1" />
-        <div className="w-px h-5 bg-gm-border-subtle mx-1" />
-        <Button type="text" size="small" title="设置" onClick={onOpenSettings}
-          icon={
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
-            </svg>
-          }
-        />
+      <div className="absolute bottom-0 left-0 right-0 z-20 bg-gm-surface/70 shadow-[0_-8px_24px_0_rgba(61,52,40,0.08)] backdrop-blur-xl">
+        <Divider type="line-brown" />
+        <div className="flex items-center gap-1 p-2">
+          <Button type="text" size="small" title="打开文件" onClick={handleOpenFile}
+            icon={
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+              </svg>
+            }
+          />
+          <Button type="text" size="small" title="搜索" onClick={onOpenSearch}
+            icon={
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="8" />
+                <path d="M21 21l-4.35-4.35" />
+              </svg>
+            }
+          />
+          <Button type="text" size="small" title="打开文件夹" onClick={handleOpenFolder}
+            icon={
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+                <path d="M12 11v6M9 14l3-3 3 3" />
+              </svg>
+            }
+          />
+          <div className="flex-1" />
+          <div className="w-px h-5 bg-gm-border-subtle mx-1" />
+          <Button type="text" size="small" title="设置" onClick={onOpenSettings}
+            icon={
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
+              </svg>
+            }
+          />
+        </div>
       </div>
     </div>
   )
@@ -607,7 +608,8 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
         )
       })}
       {contextMenu && (
-        <ContextMenu position={contextMenu} onClose={() => setContextMenu(null)} minWidth={150} maxWidth={150}>
+        <ContextMenu position={contextMenu} onClose={() => setContextMenu(null)} minWidth={176} maxWidth={176}>
+          <ContextMenuGroupTitle variant="strong">文件操作</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => startRename(contextMenu.file)}>重命名</ContextMenuItem>
           <ContextMenuItem onClick={async () => {
             setContextMenu(null)
@@ -619,6 +621,7 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
             }
           }}>另存为</ContextMenuItem>
           <ContextMenuSeparator />
+          <ContextMenuGroupTitle variant="strong">AI 助手</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => {
             addFileContextTag({ title: contextMenu.file.name, filePath: contextMenu.file.path })
             setContextMenu(null)
@@ -628,8 +631,9 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
             useChatStore.getState().setDraftInput(`请总结文件「${contextMenu.file.name}」的内容`)
             setContextMenu(null)
           }}>AI 总结该文件</ContextMenuItem>
-          <ContextMenuItem onClick={() => { navigator.clipboard.writeText(contextMenu.file.path); setContextMenu(null) }}>复制路径</ContextMenuItem>
           <ContextMenuSeparator />
+          <ContextMenuGroupTitle variant="strong">路径与收藏</ContextMenuGroupTitle>
+          <ContextMenuItem onClick={() => { navigator.clipboard.writeText(contextMenu.file.path); setContextMenu(null) }}>复制路径</ContextMenuItem>
           <ContextMenuItem onClick={() => { useEditorStore.getState().toggleFavorite(contextMenu.file.path); setContextMenu(null) }}>从收藏移除</ContextMenuItem>
         </ContextMenu>
       )}

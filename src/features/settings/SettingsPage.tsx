@@ -164,8 +164,11 @@ function SliderField({
           value={value}
           list={datalistId}
           onChange={(e) => onChange(+parseFloat(e.target.value).toFixed(precision))}
-          className="w-full h-1 accent-gm-primary bg-gm-border-subtle rounded-full appearance-none cursor-pointer
-            [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-gm-primary [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-sm"
+          className="w-full h-4 accent-gm-primary bg-transparent appearance-none cursor-pointer
+            [&::-webkit-slider-runnable-track]:h-1 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-gm-border-subtle
+            [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:mt-[-3px] [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-gm-primary [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-sm
+            [&::-moz-range-track]:h-1 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-gm-border-subtle
+            [&::-moz-range-thumb]:w-3.5 [&::-moz-range-thumb]:h-3.5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-gm-primary [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:shadow-sm"
         />
         <datalist id={datalistId}>
           {ticks.map((t) => <option key={t} value={t} />)}
@@ -262,6 +265,15 @@ function AiSettings() {
       </SettingField>
       <SettingField label="联网搜索" description="允许 Agent 使用 Web 搜索工具">
         <Switch checked={ai.webSearchEnabled} onChange={(v) => updateAiConfig({ webSearchEnabled: v })} />
+      </SettingField>
+      <SettingField label="用户偏好提示词" description="只影响回答风格和偏好，不覆盖安全、工具、记忆和文件确认规则">
+        <textarea
+          value={ai.customPreferencePrompt}
+          onChange={(e) => updateAiConfig({ customPreferencePrompt: e.target.value })}
+          placeholder="例如：回答更简洁；优先用中文；给出结论后再补充依据。"
+          rows={4}
+          className="w-full rounded-lg border border-gm-border-subtle bg-gm-surface px-3 py-2 text-body text-gm-text placeholder:text-gm-text-tertiary resize-y focus:outline-none focus:border-gm-primary"
+        />
       </SettingField>
 
       <Sep />
@@ -516,7 +528,7 @@ function ShortcutSettings() {
 }
 
 function GeneralSettings() {
-  const { updateAiConfig, updateEmbeddingConfig, updateEditorSettings, updateWebSearchConfig } = useSettingsStore()
+  const { appearance, updateAiConfig, updateEmbeddingConfig, updateEditorSettings, updateAppearanceSettings, updateWebSearchConfig } = useSettingsStore()
   const [busy, setBusy] = useState(false)
 
   const handleRestoreDefaults = () => {
@@ -525,6 +537,7 @@ function GeneralSettings() {
       chatModel: '',
       streamEnabled: true,
       webSearchEnabled: false,
+      customPreferencePrompt: '',
       timeout: 60000,
       maxContextLength: 8192,
       temperature: 0.7,
@@ -544,6 +557,7 @@ function GeneralSettings() {
       autoSave: true,
       autoSaveDelay: 1000,
     })
+    updateAppearanceSettings({ customCursorEnabled: true })
     updateWebSearchConfig({ provider: 'duckduckgo', apiKey: '', maxResults: 5, customUrl: '' })
     toast.success('已恢复默认设置')
   }
@@ -654,6 +668,11 @@ function GeneralSettings() {
         </div>
       </div>
 
+      <Sep />
+      <SectionTitle>外观</SectionTitle>
+      <SettingField label="定制光标" description="使用 animal-island-ui 的手作风光标">
+        <Switch checked={appearance.customCursorEnabled} onChange={(v) => updateAppearanceSettings({ customCursorEnabled: v })} />
+      </SettingField>
       <Sep />
       <Button type="default" block onClick={handleRestoreDefaults}>恢复默认设置</Button>
       <Sep />

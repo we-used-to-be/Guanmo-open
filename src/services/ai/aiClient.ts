@@ -57,6 +57,7 @@ export function initEmbeddingClient(config: EmbeddingConfig): AiProvider {
     chatModel: config.embeddingModel,
     streamEnabled: false,
     webSearchEnabled: false,
+    customPreferencePrompt: '',
     timeout: 60000,
     maxContextLength: 8192,
     temperature: 0,

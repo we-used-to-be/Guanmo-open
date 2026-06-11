@@ -120,6 +120,56 @@ export function CommandPalette({ open, onClose, mode = 'commands' }: CommandPale
       },
     },
     {
+      id: 'view-edit',
+      label: '切换到编辑模式',
+      shortcut: shortcut('view-edit'),
+      category: '视图',
+      action: () => {
+        useEditorStore.getState().setViewMode('edit')
+        onClose()
+      },
+    },
+    {
+      id: 'view-preview',
+      label: '切换到预览模式',
+      shortcut: shortcut('view-preview'),
+      category: '视图',
+      action: () => {
+        useEditorStore.getState().setViewMode('preview')
+        onClose()
+      },
+    },
+    {
+      id: 'view-edit-preview',
+      label: '切换到编辑+预览',
+      shortcut: shortcut('view-edit-preview'),
+      category: '视图',
+      action: () => {
+        useEditorStore.getState().setViewMode('edit-preview')
+        onClose()
+      },
+    },
+    {
+      id: 'view-dual-preview',
+      label: '切换到对照阅读',
+      shortcut: shortcut('view-dual-preview'),
+      category: '视图',
+      action: () => {
+        useEditorStore.getState().setViewMode('dual-preview')
+        onClose()
+      },
+    },
+    {
+      id: 'view-diff-preview',
+      label: '切换到 Diff 对比',
+      shortcut: shortcut('view-diff-preview'),
+      category: '视图',
+      action: () => {
+        useEditorStore.getState().setViewMode('diff-preview')
+        onClose()
+      },
+    },
+    {
       id: 'toggle-sidebar',
       label: '切换侧边栏',
       shortcut: shortcut('toggle-sidebar'),

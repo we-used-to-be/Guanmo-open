@@ -5,7 +5,7 @@ import { getFileIcon, type FileNode } from '@/services/fileTree'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { addFileContextTag } from '@/services/aiContext'
 import { useChatStore } from '@/stores/chatStore'
-import { ContextMenu, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
+import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { renameFileEntry, saveExistingFileAs, validateFileName } from '@/services/fileEntryActions'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { toast } from '@/services/toast'
@@ -102,10 +102,12 @@ export function FileTree({ nodes, onOpenFile, workspacePath, onRefreshWorkspace,
         </div>
       )}
       {contextMenu && (
-        <ContextMenu position={contextMenu} onClose={() => setContextMenu(null)} minWidth={150} maxWidth={150}>
+        <ContextMenu position={contextMenu} onClose={() => setContextMenu(null)} minWidth={176} maxWidth={176}>
+          <ContextMenuGroupTitle>新建</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => startCreate('file')}>新建文件</ContextMenuItem>
           <ContextMenuItem onClick={() => startCreate('folder')}>新建文件夹</ContextMenuItem>
           <ContextMenuSeparator />
+          <ContextMenuGroupTitle>工作区</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => { onRefreshWorkspace?.(); setContextMenu(null) }}>刷新工作区</ContextMenuItem>
           {onCloseWorkspace && (
             <ContextMenuItem onClick={() => { onCloseWorkspace(); setContextMenu(null) }}>关闭工作区</ContextMenuItem>
@@ -297,12 +299,14 @@ function FileTreeNode({
 
       {/* Context Menu */}
       {contextMenu && (
-        <ContextMenu position={contextMenu} onClose={() => setContextMenu(null)} minWidth={150} maxWidth={150}>
+        <ContextMenu position={contextMenu} onClose={() => setContextMenu(null)} minWidth={176} maxWidth={176}>
+          <ContextMenuGroupTitle variant="strong">文件操作</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => { renameCancelledRef.current = false; setRenaming(true); setRenameValue(node.name); setContextMenu(null) }}>重命名</ContextMenuItem>
           <ContextMenuItem onClick={handleSaveAs}>另存为</ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuItem onClick={handleAddToAi}>添加到 AI 上下文</ContextMenuItem>
+          <ContextMenuGroupTitle variant="strong">AI 助手</ContextMenuGroupTitle>
           <ContextMenuItem onClick={handleSummarize}>AI 总结该文件</ContextMenuItem>
+          <ContextMenuItem onClick={handleAddToAi}>添加文件到 AI 上下文</ContextMenuItem>
         </ContextMenu>
       )}
 
@@ -497,7 +501,8 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
         )
       })}
       {contextMenu && (
-        <ContextMenu position={contextMenu} onClose={() => setContextMenu(null)} minWidth={150} maxWidth={150}>
+        <ContextMenu position={contextMenu} onClose={() => setContextMenu(null)} minWidth={176} maxWidth={176}>
+          <ContextMenuGroupTitle variant="strong">文件操作</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => startRename(contextMenu.file)}>重命名</ContextMenuItem>
           <ContextMenuItem onClick={async () => {
             setContextMenu(null)
@@ -509,9 +514,13 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
             }
           }}>另存为</ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuItem onClick={() => { addFileContextTag({ title: contextMenu.file.name, filePath: contextMenu.file.path }); setContextMenu(null) }}>添加到 AI 上下文</ContextMenuItem>
+          <ContextMenuGroupTitle variant="strong">AI 助手</ContextMenuGroupTitle>
+          <ContextMenuItem onClick={() => { addFileContextTag({ title: contextMenu.file.name, filePath: contextMenu.file.path }); setContextMenu(null) }}>添加文件到 AI 上下文</ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuGroupTitle variant="strong">复制与索引</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => { navigator.clipboard.writeText(contextMenu.file.path); setContextMenu(null) }}>复制路径</ContextMenuItem>
           <ContextMenuSeparator />
+          <ContextMenuGroupTitle variant="strong">列表管理</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => { removeRecentFile(contextMenu.file.path); setContextMenu(null) }}>从最近文件移除</ContextMenuItem>
         </ContextMenu>
       )}

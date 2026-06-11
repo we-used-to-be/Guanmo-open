@@ -12,6 +12,7 @@ import { Cursor } from 'animal-island-ui'
 function App() {
   const [dbError, setDbError] = useState<string | null>(null)
   const [appReady, setAppReady] = useState(false)
+  const customCursorEnabled = useSettingsStore((s) => s.appearance.customCursorEnabled)
   useExternalFileOpen(appReady)
 
   // 禁用浏览器默认右键菜单
@@ -62,9 +63,13 @@ function App() {
           数据库初始化失败: {dbError}（数据不会持久化）
         </div>
       )}
-      <Cursor className="h-full">
+      {customCursorEnabled ? (
+        <Cursor className="h-full">
+          <AppLayout />
+        </Cursor>
+      ) : (
         <AppLayout />
-      </Cursor>
+      )}
       <ToastContainer />
     </>
   )

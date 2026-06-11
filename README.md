@@ -110,7 +110,6 @@ VITE_GUANMO_WEB_SEARCH_API_KEY_SECRET=guanmo.web-search.api-key
 
 ### 📂 文件关联 · File Association
 
-安装 MSI 版本后：
 
 - 双击 Markdown 文件直接打开
 - 支持拖放打开文件

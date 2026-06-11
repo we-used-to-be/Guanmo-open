@@ -25,14 +25,20 @@ interface EditorSettings {
   autoSaveDelay: number
 }
 
+interface AppearanceSettings {
+  customCursorEnabled: boolean
+}
+
 interface SettingsState {
   ai: AiConfig
   editor: EditorSettings
+  appearance: AppearanceSettings
   webSearch: WebSearchConfig
 
   updateAiConfig: (config: Partial<AiConfig>) => void
   updateEmbeddingConfig: (config: Partial<EmbeddingConfig>) => void
   updateEditorSettings: (settings: Partial<EditorSettings>) => void
+  updateAppearanceSettings: (settings: Partial<AppearanceSettings>) => void
   updateWebSearchConfig: (config: Partial<WebSearchConfig>) => void
 }
 
@@ -48,6 +54,10 @@ const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   autoSaveDelay: 1000,
 }
 
+const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
+  customCursorEnabled: true,
+}
+
 const DEFAULT_WEB_SEARCH: WebSearchConfig = {
   provider: 'duckduckgo',
   apiKey: '',
@@ -60,6 +70,7 @@ export const useSettingsStore = create<SettingsState>()(
     (set) => ({
       ai: DEFAULT_AI_CONFIG,
       editor: DEFAULT_EDITOR_SETTINGS,
+      appearance: DEFAULT_APPEARANCE_SETTINGS,
       webSearch: DEFAULT_WEB_SEARCH,
 
       updateAiConfig: (config) => {
@@ -86,6 +97,9 @@ export const useSettingsStore = create<SettingsState>()(
 
       updateEditorSettings: (settings) =>
         set((s) => ({ editor: { ...s.editor, ...settings } })),
+
+      updateAppearanceSettings: (settings) =>
+        set((s) => ({ appearance: { ...s.appearance, ...settings } })),
 
       updateWebSearchConfig: (config) => {
         if ('apiKey' in config) {
@@ -127,6 +141,10 @@ export const useSettingsStore = create<SettingsState>()(
               ...saved.ai?.embedding,
               apiKey: '',
             },
+          },
+          appearance: {
+            ...current.appearance,
+            ...saved.appearance,
           },
           webSearch: {
             ...current.webSearch,
