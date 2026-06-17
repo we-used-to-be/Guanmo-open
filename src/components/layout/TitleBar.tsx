@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { undo, redo } from '@codemirror/commands'
 import { useEditorStore } from '@/stores/editorStore'
 import { useEditorHistoryStore } from '@/stores/editorHistoryStore'
 import { getActiveEditorView } from '@/services/editorViewRef'
 import { appIconUrl } from '@/assets/appIcon'
+
+// Detect if running inside Tauri
+const isTauri = typeof window !== 'undefined' && '__TAURI__' in window
 
 export function TitleBar() {
   const [maximized, setMaximized] = useState(false)
@@ -13,24 +15,30 @@ export function TitleBar() {
   const canRedo = useEditorHistoryStore((s) => s.canRedo)
 
   useEffect(() => {
-    const win = getCurrentWindow()
-    win.isMaximized().then(setMaximized)
-    const unlisten = win.onResized(() => {
+    if (!isTauri) return
+    import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
+      const win = getCurrentWindow()
       win.isMaximized().then(setMaximized)
+      const unlisten = win.onResized(() => {
+        win.isMaximized().then(setMaximized)
+      })
+      return () => { unlisten.then((fn) => fn()) }
     })
-    return () => { unlisten.then((fn) => fn()) }
   }, [])
 
   const handleMinimize = useCallback(() => {
-    getCurrentWindow().minimize()
+    if (!isTauri) return
+    import('@tauri-apps/api/window').then(({ getCurrentWindow }) => getCurrentWindow().minimize())
   }, [])
 
   const handleToggleMaximize = useCallback(() => {
-    getCurrentWindow().toggleMaximize()
+    if (!isTauri) return
+    import('@tauri-apps/api/window').then(({ getCurrentWindow }) => getCurrentWindow().toggleMaximize())
   }, [])
 
   const handleClose = useCallback(() => {
-    getCurrentWindow().close()
+    if (!isTauri) return
+    import('@tauri-apps/api/window').then(({ getCurrentWindow }) => getCurrentWindow().close())
   }, [])
 
   const handleUndo = useCallback(() => {
@@ -53,7 +61,7 @@ export function TitleBar() {
 
       {/* Drag region + current file */}
       <div
-        data-tauri-drag-region
+        data-tauri-drag-region=""
         className="flex-1 h-full flex items-center justify-center"
       >
         {activeTab && (
