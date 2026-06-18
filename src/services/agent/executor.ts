@@ -1,5 +1,5 @@
 import type { AgentConfig, AgentStep, AgentResult } from './types'
-import type { ChatMessage } from '@/services/ai/types'
+import type { ChatMessage, ChatMessageSource } from '@/services/ai/types'
 import { getAiClient, isAiReady } from '@/services/ai/aiClient'
 import { getAllTools, getTool, getToolDescriptions, getToolsForLLM } from './toolRegistry'
 import { registerBuiltinTools } from './tools'
@@ -145,6 +145,60 @@ function buildFinalAnswerMessages(messages: ChatMessage[]): ChatMessage[] {
   ]
 }
 
+interface ToolExecutionResult {
+  result: string
+  rawResult: string
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function sourceFileName(filePath: string, fallback?: string): string {
+  return filePath.split(/[/\\]/).pop() || fallback || filePath
+}
+
+function extractKnowledgeSourcesFromResult(result: string): ChatMessageSource[] {
+  try {
+    const parsed = JSON.parse(result)
+    if (!isPlainObject(parsed) || !Array.isArray(parsed.results)) return []
+
+    return parsed.results.flatMap((item): ChatMessageSource[] => {
+      if (!isPlainObject(item)) return []
+      if (
+        typeof item.filePath !== 'string'
+        || typeof item.startLine !== 'number'
+        || typeof item.endLine !== 'number'
+      ) {
+        return []
+      }
+
+      return [{
+        filePath: item.filePath,
+        fileName: sourceFileName(item.filePath, typeof item.title === 'string' ? item.title : undefined),
+        titlePath: Array.isArray(item.titlePath)
+          ? item.titlePath.filter((part): part is string => typeof part === 'string')
+          : undefined,
+        heading: typeof item.heading === 'string' ? item.heading : undefined,
+        startLine: item.startLine,
+        endLine: item.endLine,
+      }]
+    })
+  } catch {
+    return []
+  }
+}
+
+function addUniqueSources(target: ChatMessageSource[], sources: ChatMessageSource[]) {
+  const seen = new Set(target.map((source) => `${source.filePath}:${source.startLine}:${source.endLine}`))
+  for (const source of sources) {
+    const key = `${source.filePath}:${source.startLine}:${source.endLine}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    target.push(source)
+  }
+}
+
 /**
  * 执行单个工具调用
  */
@@ -154,31 +208,36 @@ async function executeTool(
   timeout: number,
   userIntent: string,
   signal?: AbortSignal
-): Promise<string> {
+): Promise<ToolExecutionResult> {
   const tool = getTool(name)
   if (!tool) {
-    return `错误：工具 "${name}" 不存在。可用工具: ${getAllTools().map((t) => t.name).join(', ')}`
+    const result = `错误：工具 "${name}" 不存在。可用工具: ${getAllTools().map((t) => t.name).join(', ')}`
+    return { result, rawResult: result }
   }
 
   const knownParameters = new Set(tool.parameters.map((param) => param.name))
   for (const key of Object.keys(args)) {
     if (!knownParameters.has(key)) {
-      return `错误：工具参数 "${key}" 不在允许列表中。`
+      const result = `错误：工具参数 "${key}" 不在允许列表中。`
+      return { result, rawResult: result }
     }
   }
 
   // Validate required parameters and primitive types before execution.
   for (const param of tool.parameters) {
     if (param.required && !(param.name in args)) {
-      return `错误：缺少必需参数 "${param.name}"（${param.description}）`
+      const result = `错误：缺少必需参数 "${param.name}"（${param.description}）`
+      return { result, rawResult: result }
     }
     if (param.name in args && typeof args[param.name] !== param.type) {
-      return `错误：参数 "${param.name}" 必须是 ${param.type} 类型。`
+      const result = `错误：参数 "${param.name}" 必须是 ${param.type} 类型。`
+      return { result, rawResult: result }
     }
   }
 
   if (name === 'save_memory' && !shouldAllowMemoryWrite(userIntent)) {
-    return '保存被拒绝：只有用户本轮明确要求记住或保存信息时，才能写入长期记忆。'
+    const result = '保存被拒绝：只有用户本轮明确要求记住或保存信息时，才能写入长期记忆。'
+    return { result, rawResult: result }
   }
 
   const controller = new AbortController()
@@ -188,7 +247,8 @@ async function executeTool(
 
   try {
     if (signal?.aborted) {
-      return '工具执行已取消。'
+      const result = '工具执行已取消。'
+      return { result, rawResult: result }
     }
     const result = await Promise.race([
       tool.execute(args, { signal: controller.signal }),
@@ -196,11 +256,12 @@ async function executeTool(
         setTimeout(() => reject(new Error('工具执行超时')), timeout)
       ),
     ])
-    if (isPendingEditResult(result)) return result
-    return truncate(result, getToolTokenBudget(name))
+    if (isPendingEditResult(result)) return { result, rawResult: result }
+    return { result: truncate(result, getToolTokenBudget(name)), rawResult: result }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    return `工具执行出错: ${msg}`
+    const result = `工具执行出错: ${msg}`
+    return { result, rawResult: result }
   } finally {
     clearTimeout(timer)
     signal?.removeEventListener('abort', forwardAbort)
@@ -215,20 +276,24 @@ async function executeToolCalls(
   timeout: number,
   userIntent: string,
   signal?: AbortSignal
-): Promise<Array<{ name: string; result: string; executed?: boolean }>> {
+): Promise<Array<{ name: string; result: string; rawResult?: string; executed?: boolean }>> {
   // 分离读取类和写入类工具
   const readCalls = toolCalls.filter(tc => isReadTool(tc.name))
   const writeCalls = toolCalls.filter(tc => isWriteTool(tc.name))
 
-  const results: Array<{ name: string; result: string; executed?: boolean }> = []
+  const results: Array<{ name: string; result: string; rawResult?: string; executed?: boolean }> = []
 
   // 读取类工具并行执行
   if (readCalls.length > 0) {
     const readResults = await Promise.allSettled(
-      readCalls.map(async tc => ({
-        name: tc.name,
-        result: await executeTool(tc.name, tc.args, timeout, userIntent, signal),
-      }))
+      readCalls.map(async tc => {
+        const executed = await executeTool(tc.name, tc.args, timeout, userIntent, signal)
+        return {
+          name: tc.name,
+          result: executed.result,
+          rawResult: executed.rawResult,
+        }
+      })
     )
 
     for (const result of readResults) {
@@ -246,8 +311,8 @@ async function executeToolCalls(
   // 写入类工具本轮只允许执行第一个，避免多个确认卡片之间出现授权范围错配。
   const firstWriteCall = writeCalls[0]
   if (firstWriteCall) {
-    const result = await executeTool(firstWriteCall.name, firstWriteCall.args, timeout, userIntent, signal)
-    results.push({ name: firstWriteCall.name, result })
+    const executed = await executeTool(firstWriteCall.name, firstWriteCall.args, timeout, userIntent, signal)
+    results.push({ name: firstWriteCall.name, result: executed.result, rawResult: executed.rawResult })
   }
   for (const tc of writeCalls.slice(1)) {
     results.push({
@@ -347,6 +412,7 @@ export async function runAgent(
   const steps: AgentStep[] = []
   let toolCalls = 0
   let editToolCalls = 0
+  const knowledgeSources: ChatMessageSource[] = []
   const calledToolNames: string[] = []
   if (hasPrefetchedMemoryLookup) {
     calledToolNames.push('search_memory')
@@ -391,7 +457,10 @@ export async function runAgent(
       signal
     )
 
-    for (const { name, result } of repairResults) {
+    for (const { name, result, rawResult } of repairResults) {
+      if (name === 'search_knowledge') {
+        addUniqueSources(knowledgeSources, extractKnowledgeSourcesFromResult(rawResult || result))
+      }
       calledToolNames.push(name)
       toolCalls++
       pushStep({
@@ -445,7 +514,7 @@ export async function runAgent(
   // 有候选工具，进入 Agent 循环
   for (let i = 0; i < mergedConfig.maxSteps; i++) {
     if (signal?.aborted) {
-      return { answer: '已取消本次 Agent 请求。', steps, toolCalls, reason: 'error' }
+      return { answer: '已取消本次 Agent 请求。', steps, toolCalls, reason: 'error', sources: knowledgeSources }
     }
 
     // Get AI response with timeout
@@ -545,9 +614,10 @@ export async function runAgent(
           toolCalls,
           reason: 'completed',
           finalMessages: buildFinalAnswerMessages(messages),
+          sources: knowledgeSources,
         }
       }
-      return { answer: '', steps, toolCalls, reason: 'completed' }
+      return { answer: '', steps, toolCalls, reason: 'completed', sources: knowledgeSources }
     }
 
     // 过滤工具调用 JSON 从思考步骤
@@ -582,6 +652,10 @@ export async function runAgent(
     for (const toolResult of toolResults) {
       const { name } = toolResult
       const executed = toolResult.executed !== false
+      const executed = toolResult.executed !== false
+      if (executed && name === 'search_knowledge') {
+        addUniqueSources(knowledgeSources, extractKnowledgeSourcesFromResult(toolResult.rawResult || toolResult.result))
+      }
       if (executed) {
         calledToolNames.push(name)
         toolCalls++
@@ -609,7 +683,7 @@ export async function runAgent(
     // 检查是否有待确认的编辑
     const hasPendingEdit = toolResults.some(tr => isPendingEditResult(tr.result))
     if (hasPendingEdit) {
-      return { answer: '', steps, toolCalls, reason: 'completed' }
+      return { answer: '', steps, toolCalls, reason: 'completed', sources: knowledgeSources }
     }
 
     // 智能裁剪历史（保留最近的用户消息和工具结果）
@@ -691,6 +765,7 @@ export async function runAgent(
           steps,
           toolCalls,
           reason: 'completed',
+          sources: knowledgeSources,
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
@@ -699,6 +774,7 @@ export async function runAgent(
           steps,
           toolCalls,
           reason: 'error',
+          sources: knowledgeSources,
         }
       }
   }
@@ -711,6 +787,7 @@ export async function runAgent(
       toolCalls,
       reason: 'max_steps',
       finalMessages: buildFinalAnswerMessages(messages),
+      sources: knowledgeSources,
     }
   }
 
@@ -719,6 +796,7 @@ export async function runAgent(
     steps,
     toolCalls,
     reason: 'max_steps',
+    sources: knowledgeSources,
   }
 }
 

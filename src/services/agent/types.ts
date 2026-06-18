@@ -1,4 +1,4 @@
-import type { ChatMessage } from '@/services/ai/types'
+import type { ChatMessage, ChatMessageSource } from '@/services/ai/types'
 
 export interface ToolParameter {
   name: string
@@ -30,6 +30,7 @@ export interface AgentResult {
   toolCalls: number
   reason: AgentResultReason
   finalMessages?: ChatMessage[]
+  sources?: ChatMessageSource[]
 }
 
 export interface AgentConfig {

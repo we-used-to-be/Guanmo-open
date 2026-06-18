@@ -14,6 +14,8 @@ const SECRET_FILE: &str = "secrets.json";
 const ALLOWED_TEXT_FILE_EXTENSIONS: [&str; 11] = [
     "md", "markdown", "mdx", "txt", "json", "html", "css", "js", "ts", "jsx", "tsx",
 ];
+const ALLOWED_IMAGE_FILE_EXTENSIONS: [&str; 7] =
+    ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
 const OPEN_FILES_EVENT: &str = "guanmo:open-files";
 
 #[derive(Default)]
@@ -58,6 +60,24 @@ fn ensure_allowed_text_file_path(path: &Path) -> Result<(), String> {
     } else {
         Err("file extension is not allowed".into())
     }
+}
+
+fn ensure_allowed_image_file_path(path: &Path) -> Result<(), String> {
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .ok_or_else(|| "file extension is not allowed".to_string())?;
+
+    if ALLOWED_IMAGE_FILE_EXTENSIONS.contains(&extension.as_str()) {
+        Ok(())
+    } else {
+        Err("file extension is not allowed".into())
+    }
+}
+
+fn ensure_allowed_text_or_image_file_path(path: &Path) -> Result<(), String> {
+    ensure_allowed_text_file_path(path).or_else(|_| ensure_allowed_image_file_path(path))
 }
 
 fn is_markdown_file_path(path: &Path) -> bool {
@@ -192,6 +212,29 @@ fn ensure_allowed_write_file(state: &FsAccessState, path: &Path) -> Result<PathB
     }
 }
 
+fn ensure_allowed_read_image_file(state: &FsAccessState, path: &Path) -> Result<PathBuf, String> {
+    ensure_allowed_image_file_path(path)?;
+    let canonical = canonical_existing_file(path)?;
+    if is_allowed_workspace_path(state, &canonical)? || is_allowed_selected_file(state, &canonical)?
+    {
+        Ok(canonical)
+    } else {
+        Err("file is outside the selected workspace".into())
+    }
+}
+
+fn ensure_allowed_write_image_file(state: &FsAccessState, path: &Path) -> Result<PathBuf, String> {
+    ensure_allowed_image_file_path(path)?;
+    let normalized = normalized_target_path(path)?;
+    if is_allowed_workspace_path(state, &normalized)?
+        || is_allowed_selected_file(state, &normalized)?
+    {
+        Ok(normalized)
+    } else {
+        Err("file is outside the selected workspace".into())
+    }
+}
+
 fn ensure_allowed_dir(state: &FsAccessState, path: &Path) -> Result<PathBuf, String> {
     let canonical = canonical_dir(path)?;
     if is_allowed_workspace_path(state, &canonical)? {
@@ -216,7 +259,7 @@ fn register_workspace(app: &tauri::AppHandle, path: PathBuf) -> Result<PathBuf, 
 }
 
 fn register_selected_file(app: &tauri::AppHandle, path: PathBuf) -> Result<PathBuf, String> {
-    ensure_allowed_text_file_path(&path)?;
+    ensure_allowed_text_or_image_file_path(&path)?;
     let normalized = normalized_target_path(&path)?;
     app.fs_scope()
         .allow_file(&normalized)
@@ -384,6 +427,24 @@ fn write_text_file_by_path(
 }
 
 #[tauri::command]
+fn read_binary_file_by_path(app: tauri::AppHandle, path: String) -> Result<Vec<u8>, String> {
+    let state = app.state::<FsAccessState>();
+    let path = ensure_allowed_read_image_file(&state, &PathBuf::from(path))?;
+    fs::read(path).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn write_binary_file_by_path(
+    app: tauri::AppHandle,
+    path: String,
+    content: Vec<u8>,
+) -> Result<(), String> {
+    let state = app.state::<FsAccessState>();
+    let path = ensure_allowed_write_image_file(&state, &PathBuf::from(path))?;
+    fs::write(path, content).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 fn create_text_file_by_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let state = app.state::<FsAccessState>();
     let path = ensure_allowed_write_file(&state, &PathBuf::from(path))?;
@@ -501,6 +562,8 @@ pub fn run() {
             authorize_selected_path,
             read_text_file_by_path,
             write_text_file_by_path,
+            read_binary_file_by_path,
+            write_binary_file_by_path,
             create_text_file_by_path,
             create_dir_by_path,
             rename_text_file_by_path,

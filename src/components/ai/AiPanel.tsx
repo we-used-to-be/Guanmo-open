@@ -13,6 +13,7 @@ import { useEditorStore } from '@/stores/editorStore'
 import { deleteChatSession } from '@/services/database/persistence'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { toast } from '@/services/toast'
+import type { ChatMessageSource } from '@/services/ai/types'
 
 export function AiPanel() {
   const { toggleAiPanel } = useAppStore()
@@ -89,7 +90,7 @@ export function AiPanel() {
     }
   }
 
-  const handleOpenRagSource = useCallback(async (source: RagSource) => {
+  const handleOpenRagSource = useCallback(async (source: Pick<RagSource, 'filePath' | 'startLine' | 'endLine'>) => {
     try {
       const editorState = useEditorStore.getState()
       const existing = editorState.tabs.find((tab) => isSameFilePath(tab.filePath, source.filePath))
@@ -229,6 +230,8 @@ export function AiPanel() {
                   content={msg.displayContent ?? msg.content}
                   isLast={i === visibleMessages.length - 1}
                   streaming={streaming}
+                  sources={msg.sources}
+                  onOpenSource={handleOpenRagSource}
                 />
                 {msg.role === 'assistant' && msg.editConfirmation && (
                   <div className="mt-2">
@@ -250,22 +253,6 @@ export function AiPanel() {
                         {tag.title}
                       </span>
                     ))}
-                  </div>
-                )}
-                {/* AI 上下文预览 */}
-                {msg.role === 'assistant' && msg.contextMeta && (msg.contextMeta.tagCount > 0 || msg.contextMeta.ragSourceCount > 0 || msg.contextMeta.webSearchUsed) && (
-                  <div className="flex flex-wrap gap-1.5 mt-1 ml-10">
-                    <span className="text-micro text-gm-text-disabled">参考:</span>
-                    {msg.contextMeta.tagCount > 0 && (
-                      <span className="text-micro text-gm-text-tertiary">{msg.contextMeta.tagCount} 个上下文</span>
-                    )}
-                    {msg.contextMeta.ragSourceCount > 0 && (
-                      <span className="text-micro text-gm-text-tertiary">{msg.contextMeta.ragSourceCount} 个知识库片段</span>
-                    )}
-                    {msg.contextMeta.webSearchUsed && (
-                      <span className="text-micro text-gm-text-tertiary">Web 搜索</span>
-                    )}
-                    <span className="text-micro text-gm-text-disabled">· 已添加上下文</span>
                   </div>
                 )}
               </div>
@@ -425,7 +412,21 @@ function SuggestionChip({ label, onClick }: { label: string; onClick?: (label: s
   )
 }
 
-function ChatBubble({ role, content, isLast, streaming }: { role: 'system' | 'user' | 'assistant'; content: string; isLast: boolean; streaming: boolean }) {
+function ChatBubble({
+  role,
+  content,
+  isLast,
+  streaming,
+  sources,
+  onOpenSource,
+}: {
+  role: 'system' | 'user' | 'assistant'
+  content: string
+  isLast: boolean
+  streaming: boolean
+  sources?: ChatMessageSource[]
+  onOpenSource?: (source: ChatMessageSource) => void
+}) {
   const isUser = role === 'user'
   const isEmpty = !content && isLast && streaming
 
@@ -454,9 +455,55 @@ function ChatBubble({ role, content, isLast, streaming }: { role: 'system' | 'us
         ) : (
           <AssistantMarkdown content={content} />
         )}
+        {!isUser && sources && sources.length > 0 && onOpenSource && (
+          <MessageSources sources={sources} onOpenSource={onOpenSource} />
+        )}
       </div>
     </div>
   )
+}
+
+function MessageSources({ sources, onOpenSource }: { sources: ChatMessageSource[]; onOpenSource: (source: ChatMessageSource) => void }) {
+  const [expanded, setExpanded] = useState(false)
+
+  return (
+    <div className="mt-3 border-t border-gm-border-subtle pt-2">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="flex w-full items-center gap-1.5 text-left text-micro font-bold text-gm-text-tertiary transition-colors hover:text-gm-primary"
+      >
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`flex-shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}>
+          <path d="M9 18l6-6-6-6" />
+        </svg>
+        <span>参考来源 {sources.length} 个</span>
+      </button>
+      {expanded && (
+        <div className="mt-2 space-y-1">
+          {sources.map((source, index) => (
+            <button
+              key={`${source.filePath}-${source.startLine}-${source.endLine}-${index}`}
+              type="button"
+              onClick={() => onOpenSource(source)}
+              className="block w-full rounded-lg px-2 py-1 text-left text-micro leading-relaxed text-gm-text-secondary transition-colors hover:bg-gm-surface hover:text-gm-primary"
+              title={`打开 ${source.filePath}:${source.startLine}-${source.endLine}`}
+            >
+              <span className="font-bold">{source.fileName}</span>
+              {formatSourceHeading(source) && (
+                <span> · {formatSourceHeading(source)}</span>
+              )}
+              <span> · 第 {source.startLine}-{source.endLine} 行</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function formatSourceHeading(source: ChatMessageSource): string {
+  if (source.titlePath?.length) return source.titlePath.join(' / ')
+  return source.heading || ''
 }
 
 function AssistantMarkdown({ content }: { content: string }) {

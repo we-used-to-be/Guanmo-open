@@ -37,6 +37,15 @@ export interface ChatMessageContextMeta {
   webSearchUsed: boolean
 }
 
+export interface ChatMessageSource {
+  filePath: string
+  fileName: string
+  titlePath?: string[]
+  heading?: string
+  startLine: number
+  endLine: number
+}
+
 export interface EditConfirmation {
   id: string
   messageId?: string
@@ -61,6 +70,7 @@ export interface ChatMessage {
   tags?: ChatMessageTag[]
   displayContent?: string
   contextMeta?: ChatMessageContextMeta
+  sources?: ChatMessageSource[]
   editConfirmation?: EditConfirmation
   hidden?: boolean
   sessionId?: string

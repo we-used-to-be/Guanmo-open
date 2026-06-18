@@ -12,8 +12,12 @@ export interface ExternalFileOpenResult {
   failed: Array<{ path: string; reason: string }>
 }
 
-function isMarkdownPath(path: string): boolean {
-  return /\.md$/i.test(path)
+export function isMarkdownPath(path: string): boolean {
+  return /\.(md|markdown|mdx)$/i.test(path)
+}
+
+export function isImagePath(path: string): boolean {
+  return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(path)
 }
 
 function getFileName(path: string): string {

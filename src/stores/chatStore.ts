@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ChatMessage, ChatMessageContextMeta, EditConfirmation } from '@/services/ai/types'
+import type { ChatMessage, ChatMessageContextMeta, ChatMessageSource, EditConfirmation } from '@/services/ai/types'
 import type { AgentStep } from '@/services/agent/types'
 import type { ContextTag } from '@/types/contextTag'
 import { MAX_CONTEXT_TAGS } from '@/types/contextTag'
@@ -37,6 +37,9 @@ export interface TimelineItem {
 export interface RagSource {
   title: string
   filePath: string
+  fileName: string
+  titlePath?: string[]
+  heading?: string
   score: number
   startLine: number
   endLine: number
@@ -64,6 +67,7 @@ interface ChatState {
   updateLastAssistantMessage: (content: string) => void
   updateMessageContent: (id: string, content: string) => void
   updateMessageContextMeta: (id: string, contextMeta: ChatMessageContextMeta) => void
+  updateMessageSources: (id: string, sources: ChatMessageSource[]) => void
   removeLastMessage: () => void
   removeMessageById: (id: string) => void
   setStreaming: (v: boolean) => void
@@ -134,6 +138,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   updateMessageContextMeta: (id, contextMeta) => set((s) => ({
     messages: s.messages.map((msg) => (msg.id === id ? { ...msg, contextMeta } : msg)),
+  })),
+
+  updateMessageSources: (id, sources) => set((s) => ({
+    messages: s.messages.map((msg) => (msg.id === id ? { ...msg, sources } : msg)),
   })),
 
   removeLastMessage: () => set((s) => {
@@ -401,6 +409,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (msg.tags?.length) metadata.tags = msg.tags
       if (msg.displayContent) metadata.displayContent = msg.displayContent
       if (msg.contextMeta) metadata.contextMeta = msg.contextMeta
+      if (msg.sources?.length) metadata.sources = msg.sources
       if (msg.editConfirmation) metadata.editConfirmation = msg.editConfirmation
 
       await persistChatMessage({
@@ -482,6 +491,7 @@ function toChatMessage(row: LoadedChatMessageRow): ChatMessage {
   let tags: ChatMessage['tags']
   let displayContent: string | undefined
   let contextMeta: ChatMessageContextMeta | undefined
+  let sources: ChatMessageSource[] | undefined
   let editConfirmation: EditConfirmation | undefined
 
   if (row.metadata) {
@@ -490,6 +500,7 @@ function toChatMessage(row: LoadedChatMessageRow): ChatMessage {
       tags = sanitizeMessageTags(meta.tags)
       displayContent = typeof meta.displayContent === 'string' ? meta.displayContent : undefined
       contextMeta = sanitizeContextMeta(meta.contextMeta)
+      sources = sanitizeMessageSources(meta.sources)
       editConfirmation = sanitizeEditConfirmation(meta.editConfirmation)
     } catch {
       // ignore corrupted metadata
@@ -506,6 +517,7 @@ function toChatMessage(row: LoadedChatMessageRow): ChatMessage {
     tags,
     displayContent,
     contextMeta,
+    sources,
     editConfirmation,
     sessionId: row.session_id,
     sessionTitle: row.session_title,
@@ -514,6 +526,35 @@ function toChatMessage(row: LoadedChatMessageRow): ChatMessage {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function sanitizeMessageSources(value: unknown): ChatMessageSource[] | undefined {
+  if (!Array.isArray(value)) return undefined
+
+  const normalized = value.flatMap((item) => {
+    if (!isPlainObject(item)) return []
+    if (
+      typeof item.filePath !== 'string'
+      || typeof item.fileName !== 'string'
+      || typeof item.startLine !== 'number'
+      || typeof item.endLine !== 'number'
+    ) {
+      return []
+    }
+
+    return [{
+      filePath: item.filePath,
+      fileName: item.fileName,
+      titlePath: Array.isArray(item.titlePath)
+        ? item.titlePath.filter((part): part is string => typeof part === 'string')
+        : undefined,
+      heading: typeof item.heading === 'string' ? item.heading : undefined,
+      startLine: item.startLine,
+      endLine: item.endLine,
+    }]
+  })
+
+  return normalized.length > 0 ? normalized : undefined
 }
 
 function sanitizeMessageTags(value: unknown): ChatMessage['tags'] {

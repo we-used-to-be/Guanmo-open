@@ -16,6 +16,7 @@ interface CodeMirrorEditorProps {
   content: string
   onChange: (content: string) => void
   onSave?: () => void
+  onImageFiles?: (files: File[], insertAt?: number) => void
   viewRef?: React.MutableRefObject<EditorView | null>
   documentKey?: string | null
   tabId?: string | null
@@ -119,7 +120,7 @@ const saveKeymap = keymap.of([
   },
 ])
 
-export function CodeMirrorEditor({ content, onChange, onSave, viewRef: externalViewRef, documentKey, tabId }: CodeMirrorEditorProps) {
+export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, viewRef: externalViewRef, documentKey, tabId }: CodeMirrorEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const internalViewRef = useRef<EditorView | null>(null)
   const viewRef = externalViewRef || internalViewRef
@@ -128,6 +129,8 @@ export function CodeMirrorEditor({ content, onChange, onSave, viewRef: externalV
 
   const onSaveRef = useRef(onSave)
   onSaveRef.current = onSave
+  const onImageFilesRef = useRef(onImageFiles)
+  onImageFilesRef.current = onImageFiles
 
   // Read editor settings from store
   const editorSettings = useSettingsStore((s) => s.editor)
@@ -189,6 +192,23 @@ export function CodeMirrorEditor({ content, onChange, onSave, viewRef: externalV
         guanmoTheme,
         saveKeymap,
         updateListener,
+        EditorView.domEventHandlers({
+          drop(event, view) {
+            const files = Array.from(event.dataTransfer?.files || []).filter(isImageLikeFile)
+            if (files.length === 0) return false
+            event.preventDefault()
+            const pos = view.posAtCoords({ x: event.clientX, y: event.clientY }) ?? view.state.selection.main.from
+            onImageFilesRef.current?.(files, pos)
+            return true
+          },
+          paste(event, view) {
+            const files = Array.from(event.clipboardData?.files || []).filter(isImageLikeFile)
+            if (files.length === 0) return false
+            event.preventDefault()
+            onImageFilesRef.current?.(files, view.state.selection.main.from)
+            return true
+          },
+        }),
         keymap.of([
           indentWithTab,
           ...defaultKeymap,
@@ -259,4 +279,8 @@ export function CodeMirrorEditor({ content, onChange, onSave, viewRef: externalV
       className="h-full overflow-hidden"
     />
   )
+}
+
+function isImageLikeFile(file: File): boolean {
+  return file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(file.name)
 }

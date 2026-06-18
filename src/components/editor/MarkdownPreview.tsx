@@ -3,22 +3,29 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import { isValidElement, useEffect, useMemo, useState } from 'react'
+import { convertFileSrc } from '@tauri-apps/api/core'
+import { isTauri } from '@/hooks/useTauri'
 import { createHeadingId, extractToc, type TocItem } from '@/services/markdownToc'
 
 interface MarkdownPreviewProps {
   content: string
+  filePath?: string | null
   fontSize?: number
   lineHeight?: number
   onTaskToggle?: (line: number, checked: boolean) => void
+  onHeadingClick?: (line: number) => void
 }
 
 export function MarkdownPreview({
   content,
+  filePath,
   fontSize = 14,
   lineHeight = 1.65,
   onTaskToggle,
+  onHeadingClick,
 }: MarkdownPreviewProps) {
   const toc = useMemo(() => extractToc(content), [content])
+  const [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(null)
   const headingIds = new Map<string, number>()
   const handleAnchorClick = (href?: string) => (event: React.MouseEvent<HTMLAnchorElement>) => {
     if (!href?.startsWith('#')) return
@@ -50,7 +57,7 @@ export function MarkdownPreview({
             const id = createHeadingId(getText(children), headingIds)
             const line = getHeadingLine(toc, id)
             return (
-              <h1 id={id} data-md-line={line} className="scroll-mt-6 font-bold mt-8 mb-4 text-gm-text border-b border-gm-border pb-3" style={{ fontSize: '2em' }}>
+              <h1 id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className={`scroll-mt-6 font-bold mt-8 mb-4 text-gm-text border-b border-gm-border pb-3 ${onHeadingClick ? 'cursor-pointer hover:text-gm-primary' : ''}`} style={{ fontSize: '2em' }}>
                 {children}
               </h1>
             )
@@ -59,7 +66,7 @@ export function MarkdownPreview({
             const id = createHeadingId(getText(children), headingIds)
             const line = getHeadingLine(toc, id)
             return (
-              <h2 id={id} data-md-line={line} className="scroll-mt-6 font-bold mt-8 mb-4 text-gm-text" style={{ fontSize: '1.5em' }}>
+              <h2 id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className={`scroll-mt-6 font-bold mt-8 mb-4 text-gm-text ${onHeadingClick ? 'cursor-pointer hover:text-gm-primary' : ''}`} style={{ fontSize: '1.5em' }}>
                 {children}
               </h2>
             )
@@ -68,7 +75,7 @@ export function MarkdownPreview({
             const id = createHeadingId(getText(children), headingIds)
             const line = getHeadingLine(toc, id)
             return (
-              <h3 id={id} data-md-line={line} className="scroll-mt-6 font-bold mt-6 mb-3 text-gm-text" style={{ fontSize: '1.25em' }}>
+              <h3 id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className={`scroll-mt-6 font-bold mt-6 mb-3 text-gm-text ${onHeadingClick ? 'cursor-pointer hover:text-gm-primary' : ''}`} style={{ fontSize: '1.25em' }}>
                 {children}
               </h3>
             )
@@ -77,7 +84,7 @@ export function MarkdownPreview({
             const id = createHeadingId(getText(children), headingIds)
             const line = getHeadingLine(toc, id)
             return (
-              <h4 id={id} data-md-line={line} className="scroll-mt-6 font-bold mt-4 mb-2 text-gm-text" style={{ fontSize: '1.1em' }}>
+              <h4 id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className={`scroll-mt-6 font-bold mt-4 mb-2 text-gm-text ${onHeadingClick ? 'cursor-pointer hover:text-gm-primary' : ''}`} style={{ fontSize: '1.1em' }}>
                 {children}
               </h4>
             )
@@ -99,7 +106,7 @@ export function MarkdownPreview({
             }
             if (isBlock) {
               return (
-                <div className="my-4 rounded-xl bg-gm-surface-elevated border border-gm-border overflow-hidden">
+                <CodeBlock code={String(children).replace(/\n$/, '')} language={language} fontSize={fontSize}>
                   {className && (
                     <div className="px-4 py-1.5 border-b border-gm-border text-micro text-gm-text-secondary font-mono">
                       {language}
@@ -110,7 +117,7 @@ export function MarkdownPreview({
                       {children}
                     </code>
                   </pre>
-                </div>
+                </CodeBlock>
               )
             }
             return (
@@ -175,13 +182,24 @@ export function MarkdownPreview({
               {children}
             </td>
           ),
-          img: ({ src, alt }) => (
-            <img
-              src={src}
-              alt={alt || ''}
-              className="max-w-full rounded-xl my-4 border border-gm-border"
-            />
-          ),
+          img: ({ src, alt }) => {
+            const resolvedSrc = resolveImageSrc(src, filePath)
+            const altText = alt || ''
+            return (
+              <button
+                type="button"
+                className="my-4 block max-w-full cursor-zoom-in rounded-xl border border-gm-border bg-transparent p-0 text-left"
+                onClick={() => setZoomImage({ src: resolvedSrc, alt: altText })}
+                title="点击放大图片"
+              >
+                <img
+                  src={resolvedSrc}
+                  alt={altText}
+                  className="max-w-full rounded-xl"
+                />
+              </button>
+            )
+          },
           del: ({ children }) => (
             <del className="text-gm-text-tertiary line-through">{children}</del>
           ),
@@ -218,8 +236,104 @@ export function MarkdownPreview({
           {content}
         </ReactMarkdown>
       </div>
+      {zoomImage && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-8"
+          onClick={() => setZoomImage(null)}
+        >
+          <button
+            type="button"
+            className="absolute right-5 top-5 flex h-9 w-9 items-center justify-center rounded-full bg-gm-surface text-gm-text shadow-lg"
+            onClick={() => setZoomImage(null)}
+            title="关闭"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+          <img
+            src={zoomImage.src}
+            alt={zoomImage.alt}
+            className="max-h-full max-w-full rounded-xl bg-gm-surface object-contain shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          />
+        </div>
+      )}
     </div>
   )
+}
+
+function handleHeadingClick(line: number | undefined, onHeadingClick?: (line: number) => void) {
+  if (!onHeadingClick || typeof line !== 'number') return
+  onHeadingClick(line)
+}
+
+function CodeBlock({
+  code,
+  language,
+  fontSize,
+  children,
+}: {
+  code: string
+  language?: string
+  fontSize: number
+  children: React.ReactNode
+}) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(code)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1200)
+    } catch {
+      setCopied(false)
+    }
+  }
+
+  return (
+    <div className="group relative my-4 rounded-xl bg-gm-surface-elevated border border-gm-border overflow-hidden">
+      <button
+        type="button"
+        onClick={() => void handleCopy()}
+        className="absolute right-2 top-2 z-10 flex h-7 min-w-7 items-center justify-center rounded-md border border-gm-border bg-gm-surface/90 px-2 text-micro text-gm-text-tertiary opacity-0 shadow-sm transition-opacity hover:text-gm-primary group-hover:opacity-100 focus-visible:opacity-100"
+        title={language ? `复制 ${language} 代码` : '复制代码'}
+      >
+        {copied ? '已复制' : (
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+          </svg>
+        )}
+      </button>
+      <div style={{ fontSize }}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+function resolveImageSrc(src: string | undefined, filePath?: string | null): string {
+  if (!src) return ''
+  if (/^(https?:|data:|blob:|asset:|file:)/i.test(src) || src.startsWith('#')) return src
+  if (!filePath || !isTauri()) return src
+
+  const normalizedSrc = src.replace(/\\/g, '/')
+  const absolutePath = /^[a-zA-Z]:\//.test(normalizedSrc) || normalizedSrc.startsWith('//')
+    ? normalizedSrc
+    : joinPreviewPath(dirnamePreviewPath(filePath), normalizedSrc)
+  return convertFileSrc(absolutePath)
+}
+
+function dirnamePreviewPath(path: string): string {
+  const normalized = path.replace(/\\/g, '/')
+  const index = normalized.lastIndexOf('/')
+  return index >= 0 ? normalized.slice(0, index) : normalized
+}
+
+function joinPreviewPath(baseDir: string, relativePath: string): string {
+  const cleanRelative = relativePath.replace(/^\.\//, '')
+  return `${baseDir.replace(/\/$/, '')}/${cleanRelative}`
 }
 
 function getText(node: React.ReactNode): string {

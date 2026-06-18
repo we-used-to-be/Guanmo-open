@@ -2,7 +2,7 @@ import { useCallback, useRef } from 'react'
 import { useChatStore } from '@/stores/chatStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { getAiClient, getEmbeddingClient, getEmbeddingConfig, initAiClient, initEmbeddingClient, isAiReady, isEmbeddingReady } from '@/services/ai/aiClient'
-import type { ChatMessage } from '@/services/ai/types'
+import type { ChatMessage, ChatMessageSource } from '@/services/ai/types'
 import { SYSTEM_TEMPERATURE } from '@/services/ai/types'
 import { initAgent, runAgent, shouldUseAgent } from '@/services/agent'
 import { detectIntentScores, shouldIncludeFullDocumentContext, shouldAllowMemoryWrite } from '@/services/agent/intentDetector'
@@ -60,6 +60,85 @@ function getAgentProgressText(step: AgentStep): string {
   }
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function sourceFileName(filePath: string, fallback?: string): string {
+  return filePath.split(/[/\\]/).pop() || fallback || filePath
+}
+
+function extractKnowledgeSourcesFromSteps(steps: AgentStep[]): ChatMessageSource[] {
+  const sources: ChatMessageSource[] = []
+  const seen = new Set<string>()
+
+  for (const step of steps) {
+    if (step.type !== 'observation') continue
+    try {
+      const parsed = JSON.parse(step.content)
+      if (!isPlainObject(parsed) || !Array.isArray(parsed.results)) continue
+
+      for (const item of parsed.results) {
+        if (!isPlainObject(item)) continue
+        if (
+          typeof item.filePath !== 'string'
+          || typeof item.startLine !== 'number'
+          || typeof item.endLine !== 'number'
+        ) {
+          continue
+        }
+
+        const key = `${item.filePath}:${item.startLine}:${item.endLine}`
+        if (seen.has(key)) continue
+        seen.add(key)
+
+        sources.push({
+          filePath: item.filePath,
+          fileName: sourceFileName(item.filePath, typeof item.title === 'string' ? item.title : undefined),
+          titlePath: Array.isArray(item.titlePath)
+            ? item.titlePath.filter((part): part is string => typeof part === 'string')
+            : undefined,
+          heading: typeof item.heading === 'string' ? item.heading : undefined,
+          startLine: item.startLine,
+          endLine: item.endLine,
+        })
+      }
+    } catch {
+      // Non-JSON observations are normal for other tools.
+    }
+  }
+
+  return sources
+}
+
+function sourceNeedles(source: ChatMessageSource): string[] {
+  const fileStem = source.fileName.replace(/\.[^.]+$/, '')
+  return [
+    source.fileName,
+    fileStem,
+    source.heading,
+    ...(source.titlePath || []),
+  ].filter((item): item is string => Boolean(item && item.trim().length >= 2))
+}
+
+function filterSourcesForAnswer(answer: string, sources: ChatMessageSource[]): ChatMessageSource[] {
+  if (sources.length <= 1) return sources
+  const normalizedAnswer = answer.toLowerCase()
+  const matchedPaths = new Set<string>()
+
+  for (const source of sources) {
+    if (sourceNeedles(source).some((needle) => normalizedAnswer.includes(needle.toLowerCase()))) {
+      matchedPaths.add(source.filePath)
+    }
+  }
+
+  if (matchedPaths.size > 0) {
+    return sources.filter((source) => matchedPaths.has(source.filePath))
+  }
+
+  return sources.filter((source) => source.filePath === sources[0].filePath)
+}
+
 export function useAiChat() {
   const {
     messages,
@@ -77,6 +156,7 @@ export function useAiChat() {
     setAgentMode,
     updateMessageContent,
     updateMessageContextMeta,
+    updateMessageSources,
     removeMessageById,
     setRagStatus,
     setRagSources,
@@ -480,12 +560,20 @@ export function useAiChat() {
               } catch { /* 不是 pendingEdit JSON，忽略 */ }
             }
           }
-          const agentContextMeta = createContextMeta({
-            tagCount: tagMetadata.length,
-            ragSourceCount: result.steps.filter((s) => s.type === 'action' && s.toolName === 'search_knowledge').length,
-            webSearchUsed: result.steps.some((s) => s.type === 'action' && s.toolName === 'web_search'),
-          })
-          if (isCurrentRequest()) updateMessageContextMeta(assistantMessageId, agentContextMeta)
+          const agentSources = result.sources?.length
+            ? result.sources
+            : extractKnowledgeSourcesFromSteps(result.steps)
+          const updateAgentSourceMetadata = () => {
+            if (!isCurrentRequest()) return
+            const answer = useChatStore.getState().messages.find((msg) => msg.id === assistantMessageId)?.content || ''
+            const filteredSources = filterSourcesForAnswer(stripToolCallJson(answer), agentSources)
+            updateMessageContextMeta(assistantMessageId, createContextMeta({
+              tagCount: tagMetadata.length,
+              ragSourceCount: filteredSources.length,
+              webSearchUsed: result.steps.some((s) => s.type === 'action' && s.toolName === 'web_search'),
+            }))
+            if (filteredSources.length > 0) updateMessageSources(assistantMessageId, filteredSources)
+          }
 
           if (result.finalMessages) {
             const client = getAiClient()
@@ -514,10 +602,12 @@ export function useAiChat() {
               addTimelineItem({ type: 'error', label: '已停止生成最终回答' })
               return
             }
+            updateAgentSourceMetadata()
           } else {
             // 过滤工具调用 JSON 后再存入消息
             const cleanAnswer = stripToolCallJson(result.answer)
             updateRequestMessage(cleanAnswer || '已生成修改确认卡片，请在下方确认。')
+            updateAgentSourceMetadata()
           }
           addTimelineItem({ type: 'done', label: '生成回答完成' })
           // 异步提取候选记忆（Agent 模式）
@@ -620,6 +710,17 @@ export function useAiChat() {
         webSearchUsed: false,
       })
       if (isCurrentRequest()) updateMessageContextMeta(assistantMessageId, contextMeta)
+      const messageSources = useChatStore.getState().ragSources.map((source) => ({
+        filePath: source.filePath,
+        fileName: source.fileName,
+        titlePath: source.titlePath,
+        heading: source.heading,
+        startLine: source.startLine,
+        endLine: source.endLine,
+      }))
+      if (isCurrentRequest() && messageSources.length > 0) {
+        updateMessageSources(assistantMessageId, messageSources)
+      }
 
       updateRequestMessage('正在判断处理方式...')
       addTimelineItem({ type: 'answer_streaming', label: '判断处理方式' })
