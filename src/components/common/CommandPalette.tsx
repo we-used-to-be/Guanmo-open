@@ -3,7 +3,7 @@ import { Input } from 'animal-island-ui'
 import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
 import { openFile, saveFile } from '@/services/fileSystem'
-import { exportMarkdownAsHtml } from '@/services/markdownExport'
+import { exportMarkdownAsHtml, exportMarkdownAsWord } from '@/services/markdownExport'
 import { indexMarkdownDocument } from '@/services/rag/indexer'
 import { SHORTCUTS } from '@/services/shortcuts'
 import { isSameFilePath } from '@/services/pathIdentity'
@@ -94,11 +94,29 @@ export function CommandPalette({ open, onClose, mode = 'commands' }: CommandPale
     }
   }, [onClose])
 
+  const handleExportWord = useCallback(async () => {
+    onClose()
+    const state = useEditorStore.getState()
+    const tab = state.tabs.find((t) => t.id === state.activeTabId)
+    if (!tab) return
+    let result: string | null = null
+    try {
+      result = await exportMarkdownAsWord(tab.content, tab.title.replace(/\.(md|markdown|mdx)$/i, ''), tab.filePath)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Word export failed')
+      return
+    }
+    if (result) {
+      toast.success('已导出为 Word')
+    }
+  }, [onClose])
+
   const commands: Command[] = [
     { id: 'new-file', label: '新建文件', shortcut: shortcut('new-file'), category: '文件', action: handleNewFile },
     { id: 'open-file', label: '打开文件...', shortcut: shortcut('open-file'), category: '文件', action: handleOpenFile },
     { id: 'save-file', label: '保存', shortcut: shortcut('save-file'), category: '文件', action: handleSaveFile },
     { id: 'export-html', label: '导出 HTML...', shortcut: shortcut('export-html'), category: '文件', action: handleExportHtml },
+    { id: 'export-word', label: '导出 Word...', category: '文件', action: handleExportWord },
     {
       id: 'toggle-preview',
       label: '切换预览面板',

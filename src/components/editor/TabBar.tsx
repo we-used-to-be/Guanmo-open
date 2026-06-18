@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useEditorStore, type Tab } from '@/stores/editorStore'
 import { useChatStore } from '@/stores/chatStore'
-import { exportMarkdownAsHtml } from '@/services/markdownExport'
+import { exportMarkdownAsHtml, exportMarkdownAsWord } from '@/services/markdownExport'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { addFileContextTag } from '@/services/aiContext'
 import { indexMarkdownDocument } from '@/services/rag/indexer'
@@ -233,6 +233,16 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
     }
   }, [activeTabId, tabs])
 
+  const handleExportWord = useCallback(async () => {
+    const tab = tabs.find((item) => item.id === activeTabId)
+    if (!tab) return
+    try {
+      await exportMarkdownAsWord(tab.content, tab.title.replace(/\.(md|markdown|mdx)$/i, ''), tab.filePath)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Word export failed')
+    }
+  }, [activeTabId, tabs])
+
   const openModeMenu = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation()
     if (modeMenu) {
@@ -369,15 +379,20 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
 
         {/* View mode switcher */}
         <div className="flex items-center gap-0.5 px-2 border-l border-gm-border-subtle flex-shrink-0">
-          {!compactControls && (
-            <button
-              onClick={handleExportHtml}
-              disabled={!activeTabId}
-              className="mr-2 rounded-lg border border-gm-border bg-gm-surface-elevated px-2.5 py-1 text-caption font-bold text-gm-text-secondary transition-colors hover:text-gm-primary disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              导出 HTML
-            </button>
-          )}
+          <button
+            onClick={handleExportHtml}
+            disabled={!activeTabId}
+            className="mr-2 rounded-lg border border-gm-border bg-gm-surface-elevated px-2.5 py-1 text-caption font-bold text-gm-text-secondary transition-colors hover:text-gm-primary disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            导出 HTML
+          </button>
+          <button
+            onClick={handleExportWord}
+            disabled={!activeTabId}
+            className="mr-2 rounded-lg border border-gm-border bg-gm-surface-elevated px-2.5 py-1 text-caption font-bold text-gm-text-secondary transition-colors hover:text-gm-primary disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            导出 Word
+          </button>
           <ModeButton
             active={viewMode === 'edit'}
             onClick={() => handleModeChange('edit')}
@@ -462,6 +477,9 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
           <ContextMenuGroupTitle>文件操作</ContextMenuGroupTitle>
           <ContextMenuItem onClick={exportFromModeMenu} disabled={!activeTabId}>
             导出 HTML
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => { setModeMenu(null); void handleExportWord() }} disabled={!activeTabId}>
+            导出 Word
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuGroupTitle>视图模式</ContextMenuGroupTitle>

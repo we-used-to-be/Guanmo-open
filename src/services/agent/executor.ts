@@ -652,7 +652,6 @@ export async function runAgent(
     for (const toolResult of toolResults) {
       const { name } = toolResult
       const executed = toolResult.executed !== false
-      const executed = toolResult.executed !== false
       if (executed && name === 'search_knowledge') {
         addUniqueSources(knowledgeSources, extractKnowledgeSourcesFromResult(toolResult.rawResult || toolResult.result))
       }

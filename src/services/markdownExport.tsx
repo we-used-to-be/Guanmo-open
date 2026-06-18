@@ -103,3 +103,33 @@ export async function exportMarkdownAsHtml(markdown: string, title: string, sour
   URL.revokeObjectURL(url)
   return fallbackName
 }
+
+export async function exportMarkdownAsWord(markdown: string, title: string, sourcePath?: string | null): Promise<string | null> {
+  const html = buildMarkdownHtml(markdown, title)
+  const fallbackName = `${title.replace(/[\\/:*?"<>|]/g, '_') || 'markdown-export'}.doc`
+
+  if (isTauri()) {
+    const path = await saveFileDialog(fallbackName, [
+      { name: 'Word', extensions: ['doc'] },
+      { name: 'All Files', extensions: ['*'] },
+    ])
+    if (!path) return null
+    if (sourcePath && isSameFilePath(path, sourcePath)) {
+      throw new Error('导出已取消：不能把 Word 写回当前 Markdown 原文。请选择 .doc 文件。')
+    }
+    if (!/\.(doc|docx)$/i.test(path)) {
+      throw new Error('导出已取消：Word 导出只能保存为 .doc 文件。')
+    }
+    await writeFile(path, html)
+    return path
+  }
+
+  const blob = new Blob([html], { type: 'application/msword' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = fallbackName
+  a.click()
+  URL.revokeObjectURL(url)
+  return fallbackName
+}
