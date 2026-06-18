@@ -17,6 +17,7 @@ export interface RecentFile {
   path: string
   name: string
   lastOpened: number
+  content?: string
 }
 
 type ViewMode = 'edit' | 'preview' | 'edit-preview' | 'dual-preview' | 'diff-preview'
@@ -41,7 +42,7 @@ interface EditorState {
   reorderTabs: (sourceId: string, targetId: string) => void
   setViewMode: (mode: ViewMode) => void
   setRightPaneTabId: (id: string | null) => void
-  addRecentFile: (path: string, name: string) => void
+  addRecentFile: (path: string, name: string, content?: string) => void
   removeRecentFile: (path: string) => void
   toggleFavorite: (filePath: string) => void
   isFavorite: (filePath: string) => boolean
@@ -101,7 +102,7 @@ export const useEditorStore = create<EditorState>()(
           activeTabId: id,
         }))
         if (filePath && title) {
-          get().addRecentFile(filePath, title)
+          get().addRecentFile(filePath, title, initialContent)
         }
       },
 
@@ -181,11 +182,11 @@ export const useEditorStore = create<EditorState>()(
 
       setRightPaneTabId: (id) => set({ rightPaneTabId: id }),
 
-      addRecentFile: (path, name) => {
+      addRecentFile: (path, name, content) => {
         set((s) => {
           const normalizedPath = normalizeFilePath(path)
           const filtered = s.recentFiles.filter((f) => normalizeFilePath(f.path) !== normalizedPath)
-          const updated = [{ path, name, lastOpened: Date.now() }, ...filtered].slice(0, 5)
+          const updated = [{ path, name, lastOpened: Date.now(), content }, ...filtered].slice(0, 5)
           return { recentFiles: updated }
         })
       },
@@ -246,7 +247,7 @@ export const useEditorStore = create<EditorState>()(
               : tab
           ),
         }))
-        get().addRecentFile(filePath, title)
+        get().addRecentFile(filePath, title, content)
       },
 
       requestReveal: (tabId, startLine, endLine) => set({

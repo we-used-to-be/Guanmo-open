@@ -377,8 +377,8 @@ export function FileIconSVG({ icon, expanded }: { icon: string; expanded: boolea
 }
 
 export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
-  files: { name: string; path: string }[]
-  onOpen?: (file: { name: string; path: string }) => void
+  files: { name: string; path: string; content?: string }[]
+  onOpen?: (file: { name: string; path: string; content?: string }) => void
   onRefreshWorkspace?: () => void
 }) {
   const editorStore = useEditorStore()

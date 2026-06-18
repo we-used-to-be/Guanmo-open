@@ -107,11 +107,12 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
     return () => document.removeEventListener('mousedown', handler)
   }, [indexMenuOpen])
 
-  // Build favorites list with file names
+  // Build favorites list with file names and cached content
   const favoriteFiles = favorites.map((path) => {
-    const tab = tabs.find((t) => t.filePath === path)
+    const tab = tabs.find((t) => isSameFilePath(t.filePath, path))
     const name = tab?.title || path.split(/[/\\]/).pop() || path
-    return { name, path }
+    const content = tab?.content
+    return { name, path, content }
   })
 
   const handleOpenFile = useCallback(async () => {
@@ -177,12 +178,32 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
         state.setActiveTab(existing.id)
         return
       }
+      // Use cached content from recent file to open directly
+      if (file.content) {
+        state.addTab(file.path, file.name, file.content)
+        return
+      }
+      // Web fallback: prompt user to select the file since readFile is not available in browser
+      if (typeof window !== 'undefined' && !('__TAURI__' in window)) {
+        const input = document.createElement('input')
+        input.type = 'file'
+        input.accept = '.md,.markdown,.mdx,.txt'
+        input.onchange = async () => {
+          const selectedFile = input.files?.[0]
+          if (!selectedFile) return
+          const content = await selectedFile.text()
+          state.addTab(file.path, file.name, content)
+        }
+        input.click()
+        return
+      }
       const { readFile } = await import('@/hooks/useTauri')
       const content = await readFile(file.path)
       state.addTab(file.path, file.name, content)
       indexMarkdownDocument(file.path, file.name, content)
     } catch (err) {
       console.error('Open recent file failed:', err)
+      toast.error('打开最近文件失败')
     }
   }, [])
 
@@ -524,7 +545,35 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
       const existing = state.tabs.find((t) => isSameFilePath(t.filePath, file.path))
       if (existing) {
         state.setActiveTab(existing.id)
+      } else if (file.content) {
+        state.addTab(file.path, file.name, file.content)
+        setMissingPaths((current) => {
+          if (!current.has(file.path)) return current
+          const next = new Set(current)
+          next.delete(file.path)
+          return next
+        })
       } else {
+        // Web fallback: prompt user to select the file since readFile is not available in browser
+        if (typeof window !== 'undefined' && !('__TAURI__' in window)) {
+          const input = document.createElement('input')
+          input.type = 'file'
+          input.accept = '.md,.markdown,.mdx,.txt'
+          input.onchange = async () => {
+            const selectedFile = input.files?.[0]
+            if (!selectedFile) return
+            const content = await selectedFile.text()
+            state.addTab(file.path, file.name, content)
+            setMissingPaths((current) => {
+              if (!current.has(file.path)) return current
+              const next = new Set(current)
+              next.delete(file.path)
+              return next
+            })
+          }
+          input.click()
+          return
+        }
         const { readFile } = await import('@/hooks/useTauri')
         const content = await readFile(file.path)
         state.addTab(file.path, file.name, content)
