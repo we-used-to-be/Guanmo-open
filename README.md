@@ -38,10 +38,16 @@
 
 ---
 
+## 🖼 软件截图 · Screenshot
+
+![观墨软件截图](docs/images/guanmo-screenshot-2026-06-12.png)
+
+---
+
 ## 🔐 安全提醒 · Security Notes
 
 - Tauri FS 权限默认不开放全盘访问；文件读写仅限用户通过对话框显式选择的工作区目录或单个文件。
-- Rust 兜底文件命令会校验绝对路径、文本文件扩展名，并拒绝访问未授权 workspace 之外的路径。
+- Rust 兜底文件命令会校验绝对路径、文本或图片文件扩展名，并拒绝访问未授权 workspace 之外的路径。
 - 本开源副本不内置任何 API Key。API Key 通过应用设置填写，并由 Windows DPAPI 加密后保存在本机。
 - `.env` 只用于配置本机密钥存储中的标识名，不应写入真实 API Key。请从 `.env.example` 创建本地 `.env`，并且不要提交 `.env`、数据库文件或历史记录。
 
@@ -67,6 +73,7 @@ VITE_GUANMO_WEB_SEARCH_API_KEY_SECRET=guanmo.web-search.api-key
 | **Mermaid 图表** | 流程图、时序图、甘特图等直接渲染 |
 | **任务列表** | 预览模式下可交互勾选 `- [ ]` 任务项 |
 | **目录导航** | 自动提取标题生成侧边目录 TOC |
+| **图片插入** | 支持选择、拖拽、粘贴图片，自动复制到 Markdown 同级 `assets` 目录并插入相对路径 |
 | **搜索替换** | `Ctrl+F` 正则搜索与批量替换 |
 | **多标签页** | 同时打开多个文件，标签栏切换 |
 | **自动保存** | 可配置延迟的自动保存机制 |
@@ -81,6 +88,7 @@ VITE_GUANMO_WEB_SEARCH_API_KEY_SECRET=guanmo.web-search.api-key
 | **本地 RAG 知识库** | 文档分块 → 向量嵌入 → 余弦相似度检索，作用域由上下文标签控制 |
 | **长期记忆** | 自动提取 + 手动保存，支持分类、锁定、搜索 |
 | **联网搜索** | 支持 DuckDuckGo / Brave Search / 自定义搜索引擎 |
+| **自定义提示词** | 支持在设置中配置 AI 风格提示词 |
 | **选区编辑确认** | AI 修改文本需用户确认，精确范围锚定避免误改 |
 | **流式渲染** | AI 回答实时流式输出为 Markdown |
 | **Agent 时间线** | 可视化展示 Agent 执行链：本地搜索 → 联网搜索 → 生成 → 完成 |
@@ -257,6 +265,7 @@ guanmo/
 | `Ctrl + P` | 命令面板（文件） |
 | `Ctrl + Shift + P` | 命令面板（命令） |
 | `Ctrl + Shift + E` | 导出为 HTML |
+| `Ctrl + Shift + 1 ~ 5` | 快速切换编辑视图模式 |
 | `Ctrl + 滚轮` | 调整编辑器字号 |
 | `Ctrl + Tab` | 切换标签页 |
 
