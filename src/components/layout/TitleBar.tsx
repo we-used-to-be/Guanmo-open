@@ -17,6 +17,9 @@ export function TitleBar() {
   useEffect(() => {
     if (!isTauri) return
 
+    let disposed = false
+    let cleanup: (() => void) | undefined
+
     import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
       const win = getCurrentWindow()
 
@@ -25,11 +28,20 @@ export function TitleBar() {
       win.onResized(() => {
         win.isMaximized().then(setMaximized)
       }).then((unlisten) => {
-        return () => unlisten()
+        if (disposed) {
+          unlisten()
+        } else {
+          cleanup = unlisten
+        }
       })
     }).catch((err) => {
       console.error('TitleBar: failed to initialize Tauri window:', err)
     })
+
+    return () => {
+      disposed = true
+      cleanup?.()
+    }
   }, [])
 
   const handleMinimize = useCallback(() => {
