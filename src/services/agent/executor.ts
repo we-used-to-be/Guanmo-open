@@ -344,7 +344,8 @@ export async function runAgent(
   onStep?: (step: AgentStep) => void,
   requiredCapabilities?: readonly Capability[],
   untrustedContext?: string,
-  customPreferencePrompt?: string
+  customPreferencePrompt?: string,
+  streamEnabled = true
 ): Promise<AgentResult> {
   initAgent()
 
@@ -421,6 +422,61 @@ export async function runAgent(
   const pushStep = (step: AgentStep) => {
     steps.push(step)
     onStep?.(step)
+  }
+
+  const requestAgentCompletion = async () => {
+    if (!streamEnabled) {
+      return client.chat({
+        messages,
+        signal,
+        temperature,
+        tools: llmTools,
+        toolChoice: 'auto',
+      })
+    }
+
+    let content = ''
+    const toolCallBuffers = new Map<number, { id?: string; name: string; arguments: string }>()
+
+    for await (const chunk of client.streamChat({
+      messages,
+      signal,
+      temperature,
+      tools: llmTools,
+      toolChoice: 'auto',
+    })) {
+      if (chunk.toolCallDeltas?.length) {
+        for (const delta of chunk.toolCallDeltas) {
+          const current = toolCallBuffers.get(delta.index) || { name: '', arguments: '' }
+          toolCallBuffers.set(delta.index, {
+            id: delta.id || current.id,
+            name: current.name + (delta.name || ''),
+            arguments: current.arguments + (delta.arguments || ''),
+          })
+        }
+      }
+      if (chunk.content) {
+        content += chunk.content
+      }
+      if (chunk.done) break
+    }
+
+    return {
+      id: '',
+      content,
+      role: 'assistant' as const,
+      toolCalls: Array.from(toolCallBuffers.values())
+        .filter((call) => call.name)
+        .map((call) => {
+          let args: Record<string, unknown> = {}
+          try {
+            args = call.arguments ? JSON.parse(call.arguments) : {}
+          } catch {
+            args = {}
+          }
+          return { id: call.id, name: call.name, args }
+        }),
+    }
   }
 
   const repairUnmetReadCapabilities = async (): Promise<boolean> => {
@@ -522,13 +578,7 @@ export async function runAgent(
     let nativeToolCalls: Array<{ name: string; args: Record<string, unknown> }> = []
 
     try {
-      const response = await client.chat({
-        messages,
-        signal,
-        temperature,
-        tools: llmTools,
-        toolChoice: 'auto',
-      })
+      const response = await requestAgentCompletion()
       content = response.content
 
       // 收集所有原生工具调用
@@ -743,39 +793,14 @@ export async function runAgent(
 
   // 达到最大步数，检查强依赖
   if (await repairUnmetReadCapabilities()) {
-      // 二次生成最终答案
-      try {
-        const finalResponse = await client.chat({
-          messages: [
-            ...messages,
-            {
-              role: 'user',
-              content: '现在请直接输出给用户的最终答案。若已有工具结果，请基于结果回答；不要再调用工具，不要输出 JSON，不要复述内部处理过程。',
-            },
-          ],
-          signal,
-          temperature,
-          tools: [],
-          toolChoice: 'none',
-        })
-
-        return {
-          answer: finalResponse.content,
-          steps,
-          toolCalls,
-          reason: 'completed',
-          sources: knowledgeSources,
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        return {
-          answer: `最终答案生成失败: ${msg}`,
-          steps,
-          toolCalls,
-          reason: 'error',
-          sources: knowledgeSources,
-        }
-      }
+    return {
+      answer: '',
+      steps,
+      toolCalls,
+      reason: 'completed',
+      finalMessages: buildFinalAnswerMessages(messages),
+      sources: knowledgeSources,
+    }
   }
 
   // 正常结束

@@ -552,7 +552,8 @@ export function useAiChat() {
             handleLiveAgentStep,
             mergedRequired,
             agentContext,
-            ai.customPreferencePrompt
+            ai.customPreferencePrompt,
+            ai.streamEnabled
           )
           if (!isCurrentRequest()) return
           for (const step of result.steps.slice(liveAgentStepCount)) {

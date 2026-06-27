@@ -1,8 +1,10 @@
 import { useAppStore } from '@/stores/appStore'
 import { useChatStore } from '@/stores/chatStore'
+import { useSettingsStore } from '@/stores/settingsStore'
 import { MAX_SELECTION_CHARS } from '@/types/contextTag'
 
 const PREVIEW_LENGTH = 160
+export const AI_SHORTCUT_SUBMIT_EVENT = 'guanmo:submit-ai-shortcut'
 
 function truncateSelection(text: string): string {
   if (text.length <= MAX_SELECTION_CHARS) return text
@@ -97,6 +99,15 @@ export function appendToAiDraft(content: string) {
   if (!content.trim()) return
   ensureAiPanelOpen()
   useChatStore.getState().appendDraftInput(content.trim())
+}
+
+export function setAiShortcutPrompt(prompt: string) {
+  if (!prompt.trim()) return
+  ensureAiPanelOpen()
+  useChatStore.getState().setDraftInput(prompt)
+  if (useSettingsStore.getState().editor.autoSendAiShortcut && typeof window !== 'undefined') {
+    window.setTimeout(() => window.dispatchEvent(new Event(AI_SHORTCUT_SUBMIT_EVENT)), 0)
+  }
 }
 
 /**

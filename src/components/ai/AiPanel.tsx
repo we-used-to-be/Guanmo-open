@@ -14,6 +14,7 @@ import { deleteChatSession } from '@/services/database/persistence'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { toast } from '@/services/toast'
 import type { ChatMessageSource } from '@/services/ai/types'
+import { AI_SHORTCUT_SUBMIT_EVENT } from '@/services/aiContext'
 
 export function AiPanel() {
   const { toggleAiPanel } = useAppStore()
@@ -57,16 +58,24 @@ export function AiPanel() {
     chatEndRef.current?.scrollIntoView({ behavior })
   }, [visibleMessages, streaming])
 
-  const handleSend = () => {
-    if ((!draftInput.trim() && contextTags.length === 0) || streaming) return
+  const handleSend = useCallback(() => {
+    const chatState = useChatStore.getState()
+    const currentDraft = chatState.draftInput
+    const currentContextTags = chatState.contextTags
+    if ((!currentDraft.trim() && currentContextTags.length === 0) || chatState.streaming) return
     autoFollowRef.current = true
-    sendMessage(draftInput, undefined, contextTags.length > 0 ? contextTags : undefined, manualCapabilities)
+    sendMessage(currentDraft, undefined, currentContextTags.length > 0 ? currentContextTags : undefined, manualCapabilities)
     setDraftInput('')
-    useChatStore.getState().clearContextTags()
+    chatState.clearContextTags()
     // 重置手动工具开关
     setManualCapabilities([])
     setResetManualToggle((prev) => prev + 1)
-  }
+  }, [manualCapabilities, sendMessage, setDraftInput])
+
+  useEffect(() => {
+    window.addEventListener(AI_SHORTCUT_SUBMIT_EVENT, handleSend)
+    return () => window.removeEventListener(AI_SHORTCUT_SUBMIT_EVENT, handleSend)
+  }, [handleSend])
 
   const handleRetry = () => {
     // Find the last user message and resend it

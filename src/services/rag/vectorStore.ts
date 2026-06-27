@@ -2,7 +2,7 @@ import type { Chunk, Document, SearchResult } from './types'
 import {
   persistDocument,
   removePersistedDocument,
-  loadAllDocuments,
+  loadAllDocumentsBulk,
   persistEmbedding,
 } from '@/services/database/persistence'
 import { normalizeFilePath } from '@/services/pathIdentity'
@@ -49,7 +49,7 @@ class VectorStore {
   async loadFromDatabase(): Promise<void> {
     try {
       const inMemoryDocs = this.getAllDocuments()
-      const docs = await loadAllDocuments()
+      const docs = await loadAllDocumentsBulk()
       this.documents.clear()
       this.chunks.clear()
       for (const doc of docs) {

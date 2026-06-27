@@ -246,7 +246,7 @@ async function formatKnowledgeSearchResultsStructured(results: SearchResult[]): 
 export function registerBuiltinTools() {
   registerTool({
     name: 'search_knowledge',
-    description: '在本地 RAG 数据库中检索已索引文档内容。可查询未打开、未添加到聊天框上下文的文档；工具返回文件路径、行号、标题路径和正文片段，可直接用于基于知识库的问答、归纳和局部总结。只有需要精确读取整份原文或改写文件时，才要求用户添加目标文件上下文。',
+    description: '在本地 RAG 数据库中检索已索引文档内容。可查询未打开、未添加到聊天框上下文的文档；工具返回文件路径、行号、标题路径和正文片段，可直接用于基于知识库的问答、归纳和局部总结。只有需要精确读取整份原文或改写文件时，才要求用户添加目标文件上下文。注意：如果查询超时或返回空结果，可能是数据库仍在加载过程中（应用启动后首次查询时较常见），请告知用户稍后重试。',
     parameters: [
       { name: 'query', type: 'string', description: '搜索查询', required: true },
       { name: 'topK', type: 'number', description: '返回结果数量（1-20），默认 5', required: false },

@@ -6,6 +6,34 @@
 import { getDatabase, isDatabaseReady } from './db'
 import type { Document, Chunk } from '@/services/rag/types'
 
+interface DocumentRow {
+  id: string
+  file_path: string
+  title: string
+  content: string
+  last_modified: number
+}
+
+interface ChunkRow {
+  id: string
+  document_id: string
+  content: string
+  content_hash?: string | null
+  chunk_index: number
+  start_line: number
+  end_line: number
+  title_path?: string | null
+  heading?: string | null
+  source_type?: 'markdown' | 'text' | null
+  created_at?: number
+  updated_at?: number
+}
+
+interface EmbeddingRow {
+  chunk_id: string
+  embedding: string
+}
+
 export type EmbeddingJobStatus = 'pending' | 'running' | 'done' | 'failed'
 
 export interface EmbeddingJob {
@@ -130,13 +158,7 @@ export async function loadAllDocuments(): Promise<Document[]> {
   if (!isDatabaseReady()) return []
   const db = getDatabase()
 
-  const docs = await db.select<{
-    id: string
-    file_path: string
-    title: string
-    content: string
-    last_modified: number
-  }>('SELECT * FROM documents')
+  const docs = await db.select<DocumentRow>('SELECT * FROM documents')
 
   const result: Document[] = []
   for (const row of docs) {
@@ -153,6 +175,48 @@ export async function loadAllDocuments(): Promise<Document[]> {
   return result
 }
 
+/**
+ * Load all documents, chunks, and embeddings with a constant number of queries.
+ */
+export async function loadAllDocumentsBulk(): Promise<Document[]> {
+  if (!isDatabaseReady()) return []
+  const db = getDatabase()
+
+  const [documents, chunkRows, embeddingRows] = await Promise.all([
+    db.select<DocumentRow>('SELECT * FROM documents'),
+    db.select<ChunkRow>('SELECT * FROM chunks'),
+    db.select<EmbeddingRow>('SELECT * FROM embeddings'),
+  ])
+
+  const embeddingByChunkId = new Map(
+    embeddingRows.map((row) => [row.chunk_id, row.embedding])
+  )
+  const chunksByDocumentId = new Map<string, Chunk[]>()
+
+  for (const row of chunkRows) {
+    const chunk = mapChunkRow(row, embeddingByChunkId.get(row.id))
+    const chunks = chunksByDocumentId.get(row.document_id)
+    if (chunks) {
+      chunks.push(chunk)
+    } else {
+      chunksByDocumentId.set(row.document_id, [chunk])
+    }
+  }
+
+  for (const chunks of chunksByDocumentId.values()) {
+    chunks.sort((a, b) => a.index - b.index)
+  }
+
+  return documents.map((row) => ({
+    id: row.id,
+    filePath: row.file_path,
+    title: row.title,
+    content: row.content,
+    lastModified: row.last_modified,
+    chunks: chunksByDocumentId.get(row.id) || [],
+  }))
+}
+
 export async function loadDocumentFilePaths(): Promise<string[]> {
   if (!isDatabaseReady()) return []
   const db = getDatabase()
@@ -165,67 +229,60 @@ export async function loadDocumentFilePaths(): Promise<string[]> {
  */
 async function loadChunksForDocument(docId: string): Promise<Chunk[]> {
   const db = getDatabase()
-  const rows = await db.select<{
-    id: string
-    document_id: string
-    content: string
-    content_hash?: string | null
-    chunk_index: number
-    start_line: number
-    end_line: number
-    title_path?: string | null
-    heading?: string | null
-    source_type?: 'markdown' | 'text' | null
-    created_at?: number
-    updated_at?: number
-  }>('SELECT * FROM chunks WHERE document_id = $1 ORDER BY chunk_index', [docId])
+  const rows = await db.select<ChunkRow>(
+    'SELECT * FROM chunks WHERE document_id = $1 ORDER BY chunk_index',
+    [docId]
+  )
 
   const chunks: Chunk[] = []
   for (const row of rows) {
     // Load embedding if exists
-    const embRows = await db.select<{ chunk_id: string; embedding: string }>(
+    const embRows = await db.select<EmbeddingRow>(
       'SELECT * FROM embeddings WHERE chunk_id = $1',
       [row.id]
     )
-
-    let embedding: number[] | undefined
-    if (embRows.length > 0) {
-      try {
-        embedding = JSON.parse(embRows[0].embedding)
-      } catch {
-        console.warn(`Failed to parse embedding for chunk ${row.id}`)
-      }
-    }
-
-    let titlePath: string[] | undefined
-    if (row.title_path) {
-      try {
-        const parsed = JSON.parse(row.title_path)
-        if (Array.isArray(parsed) && parsed.every((item) => typeof item === 'string')) {
-          titlePath = parsed
-        }
-      } catch {
-        console.warn(`Failed to parse titlePath for chunk ${row.id}`)
-      }
-    }
-
-    chunks.push({
-      id: row.id,
-      documentId: row.document_id,
-      content: row.content,
-      contentHash: row.content_hash || undefined,
-      index: row.chunk_index,
-      startLine: row.start_line,
-      endLine: row.end_line,
-      titlePath,
-      heading: row.heading || undefined,
-      sourceType: row.source_type || 'markdown',
-      createdAt: row.created_at || undefined,
-      updatedAt: row.updated_at || undefined,
-      embedding,
-    })
+    chunks.push(mapChunkRow(row, embRows[0]?.embedding))
   }
   return chunks
+}
+
+function mapChunkRow(row: ChunkRow, serializedEmbedding?: string): Chunk {
+  let embedding: number[] | undefined
+  if (serializedEmbedding) {
+    try {
+      embedding = JSON.parse(serializedEmbedding)
+    } catch {
+      console.warn(`Failed to parse embedding for chunk ${row.id}`)
+    }
+  }
+
+  let titlePath: string[] | undefined
+  if (row.title_path) {
+    try {
+      const parsed = JSON.parse(row.title_path)
+      if (Array.isArray(parsed) && parsed.every((item) => typeof item === 'string')) {
+        titlePath = parsed
+      }
+    } catch {
+      console.warn(`Failed to parse titlePath for chunk ${row.id}`)
+    }
+  }
+
+  return {
+    id: row.id,
+    documentId: row.document_id,
+    content: row.content,
+    contentHash: row.content_hash || undefined,
+    index: row.chunk_index,
+    startLine: row.start_line,
+    endLine: row.end_line,
+    titlePath,
+    heading: row.heading || undefined,
+    sourceType: row.source_type || 'markdown',
+    createdAt: row.created_at || undefined,
+    updatedAt: row.updated_at || undefined,
+    embedding,
+  }
 }
 
 /**

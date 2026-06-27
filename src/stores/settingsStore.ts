@@ -24,6 +24,7 @@ interface EditorSettings {
   autoSave: boolean
   autoSaveDelay: number
   syncScroll: boolean
+  autoSendAiShortcut: boolean
 }
 
 interface AppearanceSettings {
@@ -57,6 +58,7 @@ const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   autoSave: true,
   autoSaveDelay: 1000,
   syncScroll: true,
+  autoSendAiShortcut: false,
 }
 
 const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {

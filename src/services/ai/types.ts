@@ -121,6 +121,12 @@ export interface ChatResponse {
 export interface StreamChunk {
   content: string
   done: boolean
+  toolCallDeltas?: Array<{
+    index: number
+    id?: string
+    name?: string
+    arguments?: string
+  }>
 }
 
 export interface EmbeddingResponse {

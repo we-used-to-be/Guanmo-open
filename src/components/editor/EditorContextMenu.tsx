@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import type { EditorView } from '@codemirror/view'
 import { useEditorStore } from '@/stores/editorStore'
-import { addSelectionContextTag } from '@/services/aiContext'
-import { useChatStore } from '@/stores/chatStore'
+import { addSelectionContextTag, setAiShortcutPrompt } from '@/services/aiContext'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { toast } from '@/services/toast'
 
@@ -148,7 +147,7 @@ export function EditorContextMenu({ viewRef }: EditorContextMenuProps) {
       selectionFrom: sel.from,
       selectionTo: sel.to,
     })
-    useChatStore.getState().setDraftInput(prompt)
+    setAiShortcutPrompt(prompt)
     setMenu(null)
   }, [activeTab, viewRef])
 

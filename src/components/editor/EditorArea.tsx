@@ -4,7 +4,6 @@ import { Card } from 'animal-island-ui'
 import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
 import { useSettingsStore } from '@/stores/settingsStore'
-import { useChatStore } from '@/stores/chatStore'
 import { useFileOperations } from '@/hooks/useFileOperations'
 import { useActiveHeading } from '@/hooks/useActiveHeading'
 import { saveFile } from '@/services/fileSystem'
@@ -15,7 +14,7 @@ import { saveExternalImageForMarkdown, saveImageFileForMarkdown } from '@/servic
 import { toast } from '@/services/toast'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { openFileDialog } from '@/hooks/useTauri'
-import { addSelectionContextTag } from '@/services/aiContext'
+import { addSelectionContextTag, setAiShortcutPrompt } from '@/services/aiContext'
 import { CodeMirrorEditor } from './CodeMirrorEditor'
 import { EditorContextMenu } from './EditorContextMenu'
 import { MarkdownDiffView } from './MarkdownDiffView'
@@ -826,7 +825,7 @@ export function EditorArea() {
       selectionFrom: sourceSelection.selectionFrom,
       selectionTo: sourceSelection.selectionTo,
     })
-    useChatStore.getState().setDraftInput(prompt)
+    setAiShortcutPrompt(prompt)
     clearPreviewContextHighlight()
     setPreviewMenu(null)
   }, [previewMenu, clearPreviewContextHighlight, getPreviewSourceSelection])

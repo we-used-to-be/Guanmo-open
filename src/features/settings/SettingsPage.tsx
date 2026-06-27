@@ -329,11 +329,18 @@ function KnowledgeStats() {
   const [embedding, setEmbedding] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [lastIndexedAt, setLastIndexedAt] = useState<number | null>(null)
+  const [dbStatus, setDbStatus] = useState<'loading' | 'ready' | 'error'>('loading')
 
   const refreshStats = async () => {
-    setStats(await getRagStatsAsync())
-    setJobStats(await getEmbeddingJobStats())
-    setStateSummary(await getKnowledgeIndexStateSummary())
+    setDbStatus('loading')
+    try {
+      setStats(await getRagStatsAsync())
+      setJobStats(await getEmbeddingJobStats())
+      setStateSummary(await getKnowledgeIndexStateSummary())
+      setDbStatus('ready')
+    } catch {
+      setDbStatus('error')
+    }
   }
 
   useEffect(() => {
@@ -400,6 +407,16 @@ function KnowledgeStats() {
 
   return (
     <div className="space-y-3 py-2">
+      {dbStatus === 'loading' && (
+        <div className="rounded-xl border border-gm-border bg-gm-surface-elevated px-3 py-2 text-caption text-gm-text-secondary flex items-center gap-2">
+          <span className="inline-block animate-spin">⏳</span> 数据库加载中，请等待……
+        </div>
+      )}
+      {dbStatus === 'error' && (
+        <div className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-caption text-red-600">
+          ❌ 数据库加载失败
+        </div>
+      )}
       <div className="grid grid-cols-4 gap-4">
         <StatItem label="文档" value={stats.documents} />
         <StatItem label="分块" value={stats.totalChunks} />
