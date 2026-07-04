@@ -12,7 +12,15 @@ import { parseSSEStream } from '../stream'
 function isLocalApi(baseUrl: string): boolean {
   try {
     const { hostname } = new URL(baseUrl)
-    return hostname === 'localhost' || hostname === '127.0.0.1'
+    return (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '::1' ||
+      hostname === '[::1]' ||
+      /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+      /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+      /^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname)
+    )
   } catch {
     return false
   }
