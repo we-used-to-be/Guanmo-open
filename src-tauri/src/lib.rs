@@ -264,6 +264,9 @@ fn register_workspace(app: &tauri::AppHandle, path: PathBuf) -> Result<PathBuf, 
     app.fs_scope()
         .allow_directory(&canonical, true)
         .map_err(|err| err.to_string())?;
+    app.asset_protocol_scope()
+        .allow_directory(&canonical, true)
+        .map_err(|err| err.to_string())?;
     let state = app.state::<FsAccessState>();
     state
         .workspaces
@@ -277,6 +280,9 @@ fn register_selected_file(app: &tauri::AppHandle, path: PathBuf) -> Result<PathB
     ensure_allowed_text_or_image_file_path(&path)?;
     let normalized = normalized_target_path(&path)?;
     app.fs_scope()
+        .allow_file(&normalized)
+        .map_err(|err| err.to_string())?;
+    app.asset_protocol_scope()
         .allow_file(&normalized)
         .map_err(|err| err.to_string())?;
     let state = app.state::<FsAccessState>();
@@ -495,6 +501,22 @@ fn create_dir_by_path(app: tauri::AppHandle, path: String) -> Result<(), String>
     register_workspace(&app, path).map(|_| ())
 }
 
+#[tauri::command]
+fn prepare_markdown_assets_dir(app: tauri::AppHandle, markdown_path: String) -> Result<(), String> {
+    let markdown_path = canonical_existing_file(&PathBuf::from(markdown_path))?;
+    if !is_markdown_file_path(&markdown_path) {
+        return Err("path is not a Markdown file".into());
+    }
+    let assets_dir = markdown_path
+        .parent()
+        .ok_or_else(|| "path parent is missing".to_string())?
+        .join("assets");
+    if !assets_dir.exists() {
+        fs::create_dir(&assets_dir).map_err(|err| err.to_string())?;
+    }
+    register_workspace(&app, assets_dir).map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::is_assets_dir_for_selected_markdown;
@@ -615,6 +637,7 @@ pub fn run() {
             delete_secret,
             authorize_workspace_path,
             authorize_selected_path,
+            prepare_markdown_assets_dir,
             read_text_file_by_path,
             write_text_file_by_path,
             read_binary_file_by_path,

@@ -46,6 +46,13 @@ export async function authorizeSelectedPath(path: string): Promise<void> {
   await invoke<void>('authorize_selected_path', { path: nativePath })
 }
 
+export async function prepareMarkdownAssetsDir(markdownPath: string): Promise<void> {
+  if (!isTauri()) throw new Error('Not running in Tauri')
+  const nativePath = toNativeFilePath(markdownPath)
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke<void>('prepare_markdown_assets_dir', { markdownPath: nativePath })
+}
+
 export async function writeFile(path: string, content: string): Promise<void> {
   if (!isTauri()) throw new Error('Not running in Tauri')
   const nativePath = toNativeFilePath(path)

@@ -345,7 +345,10 @@ function resolveImageSrc(src: string | undefined, filePath?: string | null): str
   const absolutePath = /^[a-zA-Z]:\//.test(normalizedSrc) || normalizedSrc.startsWith('//')
     ? normalizedSrc
     : joinPreviewPath(dirnamePreviewPath(filePath), normalizedSrc)
-  return convertFileSrc(absolutePath)
+  const nativePath = /^[a-zA-Z]:\//.test(absolutePath) || absolutePath.startsWith('//')
+    ? absolutePath.replace(/\//g, '\\')
+    : absolutePath
+  return convertFileSrc(nativePath)
 }
 
 function dirnamePreviewPath(path: string): string {
