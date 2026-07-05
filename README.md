@@ -17,6 +17,31 @@
   <img src="https://img.shields.io/badge/Vite_6-646CFF?style=flat-square&logo=vite&logoColor=white" alt="Vite 6" />
 </p>
 
+## 📥 下载 · Download
+
+<table align="center">
+  <tr>
+    <td><b>🪟 Windows</b></td>
+    <td>
+      <a href="https://github.com/we-used-to-be/Guanmo-open/releases/latest"><b>⬇ 下载安装包</b></a><br/>
+      <sub>提供 NSIS (<code>.exe</code>) 和 WiX (<code>.msi</code>) 安装程序</sub>
+    </td>
+  </tr>
+  <tr>
+    <td><b>🌐 网页版</b></td>
+    <td>
+      <a href="https://we-used-to-be.github.io/Guanmo-page/"><b>在线体验</b></a><br/>
+      <sub>浏览器环境下仅可体验编辑、预览等基础md功能。文件系统、自动保存、AI助手、知识库、长期记忆等桌面功能不可用，样式和交互可能与桌面版存在差异</sub>
+    </td>
+  </tr>
+  <tr>
+    <td><b>🍎 macOS</b></td>
+    <td>
+      <sub>暂不提供预编译版本，请自行打包测试（参考下方 <a href="#-快速开始-quick-start">快速开始</a>）</sub>
+    </td>
+  </tr>
+</table>
+
 ---
 
 <p align="center">

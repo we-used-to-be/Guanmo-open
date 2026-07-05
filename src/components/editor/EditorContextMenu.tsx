@@ -167,7 +167,7 @@ export function EditorContextMenu({ viewRef }: EditorContextMenuProps) {
           <ContextMenuItem onClick={() => handleAiAction('请结合上下文解释这段内容，优先读取选区附近内容，不要默认阅读全文')}>AI 结合上下文解释</ContextMenuItem>
           <ContextMenuItem onClick={() => handleAiAction('请总结这段内容')}>AI 总结这段</ContextMenuItem>
           <ContextMenuItem onClick={() => handleAiAction('请改写这段内容，使其更清晰')}>AI 改写这段</ContextMenuItem>
-          <ContextMenuItem onClick={() => handleAiAction('请只把选中文本整理为标准 Markdown 格式：可以调整标题、列表、引用、代码块、表格等 Markdown 标记；不得改变原文内容、语义和顺序，不得新增信息。')}>AI 优化格式</ContextMenuItem>
+          <ContextMenuItem onClick={() => handleAiAction('请优化选中文本的 Markdown 格式：可以调整标题、列表、引用、代码块、表格等 Markdown 标记；不得改变原文内容、语义和顺序，不得新增信息。')}>AI 优化格式</ContextMenuItem>
           <ContextMenuItem onClick={() => handleAiAction('请翻译这段内容')}>AI 翻译</ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuGroupTitle>Markdown 格式</ContextMenuGroupTitle>

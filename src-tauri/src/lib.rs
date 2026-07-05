@@ -189,6 +189,21 @@ fn is_allowed_selected_file(state: &FsAccessState, path: &Path) -> Result<bool, 
     Ok(selected_files.contains(path))
 }
 
+fn is_assets_dir_for_selected_markdown(selected_file: &Path, dir: &Path) -> bool {
+    is_markdown_file_path(selected_file)
+        && selected_file.parent().map(|parent| parent.join("assets")) == Some(dir.to_path_buf())
+}
+
+fn is_allowed_selected_assets_dir(state: &FsAccessState, path: &Path) -> Result<bool, String> {
+    let selected_files = state
+        .selected_files
+        .lock()
+        .map_err(|_| "selected file access state is poisoned".to_string())?;
+    Ok(selected_files
+        .iter()
+        .any(|selected_file| is_assets_dir_for_selected_markdown(selected_file, path)))
+}
+
 fn ensure_allowed_read_file(state: &FsAccessState, path: &Path) -> Result<PathBuf, String> {
     ensure_allowed_text_file_path(path)?;
     let canonical = canonical_existing_file(path)?;
@@ -463,12 +478,45 @@ fn create_dir_by_path(app: tauri::AppHandle, path: String) -> Result<(), String>
     let parent = path
         .parent()
         .ok_or_else(|| "path parent is missing".to_string())?;
-    let parent = ensure_allowed_dir(&state, parent)?;
     let dir_name = path
         .file_name()
         .ok_or_else(|| "directory name is missing".to_string())?;
-    let path = parent.join(dir_name);
-    fs::create_dir(path).map_err(|err| err.to_string())
+    let is_selected_assets_dir = is_allowed_selected_assets_dir(&state, &path)?;
+    let path = if is_selected_assets_dir {
+        ensure_safe_path(&path)?;
+        path
+    } else {
+        ensure_allowed_dir(&state, parent)?.join(dir_name)
+    };
+    if is_selected_assets_dir && path.is_dir() {
+        return register_workspace(&app, path).map(|_| ());
+    }
+    fs::create_dir(&path).map_err(|err| err.to_string())?;
+    register_workspace(&app, path).map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_assets_dir_for_selected_markdown;
+    use std::path::Path;
+
+    #[test]
+    fn allows_only_assets_dir_next_to_selected_markdown() {
+        let markdown = Path::new(r"C:\notes\draft.md");
+
+        assert!(is_assets_dir_for_selected_markdown(
+            markdown,
+            Path::new(r"C:\notes\assets")
+        ));
+        assert!(!is_assets_dir_for_selected_markdown(
+            markdown,
+            Path::new(r"C:\notes\images")
+        ));
+        assert!(!is_assets_dir_for_selected_markdown(
+            markdown,
+            Path::new(r"C:\assets")
+        ));
+    }
 }
 
 #[tauri::command]

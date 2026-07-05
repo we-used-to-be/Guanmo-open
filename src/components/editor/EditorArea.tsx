@@ -1142,7 +1142,7 @@ export function EditorArea() {
                 <ContextMenuItem onClick={() => handlePreviewAiAction('请改写这段内容，使其更清晰')}>
                   AI 改写这段
                 </ContextMenuItem>
-                <ContextMenuItem onClick={() => handlePreviewAiAction('请只把选中文本整理为标准 Markdown 格式：可以调整标题、列表、引用、代码块、表格等 Markdown 标记；不得改变原文内容、语义和顺序，不得新增信息。')}>
+                <ContextMenuItem onClick={() => handlePreviewAiAction('请优化选中文本的 Markdown 格式：可以调整标题、列表、引用、代码块、表格等 Markdown 标记；不得改变原文内容、语义和顺序，不得新增信息。')}>
                   AI 优化格式
                 </ContextMenuItem>
                 <ContextMenuItem onClick={() => handlePreviewAiAction('请翻译这段内容')}>
