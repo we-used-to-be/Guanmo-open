@@ -7,13 +7,13 @@ import { useEditorStore } from './editorStore'
 import {
   persistChatSession,
   persistChatMessage,
-  loadRecentChatMessages,
+  loadRecentChatTurns,
 } from '@/services/database/persistence'
 import { normalizeStoredDisplayContent } from '@/services/aiChatMessages'
+import { buildLinkedQaRows } from '@/services/chatHistory'
 
 const MAX_MESSAGES = 100
 const HISTORY_QA_GROUP_SIZE = 5
-const HISTORY_FETCH_BATCH_SIZE = 2
 
 export type RagStatus = 'idle' | 'searching' | 'found' | 'empty' | 'error'
 export type TimelineType =
@@ -419,6 +419,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       await persistChatMessage({
         id: msg.id!,
         sessionId,
+        parentId: msg.parentId,
         role: msg.role,
         content: msg.content,
         metadata: Object.keys(metadata).length > 0 ? JSON.stringify(metadata) : undefined,
@@ -435,60 +436,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const state = get()
     if (!state.hasMoreHistory) return
 
-    const rows: LoadedChatMessageRow[] = []
-    let consumed = 0
-    let hasMoreRows = true
-
-    while (countCompleteQaGroups(rows) < HISTORY_QA_GROUP_SIZE && hasMoreRows) {
-      const batch = await loadRecentChatMessages(
-        state.historyOffset + consumed,
-        HISTORY_FETCH_BATCH_SIZE
-      )
-      rows.push(...batch)
-      consumed += batch.length
-      hasMoreRows = batch.length === HISTORY_FETCH_BATCH_SIZE
-    }
+    const rows = await loadRecentChatTurns(state.historyOffset, HISTORY_QA_GROUP_SIZE)
 
     if (rows.length === 0) {
       set({ hasMoreHistory: false })
       return
     }
 
-    const historyMessages = buildCompleteQaMessages(rows).slice(-HISTORY_QA_GROUP_SIZE * 2)
+    const historyMessages = buildCompleteQaMessages(rows)
+    const loadedTurnCount = historyMessages.length / 2
     set((s) => ({
       messages: [
         ...historyMessages.filter((msg) => !s.messages.some((current) => current.id === msg.id)),
         ...s.messages,
       ],
-      historyOffset: s.historyOffset + consumed,
-      hasMoreHistory: hasMoreRows,
+      historyOffset: s.historyOffset + loadedTurnCount,
+      hasMoreHistory: loadedTurnCount === HISTORY_QA_GROUP_SIZE,
     }))
   },
 }))
 
-type LoadedChatMessageRow = Awaited<ReturnType<typeof loadRecentChatMessages>>[number]
-
-function countCompleteQaGroups(rows: LoadedChatMessageRow[]): number {
-  return buildCompleteQaMessages(rows).length / 2
-}
+type LoadedChatMessageRow = Awaited<ReturnType<typeof loadRecentChatTurns>>[number]
 
 function buildCompleteQaMessages(rows: LoadedChatMessageRow[]): ChatMessage[] {
-  const groups: ChatMessage[][] = []
-  let pendingUser: ChatMessage | null = null
-
-  for (const row of [...rows].reverse()) {
-    const message = toChatMessage(row)
-    if (message.role === 'user') {
-      pendingUser = message
-      continue
-    }
-    if (message.role === 'assistant' && pendingUser && pendingUser.sessionId === message.sessionId) {
-      groups.push([pendingUser, message])
-      pendingUser = null
-    }
-  }
-
-  return groups.flat()
+  return buildLinkedQaRows(rows).map(toChatMessage)
 }
 
 function toChatMessage(row: LoadedChatMessageRow): ChatMessage {
@@ -515,6 +486,7 @@ function toChatMessage(row: LoadedChatMessageRow): ChatMessage {
 
   return {
     id: row.id,
+    parentId: row.parent_id ?? undefined,
     role: row.role as 'system' | 'user' | 'assistant',
     content: row.content,
     timestamp: row.created_at > 100000000000 ? row.created_at : row.created_at * 1000,

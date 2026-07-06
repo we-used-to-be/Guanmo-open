@@ -499,6 +499,7 @@ export interface ChatSessionRow {
 export interface ChatMessageRow {
   id: string
   session_id: string
+  parent_id: string | null
   role: string
   content: string
   created_at: number
@@ -520,6 +521,7 @@ export async function persistChatSession(session: { id: string; title: string })
 export async function persistChatMessage(msg: {
   id: string
   sessionId: string
+  parentId?: string
   role: string
   content: string
   metadata?: string
@@ -529,9 +531,9 @@ export async function persistChatMessage(msg: {
   const db = getDatabase()
   const createdAt = msg.createdAt ?? Date.now()
   await db.execute(
-    `INSERT OR REPLACE INTO chat_messages (id, session_id, role, content, metadata, created_at)
-     VALUES ($1, $2, $3, $4, $5, COALESCE((SELECT created_at FROM chat_messages WHERE id = $1), $6))`,
-    [msg.id, msg.sessionId, msg.role, msg.content, msg.metadata || null, createdAt]
+    `INSERT OR REPLACE INTO chat_messages (id, session_id, parent_id, role, content, metadata, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, COALESCE((SELECT created_at FROM chat_messages WHERE id = $1), $7))`,
+    [msg.id, msg.sessionId, msg.parentId || null, msg.role, msg.content, msg.metadata || null, createdAt]
   )
 }
 
@@ -606,16 +608,22 @@ export async function importBackupPayload(payload: BackupPayload): Promise<{ ses
   let messageCount = 0
   for (const item of payload.sessions) {
     await persistChatSession({ id: item.session.id, title: item.session.title })
+    let previousMessage: ChatMessageRow | null = null
     for (const message of item.messages) {
       await persistChatMessage({
         id: message.id,
         sessionId: item.session.id,
+        parentId: message.parent_id
+          ?? (message.role === 'assistant' && previousMessage?.role === 'user'
+            ? previousMessage.id
+            : undefined),
         role: message.role,
         content: message.content,
         metadata: message.metadata ?? undefined,
         createdAt: message.created_at,
       })
       messageCount++
+      previousMessage = message
     }
   }
 
@@ -631,38 +639,38 @@ export async function importBackupPayload(payload: BackupPayload): Promise<{ ses
 }
 
 /**
- * Load recent chat messages across all sessions, ordered newest-first.
- * Returns messages with session info attached.
+ * Load recent complete chat turns across all sessions, ordered newest-first.
+ * Each assistant is paired only with its explicit parent user message.
  */
-export async function loadRecentChatMessages(offset: number, limit: number): Promise<Array<ChatMessageRow & { session_title: string }>> {
+export async function loadRecentChatTurns(offset: number, limit: number): Promise<Array<ChatMessageRow & { session_title: string }>> {
   if (!isDatabaseReady()) return []
   const db = getDatabase()
-  const rows = await db.select<ChatMessageRow & { session_title?: string }>(
-    `SELECT m.*, m.rowid as message_order, s.title as session_title
-     FROM chat_messages m
-     JOIN chat_sessions s ON m.session_id = s.id
-     ORDER BY m.created_at DESC, m.rowid DESC
-     LIMIT $1 OFFSET $2`,
-    [limit, offset]
-  )
-
-  if (rows.length <= limit && rows.every((row) => row.session_title)) {
-    return rows as Array<ChatMessageRow & { session_title: string }>
-  }
-
+  const rows = await db.select<ChatMessageRow>('SELECT *, rowid AS message_order FROM chat_messages')
   const sessions = await db.select<ChatSessionRow>('SELECT * FROM chat_sessions')
   const sessionTitles = new Map(sessions.map((session) => [session.id, session.title]))
-  return rows
-    .map((row, index) => ({
-      ...row,
-      session_title: row.session_title || sessionTitles.get(row.session_id) || '历史对话',
-      message_order: row.message_order ?? index,
-    }))
-    .sort((a, b) => {
-      if (b.created_at !== a.created_at) return b.created_at - a.created_at
-      return (b.message_order ?? 0) - (a.message_order ?? 0)
+  const rowsById = new Map(rows.map((row) => [row.id, row]))
+  const turns = rows
+    .filter((row) => row.role === 'assistant' && row.parent_id)
+    .flatMap((assistant) => {
+      const user = rowsById.get(assistant.parent_id!)
+      if (!user || user.role !== 'user' || user.session_id !== assistant.session_id) return []
+      return [{ user, assistant }]
     })
-    .slice(offset, offset + limit) as Array<ChatMessageRow & { session_title: string }>
+    .sort((a, b) => {
+      if (b.assistant.created_at !== a.assistant.created_at) {
+        return b.assistant.created_at - a.assistant.created_at
+      }
+      if ((b.assistant.message_order ?? 0) !== (a.assistant.message_order ?? 0)) {
+        return (b.assistant.message_order ?? 0) - (a.assistant.message_order ?? 0)
+      }
+      return b.assistant.id.localeCompare(a.assistant.id)
+    })
+    .slice(offset, offset + limit)
+
+  return turns.flatMap(({ user, assistant }) => [user, assistant].map((row) => ({
+    ...row,
+    session_title: sessionTitles.get(row.session_id) || '历史对话',
+  })))
 }
 
 /**

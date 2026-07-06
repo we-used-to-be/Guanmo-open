@@ -31,6 +31,7 @@ class TauriSQLiteAdapter implements DBAdapter {
       await this.db.execute(stmt)
     }
     await this.runMigrations()
+    await this.db.execute('CREATE INDEX IF NOT EXISTS idx_chat_messages_parent_id ON chat_messages(parent_id)')
   }
 
   private async hasColumn(table: string, column: string): Promise<boolean> {
@@ -43,6 +44,25 @@ class TauriSQLiteAdapter implements DBAdapter {
       if (await this.hasColumn(migration.table, migration.column)) continue
       await this.db.execute(migration.sql)
     }
+    await this.db.execute(`
+      WITH ordered_messages AS (
+        SELECT
+          id,
+          role,
+          LAG(id) OVER (PARTITION BY session_id ORDER BY created_at ASC, rowid ASC) AS previous_id,
+          LAG(role) OVER (PARTITION BY session_id ORDER BY created_at ASC, rowid ASC) AS previous_role
+        FROM chat_messages
+      )
+      UPDATE chat_messages
+      SET parent_id = (
+        SELECT previous_id FROM ordered_messages WHERE ordered_messages.id = chat_messages.id
+      )
+      WHERE role = 'assistant'
+        AND parent_id IS NULL
+        AND id IN (
+          SELECT id FROM ordered_messages WHERE role = 'assistant' AND previous_role = 'user'
+        )
+    `)
   }
 
   async execute(sql: string, params: unknown[] = []): Promise<{ rowsAffected: number }> {

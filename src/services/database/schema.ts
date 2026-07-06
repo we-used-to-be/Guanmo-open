@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL,
   role TEXT NOT NULL CHECK (role IN ('system', 'user', 'assistant')),
+  parent_id TEXT,
   content TEXT NOT NULL,
   metadata TEXT,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -93,6 +94,7 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON chunks(document_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_content_hash ON chunks(content_hash);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages(session_id);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_parent_id ON chat_messages(parent_id);
 CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
 CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status);
 CREATE INDEX IF NOT EXISTS idx_embedding_jobs_status ON embedding_jobs(status);
@@ -118,6 +120,11 @@ export const DB_MIGRATIONS = [
     table: 'chat_messages',
     column: 'metadata',
     sql: 'ALTER TABLE chat_messages ADD COLUMN metadata TEXT',
+  },
+  {
+    table: 'chat_messages',
+    column: 'parent_id',
+    sql: 'ALTER TABLE chat_messages ADD COLUMN parent_id TEXT',
   },
   {
     table: 'chunks',

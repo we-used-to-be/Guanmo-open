@@ -306,6 +306,7 @@ export function useAiChat() {
       addMessage(userMsg)
       addMessage({
         id: assistantMessageId,
+        parentId: userMsg.id,
         role: 'assistant',
         content: '正在准备 AI 请求...',
         timestamp: Date.now(),
@@ -511,6 +512,7 @@ export function useAiChat() {
                 if (pendingEditCount > 0) {
                   addMessage({
                     id: targetMessageId,
+                    parentId: userMsg.id,
                     role: 'assistant',
                     content: '已生成修改确认卡片，请在下方确认。',
                     timestamp: Date.now(),
@@ -595,6 +597,7 @@ export function useAiChat() {
                   if (pendingEditCount > 0) {
                     addMessage({
                       id: targetMessageId,
+                      parentId: userMsg.id,
                       role: 'assistant',
                       content: '已生成修改确认卡片，请在下方确认。',
                       timestamp: Date.now(),

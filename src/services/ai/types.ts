@@ -64,6 +64,7 @@ export interface EditConfirmation {
 
 export interface ChatMessage {
   id?: string
+  parentId?: string
   role: 'system' | 'user' | 'assistant'
   content: string
   timestamp?: number
