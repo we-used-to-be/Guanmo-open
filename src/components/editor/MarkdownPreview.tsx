@@ -341,7 +341,7 @@ function resolveImageSrc(src: string | undefined, filePath?: string | null): str
   if (/^(https?:|data:|blob:|asset:|file:)/i.test(src) || src.startsWith('#')) return src
   if (!filePath || !isTauri()) return src
 
-  const normalizedSrc = src.replace(/\\/g, '/')
+  const normalizedSrc = decodeLocalImagePath(src).replace(/\\/g, '/')
   const absolutePath = /^[a-zA-Z]:\//.test(normalizedSrc) || normalizedSrc.startsWith('//')
     ? normalizedSrc
     : joinPreviewPath(dirnamePreviewPath(filePath), normalizedSrc)
@@ -349,6 +349,14 @@ function resolveImageSrc(src: string | undefined, filePath?: string | null): str
     ? absolutePath.replace(/\//g, '\\')
     : absolutePath
   return convertFileSrc(nativePath)
+}
+
+function decodeLocalImagePath(path: string): string {
+  try {
+    return decodeURI(path)
+  } catch {
+    return path
+  }
 }
 
 function dirnamePreviewPath(path: string): string {

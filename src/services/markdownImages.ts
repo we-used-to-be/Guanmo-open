@@ -63,7 +63,7 @@ function buildBaseName(markdownPath: string): string {
   const safe = withoutExt
     .trim()
     .replace(/\s+/g, '-')
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-')
+    .replace(/[^a-zA-Z0-9._-]/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
   return safe || 'image'

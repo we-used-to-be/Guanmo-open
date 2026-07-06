@@ -5,6 +5,7 @@ use std::{
     ffi::OsString,
     fs,
     path::{Component, Path, PathBuf},
+    process::Command,
     sync::Mutex,
 };
 use tauri::{Emitter, Manager, State};
@@ -585,6 +586,30 @@ fn read_dir_by_path(app: tauri::AppHandle, path: String) -> Result<Vec<Directory
 }
 
 #[tauri::command]
+fn reveal_file_in_folder(path: String) -> Result<(), String> {
+    let path = PathBuf::from(path);
+    if !path.is_file() {
+        return Err("文件不存在".into());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer.exe")
+            .arg("/select,")
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = path;
+        Err("当前平台暂不支持打开文件位置".into())
+    }
+}
+
+#[tauri::command]
 fn take_pending_open_files(state: State<'_, PendingOpenFiles>) -> Vec<String> {
     let mut pending = state.0.lock().expect("pending open files lock poisoned");
     std::mem::take(&mut *pending)
@@ -646,6 +671,7 @@ pub fn run() {
             create_dir_by_path,
             rename_text_file_by_path,
             read_dir_by_path,
+            reveal_file_in_folder,
             take_pending_open_files,
             has_pending_open_files,
         ])

@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { useEditorStore, type Tab } from '@/stores/editorStore'
 import { useChatStore } from '@/stores/chatStore'
 import { exportMarkdownAsHtml, exportMarkdownAsPdf } from '@/services/markdownExport'
@@ -125,6 +126,15 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
         case 'copyPath':
           if (contextTab?.filePath) {
             navigator.clipboard.writeText(contextTab.filePath)
+          }
+          break
+        case 'revealFile':
+          if (contextTab?.filePath) {
+            try {
+              await invoke('reveal_file_in_folder', { path: contextTab.filePath })
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : String(err || '打开文件位置失败'))
+            }
           }
           break
         case 'copyContent':
@@ -481,6 +491,11 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
           {contextTab?.filePath && (
             <ContextMenuItem onClick={() => handleContextAction('copyPath')}>
               复制路径
+            </ContextMenuItem>
+          )}
+          {contextTab?.filePath && (
+            <ContextMenuItem onClick={() => handleContextAction('revealFile')}>
+              打开文件位置
             </ContextMenuItem>
           )}
           {contextTab?.filePath && (
