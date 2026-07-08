@@ -8,7 +8,7 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { PromptComposer } from '@/components/ai/PromptComposer'
 import type { ManualCapability } from '@/components/ai/ManualToolToggle'
-import { readFile } from '@/hooks/useTauri'
+import { authorizeSelectedPath, readFile } from '@/hooks/useTauri'
 import { useEditorStore } from '@/stores/editorStore'
 import { deleteChatSession } from '@/services/database/persistence'
 import { isSameFilePath } from '@/services/pathIdentity'
@@ -103,6 +103,7 @@ export function AiPanel() {
       const existing = editorState.tabs.find((tab) => isSameFilePath(tab.filePath, source.filePath))
       let tabId = existing?.id
       if (!tabId) {
+        await authorizeSelectedPath(source.filePath)
         const content = await readFile(source.filePath)
         const name = source.filePath.split(/[/\\]/).pop() || source.filePath
         editorState.addTab(source.filePath, name, content)
