@@ -26,6 +26,7 @@ export function AiPanel() {
   const [loadingHistory, setLoadingHistory] = useState(false)
   const chatContainerRef = useRef<HTMLDivElement>(null)
   const autoFollowRef = useRef(true)
+  const scrollFrameRef = useRef<number | null>(null)
   const visibleMessages = useMemo(() => messages.filter((msg) => !msg.hidden), [messages])
   const [manualCapabilities, setManualCapabilities] = useState<ManualCapability[]>([])
   const [resetManualToggle, setResetManualToggle] = useState(0)
@@ -48,12 +49,22 @@ export function AiPanel() {
     return () => el.removeEventListener('scroll', handleScroll)
   }, [isAtBottom])
 
-  // 消息已经按批次刷新，每批最多执行一次容器内滚动。
+  // 合并同一帧内的滚动，避免长文本流式更新时反复触发布局。
   useEffect(() => {
     if (!autoFollowRef.current) return
     const container = chatContainerRef.current
     if (!container) return
-    container.scrollTop = container.scrollHeight
+    if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current)
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      scrollFrameRef.current = null
+      container.scrollTo({ top: container.scrollHeight })
+    })
+    return () => {
+      if (scrollFrameRef.current !== null) {
+        cancelAnimationFrame(scrollFrameRef.current)
+        scrollFrameRef.current = null
+      }
+    }
   }, [visibleMessages, streaming])
 
   const handleSend = useCallback(() => {

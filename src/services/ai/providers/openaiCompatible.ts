@@ -39,12 +39,18 @@ export class OpenAICompatibleProvider implements AiProvider {
 
   private createAbortContext(signal?: AbortSignal) {
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort('timeout'), this.config.timeout)
+    let timeout: ReturnType<typeof setTimeout>
+    const refreshTimeout = () => {
+      clearTimeout(timeout)
+      timeout = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), this.config.timeout)
+    }
     const forwardAbort = () => controller.abort(signal?.reason || 'aborted')
     signal?.addEventListener('abort', forwardAbort, { once: true })
+    refreshTimeout()
 
     return {
       signal: controller.signal,
+      refreshTimeout,
       cleanup: () => {
         clearTimeout(timeout)
         signal?.removeEventListener('abort', forwardAbort)
@@ -160,7 +166,11 @@ export class OpenAICompatibleProvider implements AiProvider {
         throw new AiError(text, 'API_ERROR', res.status)
       }
 
-      yield* parseSSEStream(res)
+      abort.refreshTimeout()
+      for await (const chunk of parseSSEStream(res)) {
+        abort.refreshTimeout()
+        yield chunk
+      }
     } catch (err) {
       if (err instanceof AiError) throw err
       if ((err as Error).name === 'AbortError') {

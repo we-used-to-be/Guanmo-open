@@ -5,8 +5,6 @@ import type { ContextTag } from '@/types/contextTag'
 import { resolveScopeFilePaths } from '@/services/aiScope'
 import { hideLikelyToolJsonPrefix } from '@/services/agent/toolCallParser'
 
-const STREAM_UI_FLUSH_INTERVAL_MS = 40
-
 function createStreamContentFlusher(
   onUpdate: (content: string) => void,
   isCancelled: () => boolean,
@@ -14,10 +12,10 @@ function createStreamContentFlusher(
 ): { schedule: (content: string) => void; flush: () => void } {
   let latestContent = ''
   let committedContent = ''
-  let timer: ReturnType<typeof setTimeout> | null = null
+  let frame: number | null = null
 
   const commit = () => {
-    timer = null
+    frame = null
     if (isCancelled()) return
     const nextContent = transform(latestContent)
     if (nextContent === committedContent) return
@@ -28,14 +26,14 @@ function createStreamContentFlusher(
   return {
     schedule(content) {
       latestContent = content
-      if (timer === null) {
-        timer = setTimeout(commit, STREAM_UI_FLUSH_INTERVAL_MS)
+      if (frame === null) {
+        frame = requestAnimationFrame(commit)
       }
     },
     flush() {
-      if (timer !== null) {
-        clearTimeout(timer)
-        timer = null
+      if (frame !== null) {
+        cancelAnimationFrame(frame)
+        frame = null
       }
       commit()
     },

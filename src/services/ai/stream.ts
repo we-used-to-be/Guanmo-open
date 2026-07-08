@@ -36,7 +36,8 @@ export async function* parseSSEStream(
         : undefined
       const done = Boolean(choice?.finish_reason)
       return { content, done, toolCallDeltas }
-    } catch {
+    } catch (err) {
+      console.warn(`[AI Stream] 忽略无法解析的 SSE 事件（${data.length} 字符）`, err)
       return null
     }
   }

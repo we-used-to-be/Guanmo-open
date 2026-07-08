@@ -818,7 +818,12 @@ export function useAiChat() {
         const msg = err instanceof Error ? err.message : String(err)
         setError(`请求失败：${msg}`)
         addTimelineItem({ type: 'error', label: 'AI 请求失败', detail: msg })
-        removeMessageById(assistantMessageId)
+        const partialContent = useChatStore.getState().messages.find(
+          (message) => message.id === assistantMessageId
+        )?.content.trim()
+        if (!partialContent || partialContent.startsWith('正在')) {
+          removeMessageById(assistantMessageId)
+        }
       } finally {
         if (activeRequestRef.current?.id === requestId) {
           activeRequestRef.current = null
