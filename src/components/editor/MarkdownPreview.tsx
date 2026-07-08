@@ -8,6 +8,7 @@ import { convertFileSrc } from '@tauri-apps/api/core'
 import { isTauri } from '@/hooks/useTauri'
 import { createHeadingId, type TocItem } from '@/services/markdownToc'
 import { normalizeLatexBlockDelimiters, remarkStandaloneDisplayMath } from '@/services/markdownMath'
+import { useSettingsStore } from '@/stores/settingsStore'
 
 const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath, remarkStandaloneDisplayMath]
 const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex, rehypeHighlight]
@@ -395,13 +396,34 @@ function getNodeLine(node: unknown, edge: 'start' | 'end'): number | undefined {
 function MermaidBlock({ code, startLine, endLine }: { code: string; startLine?: number; endLine?: number }) {
   const [svg, setSvg] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const theme = useSettingsStore((state) => state.appearance.theme)
 
   useEffect(() => {
     let cancelled = false
     async function render() {
       try {
         const mermaid = (await import('mermaid')).default
-        mermaid.initialize({ startOnLoad: false, theme: 'base', securityLevel: 'strict' })
+        const isDark = theme === 'dark'
+        mermaid.initialize({
+          startOnLoad: false,
+          theme: 'base',
+          securityLevel: 'strict',
+          themeVariables: isDark ? {
+            background: '#1d1a15',
+            primaryColor: '#30291e',
+            primaryTextColor: '#eee4d2',
+            primaryBorderColor: '#514532',
+            secondaryColor: '#1a3a35',
+            secondaryTextColor: '#eee4d2',
+            secondaryBorderColor: '#38d1c1',
+            tertiaryColor: '#252017',
+            tertiaryTextColor: '#eee4d2',
+            tertiaryBorderColor: '#3b3327',
+            lineColor: '#b7aa94',
+            textColor: '#eee4d2',
+            edgeLabelBackground: '#1d1a15',
+          } : undefined,
+        })
         const id = `mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}`
         const result = await mermaid.render(id, code)
         if (!cancelled) {
@@ -417,7 +439,7 @@ function MermaidBlock({ code, startLine, endLine }: { code: string; startLine?: 
     }
     render()
     return () => { cancelled = true }
-  }, [code])
+  }, [code, theme])
 
   if (error) {
     return (

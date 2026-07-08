@@ -494,7 +494,7 @@ body {
   color: var(--gm-text) !important;
 }
 
-[data-theme='dark'] .gm-settings-tabs .gm-setting-control [class*="placeholder"] {
+[data-theme='dark'] .gm-settings-tabs .gm-setting-control span[class*="placeholder"] {
   color: var(--gm-text-disabled) !important;
 }
 
