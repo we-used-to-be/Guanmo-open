@@ -1,10 +1,9 @@
 import { useState, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useEditorStore, type Tab } from '@/stores/editorStore'
-import { useChatStore } from '@/stores/chatStore'
 import { exportMarkdownAsHtml, exportMarkdownAsPdf } from '@/services/markdownExport'
 import { isSameFilePath } from '@/services/pathIdentity'
-import { addFileContextTag } from '@/services/aiContext'
+import { addFileContextTag, summarizeFileWithAi } from '@/services/aiContext'
 import { indexMarkdownDocument } from '@/services/rag/indexer'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { renameFileEntry, saveTabAsFile, validateFileName } from '@/services/fileEntryActions'
@@ -161,11 +160,10 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
           break
         case 'aiSummarize':
           if (contextTab) {
-            addFileContextTag({
+            summarizeFileWithAi({
               title: contextTab.title,
               filePath: contextTab.filePath,
             })
-            useChatStore.getState().setDraftInput(`请总结文件「${contextTab.title}」的内容`)
           }
           break
         case 'reindexRag':

@@ -11,8 +11,7 @@ import { toast } from '@/services/toast'
 import { Button, Collapse, Divider } from 'animal-island-ui'
 import { FileTree, RecentFiles } from '@/components/file-tree/FileTree'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
-import { addFileContextTag } from '@/services/aiContext'
-import { useChatStore } from '@/stores/chatStore'
+import { addFileContextTag, summarizeFileWithAi } from '@/services/aiContext'
 import { renameFileEntry, saveExistingFileAs, validateFileName } from '@/services/fileEntryActions'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { cleanupMissingWorkspaceDocuments, rebuildWorkspaceDocuments } from '@/services/workspaceIndex'
@@ -609,8 +608,7 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
             setContextMenu(null)
           }}>添加到 AI 上下文</ContextMenuItem>
           <ContextMenuItem onClick={() => {
-            addFileContextTag({ title: contextMenu.file.name, filePath: contextMenu.file.path })
-            useChatStore.getState().setDraftInput(`请总结文件「${contextMenu.file.name}」的内容`)
+            summarizeFileWithAi({ title: contextMenu.file.name, filePath: contextMenu.file.path })
             setContextMenu(null)
           }}>AI 总结该文件</ContextMenuItem>
           <ContextMenuSeparator />

@@ -13,7 +13,8 @@ import { readFile } from '@/hooks/useTauri'
 import type { TextRange } from './editTarget'
 import { normalizeFilePath } from '@/services/pathIdentity'
 import { useSettingsStore } from '@/stores/settingsStore'
-import { getEmbeddingClient, isEmbeddingReady } from '@/services/ai/aiClient'
+import { useAppStore } from '@/stores/appStore'
+import { getEmbeddingClient, getEmbeddingConfig, isEmbeddingReady } from '@/services/ai/aiClient'
 import { buildSelectionContextWindow, serializeSelectionContextWindow } from './selectionContext'
 
 function validateString(value: unknown, name: string): string | null {
@@ -409,6 +410,8 @@ export function registerBuiltinTools() {
 
       const openTab = getOpenTabByPath(path)
       if (openTab) {
+        const returnedContent = openTab.content.slice(0, maxLength)
+        const truncated = openTab.content.length > maxLength
         return JSON.stringify({
           source: {
             kind: 'context_file',
@@ -416,14 +419,18 @@ export function registerBuiltinTools() {
             fileName: fileNameFromPath(path),
             title: openTab.title,
             startLine: 1,
-            endLine: countLines(openTab.content),
+            endLine: countLines(returnedContent),
+            truncated,
+            totalLines: countLines(openTab.content),
           },
-          content: `文件路径: ${path}\n来源: 当前打开标签页的最新编辑内容\n---\n${limitText(openTab.content, maxLength)}`,
+          content: `文件路径: ${path}\n来源: 当前打开标签页的最新编辑内容\n读取范围: L1-${countLines(returnedContent)}${truncated ? `（已截断，全文 ${countLines(openTab.content)} 行）` : ''}\n---\n${limitText(openTab.content, maxLength)}`,
         })
       }
 
       try {
         const content = await readFile(path)
+        const returnedContent = content.slice(0, maxLength)
+        const truncated = content.length > maxLength
         return JSON.stringify({
           source: {
             kind: 'context_file',
@@ -431,9 +438,11 @@ export function registerBuiltinTools() {
             fileName: fileNameFromPath(path),
             title: fileNameFromPath(path),
             startLine: 1,
-            endLine: countLines(content),
+            endLine: countLines(returnedContent),
+            truncated,
+            totalLines: countLines(content),
           },
-          content: `文件路径: ${path}\n来源: 磁盘文件内容\n---\n${limitText(content, maxLength)}`,
+          content: `文件路径: ${path}\n来源: 磁盘文件内容\n读取范围: L1-${countLines(returnedContent)}${truncated ? `（已截断，全文 ${countLines(content)} 行）` : ''}\n---\n${limitText(content, maxLength)}`,
         })
       } catch (readErr) {
         const msg = readErr instanceof Error ? readErr.message : String(readErr)
@@ -628,6 +637,13 @@ export function registerBuiltinTools() {
           source: memory.source,
           locked: memory.locked,
           content: memory.content,
+          scopeType: memory.scopeType || 'global',
+          scopeKey: memory.scopeKey,
+          subject: memory.subject,
+          factKey: memory.factKey,
+          factValue: memory.factValue,
+          confidence: memory.confidence,
+          supersedesId: memory.supersedesId,
           updatedAt: memory.updatedAt,
         })),
       }, null, 2)
@@ -815,10 +831,18 @@ export function registerBuiltinTools() {
       const embedding = isEmbeddingReady()
         ? async (text: string, signal?: AbortSignal) => (await getEmbeddingClient().embedding(text, signal)).embedding
         : undefined
+      const batchEmbedding = isEmbeddingReady()
+        ? async (texts: string[], signal?: AbortSignal) => getEmbeddingClient().batchEmbedding(texts, signal)
+        : undefined
+      const workspacePath = useAppStore.getState().workspacePath
       const memories = await searchMemories(args.query as string, {
         mode: 'strong',
         topK,
         embedding,
+        batchEmbedding,
+        scopeType: workspacePath ? 'project' : 'global',
+        scopeKey: workspacePath,
+        embeddingModel: getEmbeddingConfig()?.embeddingModel,
         signal: context?.signal,
       })
       return buildMemoryContext(memories) || '未找到相关记忆。'
@@ -839,7 +863,9 @@ export function registerBuiltinTools() {
       const category = validCategories.includes(args.category as string)
         ? (args.category as string)
         : 'preference'
-      const result = await upsertExplicitMemory(args.content as string, category)
+      const result = await upsertExplicitMemory(args.content as string, category, {
+        workspacePath: useAppStore.getState().workspacePath,
+      })
       return `${result.action === 'updated' ? '已更新已有记忆' : '已保存新记忆'}：「${result.memory.content}」（分类：${result.memory.category}）`
     },
   })

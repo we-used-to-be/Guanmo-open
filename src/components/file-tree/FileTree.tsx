@@ -3,8 +3,7 @@ import { useEditorStore } from '@/stores/editorStore'
 import { createFile, createFolder, openFile } from '@/services/fileSystem'
 import type { FileNode } from '@/services/fileTree'
 import { isSameFilePath } from '@/services/pathIdentity'
-import { addFileContextTag } from '@/services/aiContext'
-import { useChatStore } from '@/stores/chatStore'
+import { addFileContextTag, summarizeFileWithAi } from '@/services/aiContext'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { renameFileEntry, saveExistingFileAs, validateFileName } from '@/services/fileEntryActions'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
@@ -193,8 +192,7 @@ function FileTreeNode({
   }, [node])
 
   const handleSummarize = useCallback(() => {
-    addFileContextTag({ title: node.name, filePath: node.path })
-    useChatStore.getState().setDraftInput('请总结这个文件的内容')
+    summarizeFileWithAi({ title: node.name, filePath: node.path })
     setContextMenu(null)
   }, [node])
 

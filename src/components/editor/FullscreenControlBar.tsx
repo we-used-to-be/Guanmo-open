@@ -3,8 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useEditorStore, type Tab } from '@/stores/editorStore'
 import { useAppStore } from '@/stores/appStore'
 import { FULLSCREEN_CONTENT_PADDING, useSettingsStore } from '@/stores/settingsStore'
-import { useChatStore } from '@/stores/chatStore'
-import { addFileContextTag } from '@/services/aiContext'
+import { addFileContextTag, summarizeFileWithAi } from '@/services/aiContext'
 import { indexMarkdownDocument } from '@/services/rag/indexer'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { renameFileEntry, saveTabAsFile, validateFileName } from '@/services/fileEntryActions'
@@ -283,8 +282,7 @@ export function FullscreenControlBar({
         break
       case 'aiSummarize':
         if (contextTab) {
-          addFileContextTag({ title: contextTab.title, filePath: contextTab.filePath })
-          useChatStore.getState().setDraftInput(`请总结文件「${contextTab.title}」的内容`)
+          summarizeFileWithAi({ title: contextTab.title, filePath: contextTab.filePath })
         }
         break
       case 'openInRightPane':

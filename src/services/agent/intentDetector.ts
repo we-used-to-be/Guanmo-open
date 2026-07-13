@@ -137,6 +137,12 @@ export function isLocalResearchIntent(query: string): boolean {
   return LOCAL_RESEARCH_PATTERN.test(query.trim())
 }
 
+const FILE_SUMMARY_PATTERN = /(?:总结|概述|归纳|梳理|提炼|结构化总结).*(?:文件|文档|笔记|文章|这篇|这个文件|内容)|(?:文件|文档|笔记|文章|这篇|这个文件).*(?:总结|概述|归纳|梳理|提炼|结构化总结)|AI\s*总结该文件/i
+
+export function isFileSummaryIntent(query: string, context: AppContext = {}): boolean {
+  return Boolean(context.hasContextTags) && FILE_SUMMARY_PATTERN.test(query.trim())
+}
+
 const WEB_COMPARISON_PATTERN = /(联网|上网|网上|互联网|web|Web|外部资料|网上资料|官网|官方|最新|最近|现在|当前|实时|新闻|资料更新|是否过时|过时|验证|核对|对照|对比).*(知识库|本地|笔记|资料|文档|已有资料|我的资料|网上|外部|官网|官方|最新|现在|当前)|(?:知识库|本地|笔记|资料|文档|已有资料|我的资料).*(联网|上网|网上|互联网|web|Web|外部资料|网上资料|官网|官方|最新|最近|现在|当前|实时|资料更新|是否过时|过时|验证|核对|对照|对比)|和网上.*(对比|对照|验证|核对)|跟网上.*(对比|对照|验证|核对)|联网验证|网上验证|外部验证|官网验证|查官网|看官网|最新资料|网上资料|外部资料|是否过时/i
 
 export function isWebComparisonIntent(query: string): boolean {
@@ -213,6 +219,10 @@ function scoreCapability(
   if (capability === 'file_read' && context.hasContextTags && !context.hasSelection && /(总结|解释|分析|概述|归纳|这篇|这个文件|文章|全文|内容)/.test(query)) {
     score += 2
     signals.push('context:tagged_file_read')
+  }
+  if (capability === 'file_read' && isFileSummaryIntent(query, context)) {
+    score += 4
+    signals.push('classifier:file_summary')
   }
   if (capability === 'memory' && context.hasContextTags && score > 0) {
     score += 1

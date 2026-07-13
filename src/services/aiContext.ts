@@ -74,6 +74,19 @@ export function addFileContextTag(args: {
   })
 }
 
+export function buildFileSummaryPrompt(title?: string | null): string {
+  const target = title?.trim() ? `「${title.trim()}」` : '这个文件'
+  return `请对${target}做结构化总结，并标明来源依据、信息缺口和可后续操作建议`
+}
+
+export function summarizeFileWithAi(args: {
+  title: string
+  filePath?: string | null
+}) {
+  addFileContextTag(args)
+  useChatStore.getState().setDraftInput(buildFileSummaryPrompt(args.title))
+}
+
 // ─── 向后兼容：旧函数内部改为调用新 tag API ───
 
 /** @deprecated 使用 addSelectionContextTag 代替 */

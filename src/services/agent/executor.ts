@@ -11,6 +11,7 @@ import {
   shouldIncludeFullDocumentContext,
   isLocalResearchIntent,
   isWebComparisonIntent,
+  isFileSummaryIntent,
   type Capability,
   type AppContext,
 } from './intentDetector'
@@ -174,6 +175,21 @@ const WEB_COMPARISON_ANSWER_PROMPT = `本轮是“Web + 本地资料对照”问
 - 如果本地资料为空但 Web 有结果，明确说明“未找到本地依据，仅基于外部资料”。
 - 如果 Web 搜索关闭、未配置、失败或为空，降级为本地研究回答，并明确说明未完成外部对照。
 - 多个来源冲突或覆盖不完整时，只能说明冲突、缺口和可推断范围，不能强行下结论。`
+
+const FILE_SUMMARY_ANSWER_PROMPT = `本轮是单文件总结。必须优先基于 read_context_file 返回的已授权文件内容回答；只有文件读取失败或内容不足时，才可用 search_knowledge 片段补充，并明确标注范围。
+
+回答必须是结构化文件总结，不能只输出泛泛一段话。先判断文档类型，并采用对应结构：
+- 学习笔记：核心概念、重点、易错点、复习问题
+- 会议/记录：结论、待办、负责人、风险
+- 项目文档：目标、方案、接口/约束、未决问题
+- 普通文章：摘要、主要观点、关键细节、可追问方向
+
+所有类型都必须补充：
+1. 来源依据：写出文件名、heading 或标题路径、行号范围；不得伪造来源。
+2. 信息缺口：内容不足、读取失败、截断、缺少负责人/接口/结论等都要明确说明。
+3. 后续操作建议：只给可追问或可继续阅读的建议，不要自动写回文档、保存记忆或更新知识库。
+
+如果 read_context_file 返回内容被截断，不得声称已覆盖全文；必须说明“当前总结基于已读取范围”。`
 
 function buildFinalAnswerMessages(messages: ChatMessage[], finalInstruction?: string): ChatMessage[] {
   return [
@@ -555,8 +571,10 @@ export async function runAgent(
   const intentResult = detectIntentScores(userIntent, appContext)
   const isWebComparison = isWebComparisonIntent(userIntent)
   const isLocalResearch = !isWebComparison && isLocalResearchIntent(userIntent)
+  const isFileSummary = !isWebComparison && isFileSummaryIntent(userIntent, appContext)
   const answerInstruction = isWebComparison
     ? WEB_COMPARISON_ANSWER_PROMPT
+    : isFileSummary ? FILE_SUMMARY_ANSWER_PROMPT
     : isLocalResearch ? LOCAL_RESEARCH_ANSWER_PROMPT : undefined
 
   // 合并外部传入的 requiredCapabilities
@@ -568,6 +586,9 @@ export async function runAgent(
   const candidateTools = candidateToolNames && candidateToolNames.length > 0
     ? [...candidateToolNames] as AgentToolName[]
     : buildCandidateTools(intentResult.candidates)
+  if (isFileSummary && !candidateTools.includes('read_context_file')) {
+    candidateTools.unshift('read_context_file')
+  }
 
   // 判断是否需要编辑确认
   const requiresEditConfirmation = hasCurrentEditTarget && (
@@ -672,7 +693,9 @@ export async function runAgent(
     const unmetCapabilities = checkRequiredCapabilities(mergedRequired, calledToolNames)
     const repairTools = getRepairTools(unmetCapabilities)
       .filter((name) => candidateTools.includes(name))
-    const prioritizedRepairTools = repairTools.includes('read_selection_context')
+    const prioritizedRepairTools = isFileSummary && repairTools.includes('read_context_file')
+      ? ['read_context_file' as AgentToolName]
+      : repairTools.includes('read_selection_context')
       ? ['read_selection_context' as AgentToolName]
       : repairTools
 
