@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from 'react'
 import { useEditorStore } from '@/stores/editorStore'
 import { createFile, createFolder, openFile } from '@/services/fileSystem'
-import { getFileIcon, type FileNode } from '@/services/fileTree'
+import type { FileNode } from '@/services/fileTree'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { addFileContextTag } from '@/services/aiContext'
 import { useChatStore } from '@/stores/chatStore'
@@ -84,7 +84,6 @@ export function FileTree({ nodes, onOpenFile, workspacePath, onRefreshWorkspace,
       {creating && (
         <div className="flex items-center gap-1.5 px-2 py-1 text-caption text-gm-text">
           <span className="w-3" />
-          <FileIconSVG icon={creating === 'folder' ? 'folder' : 'markdown'} expanded={false} />
           <input
             autoFocus
             value={newName}
@@ -271,9 +270,6 @@ function FileTreeNode({
           </svg>
         )}
 
-        {/* File Icon */}
-        <FileIconSVG icon={getFileIcon(node.name, node.type)} expanded={expanded} />
-
         {/* Name */}
         {renaming ? (
           <input
@@ -321,60 +317,6 @@ function FileTreeNode({
       )}
     </div>
   )
-}
-
-export function FileIconSVG({ icon, expanded }: { icon: string; expanded: boolean }) {
-  const color = 'currentColor'
-  const size = 14
-
-  switch (icon) {
-    case 'folder':
-      return (
-        <svg className="flex-shrink-0" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          {expanded ? (
-            <path d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z" />
-          ) : (
-            <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
-          )}
-        </svg>
-      )
-    case 'markdown':
-      return (
-        <svg className="flex-shrink-0" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#19c8b9" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-          <path d="M7 17v-5l3 3 3-3v5M17 17v-5h-2l2 3 2-3h-2" />
-        </svg>
-      )
-    case 'code':
-      return (
-        <svg className="flex-shrink-0" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#e5a96e" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="16 18 22 12 16 6" />
-          <polyline points="8 6 2 12 8 18" />
-        </svg>
-      )
-    case 'image':
-      return (
-        <svg className="flex-shrink-0" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#91c88e" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-          <circle cx="8.5" cy="8.5" r="1.5" />
-          <polyline points="21 15 16 10 5 21" />
-        </svg>
-      )
-    case 'json':
-      return (
-        <svg className="flex-shrink-0" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#f5c31c" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-          <path d="M8 13h2M8 17h2M14 13h2M14 17h2" />
-        </svg>
-      )
-    default:
-      return (
-        <svg className="flex-shrink-0" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-          <path d="M14 2v6h6" />
-        </svg>
-      )
-  }
 }
 
 export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
@@ -467,7 +409,6 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
                 : 'text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover'
             }`}
           >
-            <FileIconSVG icon={getFileIcon(file.name, 'file')} expanded={false} />
             {renamingPath === file.path ? (
               <input
                 autoFocus

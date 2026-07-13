@@ -5,10 +5,10 @@
 
 [data-theme='dark'] {
   /* === Primary (保留青绿色系，微调适配深色) === */
-  --animal-primary-color: #38d1c1;
-  --animal-primary-color-hover: #67e3d7;
-  --animal-primary-color-active: #22b8aa;
-  --animal-primary-color-bg: rgba(56, 209, 193, 0.13);
+  --animal-primary-color: #58b8ae;
+  --animal-primary-color-hover: #72c8bf;
+  --animal-primary-color-active: #449d94;
+  --animal-primary-color-bg: rgba(88, 184, 174, 0.13);
 
   /* === Semantic Colors === */
   --animal-success-color: #7bcf9a;
@@ -38,6 +38,42 @@
   --animal-bg-color: #1d1a15;
   --animal-bg-color-secondary: #252017;
   --animal-bg-color-disabled: #15130f;
+  --animal-tabs-bg: #1d1a15;
+  --animal-tabs-border: #3b3327;
+  --animal-tabs-list-bg: rgba(255, 244, 226, 0.04);
+  --animal-tabs-item-text: #b7aa94;
+  --animal-tabs-item-hover-bg: rgba(88, 184, 174, 0.12);
+  --animal-tabs-active-bg: #58b8ae;
+  --animal-tabs-active-text: #eee4d2;
+  --animal-tabs-active-shadow: 0 3px 0 0 rgba(0, 0, 0, 0.28);
+  --animal-select-trigger-bg: #1d1a15;
+  --animal-select-trigger-border: #3b3327;
+  --animal-select-trigger-hover-bg: #252017;
+  --animal-select-trigger-hover-border: #514532;
+  --animal-select-dropdown-bg: #252017;
+  --animal-select-pill-bg: #58b8ae;
+  --animal-select-disabled-bg: #15130f;
+  --animal-switch-bg: #30291e;
+  --animal-switch-border: #514532;
+  --animal-switch-hover-border: #6a5a40;
+  --animal-switch-focus: #58b8ae;
+  --animal-switch-handle-bg: #eee4d2;
+  --animal-switch-text: #10211f;
+  --animal-button-primary-text: #10211f;
+  --animal-button-primary-bg: #58b8ae;
+  --animal-button-primary-border: #58b8ae;
+  --animal-button-primary-shadow: #449d94;
+  --animal-button-text-active-bg: #30291e;
+  --animal-table-bg: #1d1a15;
+  --animal-table-divider: #3b3327;
+  --animal-table-text: #b7aa94;
+  --animal-table-text-hover: #eee4d2;
+  --animal-table-text-muted: #887b66;
+  --animal-table-striped-bg: rgba(255, 244, 226, 0.04);
+  --animal-table-hover-stripe-a: rgba(88, 184, 174, 0.18);
+  --animal-table-hover-stripe-b: rgba(88, 184, 174, 0.26);
+  --animal-table-loading-bg: rgba(29, 26, 21, 0.82);
+  --animal-table-loading-color: #58b8ae;
 
   /* === Shadows (深色主题用更柔和的阴影) === */
   --animal-shadow-sm: 0 2px 4px 0 rgba(0, 0, 0, 0.3);

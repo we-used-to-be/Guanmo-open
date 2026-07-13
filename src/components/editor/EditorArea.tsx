@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { EditorView } from '@codemirror/view'
-import { Card } from 'animal-island-ui'
 import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
 import type { ViewMode, ViewModeUsageStat } from '@/stores/editorStore'
@@ -1631,58 +1630,57 @@ function WelcomeScreen() {
 
   return (
     <div className="flex-1 flex flex-col items-center justify-center p-8 animate-fadeIn">
-      <div className="mb-6 animate-float">
-        <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="var(--gm-primary)" strokeWidth="1">
+      <div className="mb-5">
+        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="var(--gm-primary)" strokeWidth="1.2">
           <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
           <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" />
         </svg>
       </div>
 
       <h2 className="text-display text-gm-text mb-2 font-display">观墨</h2>
-      <p className="text-body text-gm-text-secondary mb-8">AI 驱动的 Markdown 知识管理</p>
+      <p className="text-body text-gm-text-secondary mb-7">AI 驱动的 Markdown 知识管理</p>
 
-      <div className="grid grid-cols-2 gap-3 max-w-md w-full">
-        <ActionCard label="新建文件" shortcut="Ctrl+N" color="app-teal" onClick={handleNewFile}
-          icon={<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--gm-primary)" strokeWidth="1.5"><path d="M12 5v14M5 12h14" /></svg>}
+      <div className="grid w-full max-w-sm grid-cols-2 gap-x-5 gap-y-1">
+        <ActionItem label="新建文件" shortcut="Ctrl+N" onClick={handleNewFile}
+          icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 5v14M5 12h14" /></svg>}
         />
-        <ActionCard label="打开文件" shortcut="Ctrl+O" color="app-blue" onClick={handleOpenFile}
-          icon={<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--gm-primary)" strokeWidth="1.5"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" /></svg>}
+        <ActionItem label="打开文件" shortcut="Ctrl+O" onClick={handleOpenFile}
+          icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" /></svg>}
         />
-        <ActionCard
+        <ActionItem
           label="快速打开"
           shortcut="Ctrl+P"
-          color="app-yellow"
           onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', ctrlKey: true, bubbles: true }))}
-          icon={<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--gm-primary)" strokeWidth="1.5"><circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" /></svg>}
+          icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" /></svg>}
         />
-        <ActionCard label="AI 对话" shortcut="Ctrl+J" color="app-green" onClick={toggleAiPanel}
-          icon={<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--gm-primary)" strokeWidth="1.5"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" /></svg>}
+        <ActionItem label="AI 对话" shortcut="Ctrl+J" onClick={toggleAiPanel}
+          icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" /></svg>}
         />
       </div>
     </div>
   )
 }
 
-function ActionCard({
+function ActionItem({
   icon,
   label,
   shortcut,
-  color,
   onClick,
 }: {
   icon: React.ReactNode
   label: string
   shortcut: string
-  color: 'app-teal' | 'app-blue' | 'app-yellow' | 'app-green'
   onClick: () => void
 }) {
   return (
-    <Card color={color} className="p-4 cursor-pointer hover:shadow-lg transition-shadow duration-200 group" onClick={onClick}>
-      <div className="flex flex-col items-center gap-2">
-        <div className="group-hover:scale-110 transition-transform duration-200">{icon}</div>
-        <span className="text-body font-bold text-gm-text">{label}</span>
-        <kbd className="px-2 py-0.5 rounded-full bg-white/50 text-micro text-gm-text-secondary font-mono">{shortcut}</kbd>
-      </div>
-    </Card>
+    <button
+      type="button"
+      className="flex min-h-11 items-center gap-2 border-b border-gm-border-subtle px-2 text-left text-gm-text-secondary transition-colors hover:border-gm-border hover:text-gm-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gm-primary/35"
+      onClick={onClick}
+    >
+      <span className="flex-shrink-0 text-gm-primary">{icon}</span>
+      <span className="min-w-0 flex-1 text-caption font-bold text-gm-text">{label}</span>
+      <kbd className="flex-shrink-0 font-mono text-micro text-gm-text-tertiary">{shortcut}</kbd>
+    </button>
   )
 }

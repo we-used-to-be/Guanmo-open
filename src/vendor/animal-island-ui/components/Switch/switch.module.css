@@ -5,29 +5,29 @@
   min-width: 52px;
   height: 28px;
   padding: 0;
-  background: #d4c9b4;
-  border: 2.5px solid #c4b89e;
+  background: var(--animal-switch-bg, #d4c9b4);
+  border: 2.5px solid var(--animal-switch-border, #c4b89e);
   border-radius: 50px;
   cursor: pointer;
   transition: all var(--animal-motion-duration-base) var(--animal-motion-ease);
   outline: none;
-  box-shadow: inset 0 2px 4px rgba(114, 93, 66, 0.15);
+  box-shadow: none;
 }
 .switch:hover:not(.switch-disabled) {
-  border-color: #a89878;
+  border-color: var(--animal-switch-hover-border, #a89878);
 }
 .switch:focus-visible {
-  outline: 2px solid #ffcc00;
+  outline: 2px solid var(--animal-switch-focus, #ffcc00);
   outline-offset: 2px;
 }
 .switch-checked {
-  background: #86d67a;
-  border-color: #6fba2c;
-  box-shadow: inset 0 2px 4px rgba(90, 158, 30, 0.2);
+  background: var(--animal-primary-color);
+  border-color: var(--animal-primary-color-active);
+  box-shadow: none;
 }
 .switch-checked:hover:not(.switch-disabled) {
-  border-color: #5a9e1e;
-  background: #7ccc70;
+  border-color: var(--animal-primary-color-active);
+  background: var(--animal-primary-color-hover);
 }
 .switch-disabled {
   cursor: not-allowed;
@@ -55,8 +55,8 @@
   left: 2px;
   width: 21px;
   height: 21px;
-  background: #f7f3df;
-  border: 2.5px solid #c4b89e;
+  background: var(--animal-switch-handle-bg, #f7f3df);
+  border: 2.5px solid var(--animal-switch-border, #c4b89e);
   border-radius: 50%;
   transition: all var(--animal-motion-duration-base) var(--animal-motion-ease);
   display: flex;
@@ -65,14 +65,14 @@
 }
 .switch-checked .handle {
   left: calc(100% - 24px);
-  border-color: #6fba2c;
+  border-color: var(--animal-primary-color-active);
 }
 .inner {
   display: block;
   padding: 0 8px 0 28px;
   font-size: 11px;
   font-weight: 700;
-  color: #fff;
+  color: var(--animal-switch-text, #fff);
   white-space: nowrap;
   line-height: 1;
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.1);
@@ -102,7 +102,7 @@
   animation: animal-spin 0.6s linear infinite;
 }
 .switch:not(.switch-checked) .spinner {
-  border-color: #a89878;
+  border-color: var(--animal-switch-hover-border, #a89878);
   border-right-color: transparent;
 }
 @keyframes animal-spin {

@@ -32,9 +32,11 @@ interface EditorSettings {
 interface AppearanceSettings {
   customCursorEnabled: boolean
   theme: 'light' | 'dark'
+  lightPalette: 'warm' | 'plain'
 }
 
 type AppearanceTheme = AppearanceSettings['theme']
+type LightPalette = AppearanceSettings['lightPalette']
 
 interface SettingsState {
   ai: AiConfig
@@ -73,6 +75,7 @@ const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
 const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   customCursorEnabled: false,
   theme: 'light',
+  lightPalette: 'warm',
 }
 
 const DEFAULT_WEB_SEARCH: WebSearchConfig = {
@@ -85,11 +88,11 @@ const DEFAULT_WEB_SEARCH: WebSearchConfig = {
 const THEME_SWITCH_THROTTLE_MS = 180
 let lastThemeSwitchAt = 0
 
-export function syncDocumentTheme(theme: AppearanceTheme) {
+export function syncDocumentTheme(theme: AppearanceTheme, lightPalette: LightPalette = 'warm') {
   if (typeof document === 'undefined') return
   const root = document.documentElement
-  if (root.dataset.theme === theme) return
   root.dataset.theme = theme
+  root.dataset.lightPalette = lightPalette
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -137,11 +140,14 @@ export const useSettingsStore = create<SettingsState>()(
               nextSettings = rest
             } else {
               lastThemeSwitchAt = now
-              syncDocumentTheme(settings.theme)
             }
           }
           if (Object.keys(nextSettings).length === 0) return s
-          return { appearance: { ...s.appearance, ...nextSettings } }
+          const appearance = { ...s.appearance, ...nextSettings }
+          if ('theme' in nextSettings || 'lightPalette' in nextSettings) {
+            syncDocumentTheme(appearance.theme, appearance.lightPalette)
+          }
+          return { appearance }
         }),
 
       updateWebSearchConfig: (config) => {

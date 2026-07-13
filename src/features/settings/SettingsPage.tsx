@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { Button, Collapse, Divider, Footer, Icon, Input, Select, Switch, Table, Tabs } from 'animal-island-ui'
 import appIcon from '@/assets/icon.png'
-import type { IconName } from 'animal-island-ui'
+
 import { isTauri } from '@/hooks/useTauri'
 import { useSettingsStore } from '@/stores/settingsStore'
 import type { WebSearchConfig } from '@/services/webSearch'
@@ -49,28 +49,19 @@ async function openUrl(url: string, external: boolean) {
 }
 
 const TABS_CONFIG = [
-  { key: 'ai', icon: 'icon-chat' as IconName, text: 'AI 模型', children: <AiSettings /> },
-  { key: 'editor', icon: 'icon-design' as IconName, text: '编辑器', children: <EditorSettings /> },
-  { key: 'memory', icon: 'icon-critterpedia' as IconName, text: '记忆', children: <MemorySettings /> },
-  { key: 'shortcuts', icon: 'icon-diy' as IconName, text: '快捷键', children: <ShortcutSettings /> },
-  { key: 'general', icon: 'icon-map' as IconName, text: '通用', children: <GeneralSettings /> },
+  { key: 'ai', text: 'AI 模型', children: <AiSettings /> },
+  { key: 'editor', text: '编辑器', children: <EditorSettings /> },
+  { key: 'memory', text: '记忆', children: <MemorySettings /> },
+  { key: 'shortcuts', text: '快捷键', children: <ShortcutSettings /> },
+  { key: 'general', text: '通用', children: <GeneralSettings /> },
 ]
-
-function TabLabel({ icon, text, isActive }: { icon: IconName; text: string; isActive?: boolean }) {
-  return (
-    <span className="inline-flex items-center gap-2">
-      <Icon name={icon} size={20} bounce={isActive} />
-      <span className="text-body">{text}</span>
-    </span>
-  )
-}
 
 export function SettingsPage() {
   const [active, setActive] = useState('ai')
 
   const tabs = TABS_CONFIG.map((tab) => ({
     key: tab.key,
-    label: <TabLabel icon={tab.icon} text={tab.text} isActive={tab.key === active} />,
+    label: <span className="text-body">{tab.text}</span>,
     children: tab.children,
   }))
 
@@ -95,14 +86,14 @@ export function SettingsPage() {
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
-    <h3 className="text-micro font-bold text-gm-text-tertiary uppercase tracking-wider mt-6 mb-3 first:mt-0">
+    <h3 className="text-micro font-bold text-gm-text-tertiary uppercase tracking-wider mt-5 mb-2 first:mt-0">
       {children}
     </h3>
   )
 }
 
 function Sep() {
-  return <Divider type="line-brown" className="my-4 opacity-45" />
+  return <Divider type="line-brown" className="gm-settings-sep my-3 opacity-45" />
 }
 
 function ApiKeyInput({ value, onChange, placeholder, disabled }: {
@@ -151,17 +142,19 @@ function ApiKeyInput({ value, onChange, placeholder, disabled }: {
 function SettingField({
   label,
   description,
+  descriptionClassName = '',
   children,
 }: {
   label: string
   description?: string
+  descriptionClassName?: string
   children: React.ReactNode
 }) {
   return (
-    <div className="gm-setting-field flex items-center justify-between py-2 min-h-[44px]">
+    <div className="gm-setting-field flex items-center justify-between py-1.5 min-h-[42px]">
       <div className="pr-6" style={{ width: 260, flexShrink: 0 }}>
         <span className="text-body text-gm-text">{label}</span>
-        {description && <p className="text-caption text-gm-text-tertiary mt-0.5">{description}</p>}
+        {description && <p className={`text-caption text-gm-text-tertiary mt-0.5 ${descriptionClassName}`}>{description}</p>}
       </div>
       <div className="gm-setting-control flex-1 flex items-center justify-end min-w-0">{children}</div>
     </div>
@@ -177,6 +170,7 @@ function SliderField({
   step,
   onChange,
   format,
+  debounceMs,
 }: {
   label: string
   description?: string
@@ -186,6 +180,7 @@ function SliderField({
   step: number
   onChange: (v: number) => void
   format?: (v: number) => string
+  debounceMs?: number
 }) {
   const precision = step < 1 ? (step.toString().split('.')[1]?.length ?? 1) : 0
   const ticks: number[] = []
@@ -194,32 +189,78 @@ function SliderField({
   }
   const datalistId = `slider-${label}`
 
+  // Debounce: use local state for instant visual feedback, defer onChange until user stops dragging
+  const [localValue, setLocalValue] = useState(value)
+  const debounceRef = useRef<number | null>(null)
+  const draggingRef = useRef(false)
+
+  // Sync external value → local when not dragging (e.g. Ctrl+scroll wheel changes)
+  useEffect(() => {
+    if (!draggingRef.current) {
+      setLocalValue(value)
+    }
+  }, [value])
+
+  const displayValue = debounceMs ? localValue : value
+  const progress = Math.max(0, Math.min(100, ((displayValue - min) / (max - min)) * 100))
+  const sliderStyle = {
+    '--gm-setting-slider-thumb-position': `calc(${progress}% + ${9 - progress * 0.18}px)`,
+    '--gm-setting-slider-fill-width': `calc(${progress}% + ${18 - progress * 0.18}px)`,
+  } as CSSProperties
+
+  const commitValue = useCallback((v: number) => {
+    draggingRef.current = false
+    onChange(v)
+  }, [onChange])
+
+  const handleChange = useCallback((raw: number) => {
+    const v = +raw.toFixed(precision)
+    if (debounceMs) {
+      draggingRef.current = true
+      setLocalValue(v)
+      if (debounceRef.current !== null) window.clearTimeout(debounceRef.current)
+      debounceRef.current = window.setTimeout(() => commitValue(v), debounceMs)
+    } else {
+      onChange(v)
+    }
+  }, [debounceMs, precision, onChange, commitValue])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current !== null) window.clearTimeout(debounceRef.current)
+    }
+  }, [])
+
   return (
-    <div className="gm-setting-field flex items-center justify-between py-2 min-h-[44px]">
+    <div className="gm-setting-field flex items-center justify-between py-1.5 min-h-[42px]">
       <div style={{ width: 260, flexShrink: 0 }}>
         <span className="text-body text-gm-text">{label}</span>
         {description && <p className="text-caption text-gm-text-tertiary mt-0.5">{description}</p>}
       </div>
       <div className="gm-setting-control flex-1 flex items-center gap-3 min-w-0">
-        <input
-          type="range"
-          min={min}
-          max={max}
-          step={step}
-          value={value}
-          list={datalistId}
-          onChange={(e) => onChange(+parseFloat(e.target.value).toFixed(precision))}
-          className="w-full h-4 accent-gm-primary bg-transparent appearance-none cursor-pointer
-            [&::-webkit-slider-runnable-track]:h-1 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-gm-border-subtle
-            [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:mt-[-3px] [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-gm-primary [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-sm
-            [&::-moz-range-track]:h-1 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-gm-border-subtle
-            [&::-moz-range-thumb]:w-3.5 [&::-moz-range-thumb]:h-3.5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-gm-primary [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:shadow-sm"
-        />
+        <div className="gm-setting-slider" style={sliderStyle}>
+          <div className="gm-setting-slider__track" aria-hidden="true">
+            <span className="gm-setting-slider__fill" />
+            <span className="gm-setting-slider__thumb" />
+          </div>
+          <input
+            type="range"
+            min={min}
+            max={max}
+            step={step}
+            value={displayValue}
+            list={datalistId}
+            aria-label={label}
+            onChange={(e) => handleChange(+parseFloat(e.target.value))}
+            className="gm-setting-slider__input"
+          />
+        </div>
         <datalist id={datalistId}>
           {ticks.map((t) => <option key={t} value={t} />)}
         </datalist>
         <span className="text-mono text-caption text-gm-text-secondary w-12 text-right tabular-nums">
-          {format ? format(value) : value}
+          {format ? format(displayValue) : displayValue}
         </span>
       </div>
     </div>
@@ -236,6 +277,14 @@ type ModePrewarmLevel = typeof MODE_PREWARM_OPTIONS[number]['key']
 const MODE_PREWARM_KEYS = MODE_PREWARM_OPTIONS.map((option) => option.key)
 const MODE_PREWARM_STOP_POSITIONS = ['var(--gm-mode-prewarm-stop-edge)', '50%', 'calc(100% - var(--gm-mode-prewarm-stop-edge))'] as const
 const MODE_PREWARM_LABEL_POSITIONS = ['var(--gm-mode-prewarm-stop-edge)', 'calc(50% - 14px)', 'calc(100% - var(--gm-mode-prewarm-stop-edge) - 26px)'] as const
+const MODE_PREWARM_FILL_WIDTHS = ['var(--gm-mode-prewarm-thumb-size)', 'calc(50% + var(--gm-mode-prewarm-thumb-size) / 2)', '100%'] as const
+
+const LIGHT_PALETTE_OPTIONS = [
+  { key: 'warm', label: '暖色' },
+  { key: 'plain', label: '浅色' },
+] as const
+
+type LightPalette = typeof LIGHT_PALETTE_OPTIONS[number]['key']
 
 function getModePrewarmIndex(value: ModePrewarmLevel) {
   return Math.max(0, MODE_PREWARM_KEYS.indexOf(value))
@@ -254,6 +303,7 @@ function ModePrewarmSlider({
   const [dragging, setDragging] = useState(false)
   const activeOption = MODE_PREWARM_OPTIONS[draftIndex] ?? MODE_PREWARM_OPTIONS[0]
   const thumbPosition = MODE_PREWARM_STOP_POSITIONS[draftIndex] ?? MODE_PREWARM_STOP_POSITIONS[0]
+  const fillWidth = MODE_PREWARM_FILL_WIDTHS[draftIndex] ?? MODE_PREWARM_FILL_WIDTHS[0]
 
   useEffect(() => {
     if (!dragging) setDraftIndex(committedIndex)
@@ -307,7 +357,7 @@ function ModePrewarmSlider({
       </div>
       <div className="gm-mode-prewarm__slider">
         <div className="gm-mode-prewarm__track" aria-hidden="true">
-          <span className="gm-mode-prewarm__fill" style={{ width: thumbPosition }} />
+          <span className="gm-mode-prewarm__fill" style={{ width: fillWidth }} />
           {MODE_PREWARM_OPTIONS.map((option, index) => (
             <span
               key={option.key}
@@ -336,6 +386,32 @@ function ModePrewarmSlider({
           onKeyDown={handleKeyDown}
         />
       </div>
+    </div>
+  )
+}
+
+function LightPaletteSegmented({
+  value,
+  onChange,
+}: {
+  value: LightPalette
+  onChange: (value: LightPalette) => void
+}) {
+  return (
+    <div className="gm-light-palette-segmented" role="radiogroup" aria-label="明亮配色">
+      {LIGHT_PALETTE_OPTIONS.map((option) => (
+        <button
+          key={option.key}
+          type="button"
+          className="gm-light-palette-segmented__item"
+          data-active={value === option.key}
+          role="radio"
+          aria-checked={value === option.key}
+          onClick={() => onChange(option.key)}
+        >
+          {option.label}
+        </button>
+      ))}
     </div>
   )
 }
@@ -941,8 +1017,8 @@ function EditorSettings() {
   return (
     <div className="w-full pb-6">
       <SectionTitle>外观</SectionTitle>
-      <SliderField label="字号" description="编辑区与预览区文字大小，推荐 14-16px，Ctrl+滚轮可快捷调节" value={editor.fontSize} min={10} max={24} step={1} onChange={(v) => updateEditorSettings({ fontSize: Math.round(v) })} format={(v) => `${v}px`} />
-      <SliderField label="行高" description="编辑区与预览区行间距倍数，影响阅读舒适度" value={editor.lineHeight} min={1.2} max={2.0} step={0.05} onChange={(v) => updateEditorSettings({ lineHeight: v })} format={(v) => v.toFixed(2)} />
+      <SliderField label="字号" description="编辑区与预览区文字大小，推荐 14-16px，Ctrl+滚轮可快捷调节" value={editor.fontSize} min={10} max={24} step={1} onChange={(v) => updateEditorSettings({ fontSize: Math.round(v) })} format={(v) => `${v}px`} debounceMs={150} />
+      <SliderField label="行高" description="编辑区与预览区行间距倍数，影响阅读舒适度" value={editor.lineHeight} min={1.2} max={2.0} step={0.05} onChange={(v) => updateEditorSettings({ lineHeight: v })} format={(v) => v.toFixed(2)} debounceMs={150} />
       <SettingField label="Tab 大小" description="按 Tab 键插入的空格数">
         <Select
           options={[
@@ -972,7 +1048,7 @@ function EditorSettings() {
       </SettingField>
       <Sep />
       <SectionTitle>性能</SectionTitle>
-      <SettingField label="模式闲时预热" description={modePrewarmDescription}>
+      <SettingField label="模式闲时预热" description={modePrewarmDescription} descriptionClassName="min-h-[54px]">
         <ModePrewarmSlider
           value={editor.modePrewarm}
           onChange={(modePrewarm) => updateEditorSettings({ modePrewarm })}
@@ -1066,7 +1142,7 @@ function GeneralSettings() {
       autoSendAiShortcut: false,
       modePrewarm: 'smart',
     })
-    updateAppearanceSettings({ customCursorEnabled: true, theme: 'light' })
+    updateAppearanceSettings({ customCursorEnabled: true, theme: 'light', lightPalette: 'warm' })
     updateWebSearchConfig({ provider: 'duckduckgo', apiKey: '', maxResults: 5, customUrl: '' })
     toast.success('已恢复默认设置')
   }
@@ -1181,6 +1257,12 @@ function GeneralSettings() {
       <SectionTitle>外观</SectionTitle>
       <SettingField label="深色模式" description="切换夜间写作配色，无需重启">
         <Switch checked={appearance.theme === 'dark'} onChange={(v) => updateAppearanceSettings({ theme: v ? 'dark' : 'light' })} />
+      </SettingField>
+      <SettingField label="明亮配色" description="仅影响明亮模式；深色模式下会在下次切回明亮时生效">
+        <LightPaletteSegmented
+          value={appearance.lightPalette}
+          onChange={(lightPalette) => updateAppearanceSettings({ lightPalette })}
+        />
       </SettingField>
       <SettingField label="定制光标" description="使用 animal-island-ui 的手作风光标">
         <Switch checked={appearance.customCursorEnabled} onChange={(v) => updateAppearanceSettings({ customCursorEnabled: v })} />
@@ -1449,7 +1531,7 @@ function MemorySettings() {
             onClick={() => setFilter(cat)}
             className={`px-2.5 py-1 rounded-full text-micro transition-colors ${
               filter === cat
-                ? 'bg-gm-primary text-white'
+                ? 'bg-gm-primary text-gm-text-on-primary'
                 : 'bg-gm-surface-elevated text-gm-text-secondary hover:text-gm-text'
             }`}
           >

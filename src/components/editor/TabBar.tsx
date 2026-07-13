@@ -312,7 +312,6 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
                 }`}
                 style={activeTabId === tab.id ? { borderBottom: '2px solid var(--gm-active-indicator)' } : undefined}
               >
-                <FileIconSmall extension={tab.title.split('.').pop() || ''} />
                 {renamingTabId === tab.id ? (
                   <input
                     autoFocus
@@ -535,38 +534,11 @@ function ModeButton({ children, active, onClick, title }: {
       title={title}
       className={`p-1.5 rounded-lg ${
         active
-          ? 'bg-gm-primary-subtle text-gm-primary'
+          ? 'text-gm-primary'
           : 'text-gm-text-tertiary hover:text-gm-text-secondary hover:bg-gm-surface-hover'
       }`}
     >
       {children}
     </button>
-  )
-}
-
-function FileIconSmall({ extension }: { extension: string }) {
-  const size = 12
-  let color = 'currentColor'
-
-  switch (extension.toLowerCase()) {
-    case 'md':
-      color = '#19c8b9'
-      break
-    case 'json':
-      color = '#f5c31c'
-      break
-    case 'ts':
-    case 'tsx':
-    case 'js':
-    case 'jsx':
-      color = '#e5a96e'
-      break
-  }
-
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5">
-      <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-      <path d="M14 2v6h6" />
-    </svg>
   )
 }

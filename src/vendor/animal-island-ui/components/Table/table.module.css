@@ -1,7 +1,7 @@
 .wrapper {
   position: relative;
   width: 100%;
-  background: #f7f3df;
+  background: var(--animal-table-bg, #f7f3df);
   border-radius: 24px;
   padding: 6px;
   box-sizing: border-box;
@@ -18,7 +18,7 @@
   font-family: 'Nunito', 'Noto Sans SC', 'Zen Maru Gothic', -apple-system, 'PingFang SC', sans-serif;
 }
 .thead {
-  background: #f7f3df;
+  background: var(--animal-table-bg, #f7f3df);
 }
 .headerRow {
   position: relative;
@@ -30,21 +30,21 @@
   right: 20px;
   bottom: 0;
   height: 1px;
-  background: repeating-linear-gradient(90deg, #f0e8d8 0, #f0e8d8 6px, transparent 6px, transparent 12px);
+  background: repeating-linear-gradient(90deg, var(--animal-table-divider, #f0e8d8) 0, var(--animal-table-divider, #f0e8d8) 6px, transparent 6px, transparent 12px);
   transition: opacity 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .headerCell {
   padding: 16px 20px;
   font-size: 14px;
   font-weight: 700;
-  color: #725d42;
+  color: var(--animal-table-text, #725d42);
   text-align: left;
   white-space: nowrap;
   letter-spacing: 0.02em;
   background: transparent;
 }
 .tbody {
-  background: #f7f3df;
+  background: var(--animal-table-bg, #f7f3df);
 }
 .row {
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
@@ -57,10 +57,10 @@
   right: 20px;
   bottom: 0;
   height: 1px;
-  background: repeating-linear-gradient(90deg, #f0e8d8 0, #f0e8d8 6px, transparent 6px, transparent 12px);
+  background: repeating-linear-gradient(90deg, var(--animal-table-divider, #f0e8d8) 0, var(--animal-table-divider, #f0e8d8) 6px, transparent 6px, transparent 12px);
 }
 .row:hover {
-  background-image: repeating-linear-gradient(-45deg, rgba(25, 200, 185, 0.6), rgba(25, 200, 185, 0.6) 10px, rgba(14, 196, 182, 0.6) 10px, rgba(14, 196, 182, 0.6) 20px);
+  background-image: repeating-linear-gradient(-45deg, var(--animal-table-hover-stripe-a, rgba(25, 200, 185, 0.6)), var(--animal-table-hover-stripe-a, rgba(25, 200, 185, 0.6)) 10px, var(--animal-table-hover-stripe-b, rgba(14, 196, 182, 0.6)) 10px, var(--animal-table-hover-stripe-b, rgba(14, 196, 182, 0.6)) 20px);
   background-size: 28.28px 28.28px;
   clip-path: inset(0 0 0 0 round 18px);
 }
@@ -68,16 +68,16 @@
   opacity: 0;
 }
 .row:hover .cell {
-  color: #3d2e1e;
+  color: var(--animal-table-text-hover, #3d2e1e);
 }
 .row:last-child::after {
   display: none;
 }
 .striped {
-  background: rgba(248, 248, 240, 0.6);
+  background: var(--animal-table-striped-bg, rgba(248, 248, 240, 0.6));
 }
 .striped:hover {
-  background-image: repeating-linear-gradient(-45deg, rgba(25, 200, 185, 0.65), rgba(25, 200, 185, 0.65) 10px, rgba(14, 196, 182, 0.65) 10px, rgba(14, 196, 182, 0.65) 20px);
+  background-image: repeating-linear-gradient(-45deg, var(--animal-table-hover-stripe-a, rgba(25, 200, 185, 0.65)), var(--animal-table-hover-stripe-a, rgba(25, 200, 185, 0.65)) 10px, var(--animal-table-hover-stripe-b, rgba(14, 196, 182, 0.65)) 10px, var(--animal-table-hover-stripe-b, rgba(14, 196, 182, 0.65)) 20px);
   background-size: 28.28px 28.28px;
   clip-path: inset(0 0 0 0 round 18px);
 }
@@ -85,13 +85,13 @@
   opacity: 0;
 }
 .striped:hover .cell {
-  color: #3d2e1e;
+  color: var(--animal-table-text-hover, #3d2e1e);
 }
 .cell {
   padding: 14px 20px;
   font-size: 14px;
   font-weight: 500;
-  color: #725d42;
+  color: var(--animal-table-text, #725d42);
   line-height: 1.6;
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
@@ -104,14 +104,14 @@
   flex-direction: column;
   align-items: center;
   gap: 16px;
-  color: #9f927d;
+  color: var(--animal-table-text-muted, #9f927d);
   font-size: 14px;
 }
 .emptyContent svg {
   opacity: 0.5;
 }
 .emptyIcon {
-  color: #9f927d;
+  color: var(--animal-table-text-muted, #9f927d);
   opacity: 0.5;
 }
 .loading {
@@ -124,11 +124,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(247, 243, 223, 0.8);
+  background: var(--animal-table-loading-bg, rgba(247, 243, 223, 0.8));
   backdrop-filter: blur(2px);
 }
 .loadingSpinner {
-  color: #19c8b9;
+  color: var(--animal-table-loading-color, #19c8b9);
   animation: spin 1s linear infinite;
 }
 .loadingSpinner svg {

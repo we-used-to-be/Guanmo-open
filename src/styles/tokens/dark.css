@@ -11,13 +11,13 @@
   --gm-border: #3b3327;
   --gm-border-subtle: #2d271f;
   --gm-border-strong: #514532;
-  --gm-border-focus: #38d1c1;
+  --gm-border-focus: #58b8ae;
 
   /* Brand Primary */
-  --gm-primary: #38d1c1;
-  --gm-primary-hover: #67e3d7;
-  --gm-primary-active: #22b8aa;
-  --gm-primary-subtle: rgba(56, 209, 193, 0.13);
+  --gm-primary: #58b8ae;
+  --gm-primary-hover: #72c8bf;
+  --gm-primary-active: #449d94;
+  --gm-primary-subtle: rgba(88, 184, 174, 0.13);
 
   /* Accent (AI) */
   --gm-accent: #e0be84;
@@ -31,11 +31,11 @@
   --gm-text-on-primary: #10211f;
 
   /* User Message Bubble (柔和低饱和) */
-  --gm-user-bubble-bg: #1a3a35;
-  --gm-user-bubble-text: #e0f0ec;
+  --gm-user-bubble-bg: #2b3b46;
+  --gm-user-bubble-text: #e8f0f3;
 
   /* Active Indicator (标签下划线、目录高亮) */
-  --gm-active-indicator: #38d1c1;
+  --gm-active-indicator: #58b8ae;
 
   /* Semantic */
   --gm-success: #7bcf9a;
@@ -46,19 +46,19 @@
   /* Editor Specific */
   --gm-editor-bg: #17140f;
   --gm-editor-gutter: #1d1a15;
-  --gm-editor-line-highlight: rgba(56, 209, 193, 0.07);
-  --gm-editor-selection: rgba(56, 209, 193, 0.2);
+  --gm-editor-line-highlight: rgba(88, 184, 174, 0.07);
+  --gm-editor-selection: rgba(88, 184, 174, 0.2);
   --gm-editor-heading: #f2d9a8;
   --gm-editor-quote: #70d7c7;
   --gm-editor-code: #e0be84;
-  --gm-editor-link: #67e3d7;
+  --gm-editor-link: #72c8bf;
   --gm-editor-list: #d8a95c;
   --gm-markdown-heading: #f2d9a8;
-  --gm-markdown-quote-bg: rgba(56, 209, 193, 0.1);
+  --gm-markdown-quote-bg: rgba(88, 184, 174, 0.1);
   --gm-code-bg: #211d16;
   --gm-code-text: #eee4d2;
   --gm-code-muted: #9c8f79;
-  --gm-code-command: #67e3d7;
+  --gm-code-command: #72c8bf;
   --gm-code-path: #f0c987;
   --gm-code-error: #ff9a91;
   --gm-code-info: #a8c7e6;

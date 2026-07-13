@@ -3,7 +3,7 @@ import { useAppStore } from '@/stores/appStore'
 import { useChatStore } from '@/stores/chatStore'
 import type { RagSource, RagStatus, TimelineItem, PendingEdit } from '@/stores/chatStore'
 import { useAiChat } from '@/hooks/useAiChat'
-import { Button, Divider, Icon } from 'animal-island-ui'
+import { Button, Icon } from 'animal-island-ui'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { PromptComposer } from '@/components/ai/PromptComposer'
@@ -25,6 +25,10 @@ type AiPanelProps = {
   }
 }
 
+const STREAM_START_FOLLOW_PX = 180
+const STREAM_GROWTH_FOLLOW_PX = 120
+const STREAM_BOTTOM_GAP_PX = 96
+
 export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const toggleAiPanel = useAppStore((s) => s.toggleAiPanel)
   const { messages, streaming, error, ragStatus, ragSources, timeline, sendMessage, cancelStream } = useAiChat()
@@ -36,6 +40,12 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const chatContainerRef = useRef<HTMLDivElement>(null)
   const autoFollowRef = useRef(true)
   const scrollFrameRef = useRef<number | null>(null)
+  const streamingMessageIdRef = useRef<string | null>(null)
+  const streamingStartScrollTopRef = useRef(0)
+  const programmaticScrollUntilRef = useRef(0)
+  const streamingRef = useRef(streaming)
+  const streamScrollInterruptedRef = useRef(false)
+  const pendingOutgoingMessageCountRef = useRef<number | null>(null)
   const visibleMessages = useMemo(() => messages.filter((msg) => !msg.hidden), [messages])
   const [manualCapabilities, setManualCapabilities] = useState<ManualCapability[]>([])
   const [resetManualToggle, setResetManualToggle] = useState(0)
@@ -47,25 +57,90 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     return el.scrollHeight - el.scrollTop - el.clientHeight < 50
   }, [])
 
+  useEffect(() => {
+    streamingRef.current = streaming
+    if (!streaming) {
+      streamScrollInterruptedRef.current = false
+    }
+  }, [streaming])
+
   // 监听用户手动滚动：滚到底部恢复跟随，滚离底部关闭跟随
   useEffect(() => {
     const el = chatContainerRef.current
     if (!el) return
+    const stopStreamingFollow = () => {
+      if (!streamingRef.current) return
+      autoFollowRef.current = false
+      streamScrollInterruptedRef.current = true
+      if (scrollFrameRef.current !== null) {
+        cancelAnimationFrame(scrollFrameRef.current)
+        scrollFrameRef.current = null
+      }
+    }
     const handleScroll = () => {
+      if (streamingRef.current && streamScrollInterruptedRef.current) return
+      if (Date.now() < programmaticScrollUntilRef.current) return
       autoFollowRef.current = isAtBottom()
     }
+    el.addEventListener('wheel', stopStreamingFollow, { passive: true })
+    el.addEventListener('touchstart', stopStreamingFollow, { passive: true })
+    el.addEventListener('pointerdown', stopStreamingFollow, { passive: true })
     el.addEventListener('scroll', handleScroll, { passive: true })
-    return () => el.removeEventListener('scroll', handleScroll)
+    return () => {
+      el.removeEventListener('wheel', stopStreamingFollow)
+      el.removeEventListener('touchstart', stopStreamingFollow)
+      el.removeEventListener('pointerdown', stopStreamingFollow)
+      el.removeEventListener('scroll', handleScroll)
+    }
   }, [isAtBottom])
 
   // 合并同一帧内的滚动，避免长文本流式更新时反复触发布局。
   useEffect(() => {
+    if (streaming && streamScrollInterruptedRef.current) return
     if (!autoFollowRef.current) return
     const container = chatContainerRef.current
     if (!container) return
+    if (streaming && pendingOutgoingMessageCountRef.current !== null) {
+      if (visibleMessages.length <= pendingOutgoingMessageCountRef.current) return
+      pendingOutgoingMessageCountRef.current = null
+      streamingMessageIdRef.current = null
+    }
+    const lastMessage = visibleMessages[visibleMessages.length - 1]
+    const lastMessageKey = lastMessage
+      ? lastMessage.id || `${lastMessage.role}-${lastMessage.sessionId || 'live'}-${lastMessage.timestamp || visibleMessages.length - 1}`
+      : null
+    const isAssistantStreaming = Boolean(streaming && lastMessage?.role === 'assistant' && lastMessageKey)
+
     if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current)
     scrollFrameRef.current = requestAnimationFrame(() => {
       scrollFrameRef.current = null
+      if (isAssistantStreaming && lastMessageKey) {
+        const streamingEl = container.querySelector<HTMLElement>('[data-chat-streaming="true"]')
+        if (!streamingEl) return
+
+        const isNewStreamingMessage = streamingMessageIdRef.current !== lastMessageKey
+        if (isNewStreamingMessage) {
+          streamingMessageIdRef.current = lastMessageKey
+          streamingStartScrollTopRef.current = container.scrollTop
+        }
+
+        const containerRect = container.getBoundingClientRect()
+        const messageRect = streamingEl.getBoundingClientRect()
+        const desiredTop = container.scrollTop + messageRect.top - containerRect.top - 12
+        const followLimit = streamingStartScrollTopRef.current + STREAM_START_FOLLOW_PX + (isNewStreamingMessage ? 0 : STREAM_GROWTH_FOLLOW_PX)
+        const bottomGap = container.scrollHeight - container.scrollTop - container.clientHeight
+        const growthTarget = bottomGap > STREAM_BOTTOM_GAP_PX
+          ? container.scrollTop + Math.min(bottomGap - STREAM_BOTTOM_GAP_PX, STREAM_GROWTH_FOLLOW_PX)
+          : container.scrollTop
+        const nextTop = Math.min(Math.max(desiredTop, growthTarget), followLimit)
+
+        programmaticScrollUntilRef.current = Date.now() + 120
+        container.scrollTo({ top: nextTop })
+        return
+      }
+
+      streamingMessageIdRef.current = null
+      programmaticScrollUntilRef.current = Date.now() + 120
       container.scrollTo({ top: container.scrollHeight })
     })
     return () => {
@@ -82,6 +157,10 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     const currentContextTags = chatState.contextTags
     if ((!currentDraft.trim() && currentContextTags.length === 0) || chatState.streaming) return
     autoFollowRef.current = true
+    streamScrollInterruptedRef.current = false
+    pendingOutgoingMessageCountRef.current = chatState.messages.filter((msg) => !msg.hidden).length
+    streamingMessageIdRef.current = null
+    streamingStartScrollTopRef.current = 0
     sendMessage(currentDraft, undefined, currentContextTags.length > 0 ? currentContextTags : undefined, manualCapabilities)
     setDraftInput('')
     chatState.clearContextTags()
@@ -165,7 +244,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
       >
         <div className="flex items-center gap-2">
           <div className="w-6 h-6 rounded-lg flex items-center justify-center">
-            <Icon name="icon-chat" size={18} bounce={streaming} />
+            <Icon name="icon-chat" size={18} bounce={streaming} className="gm-ai-chat-icon" />
           </div>
           <span className="text-body font-bold text-gm-text">
             AI 助手
@@ -219,20 +298,13 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
                 {loadingHistory ? '加载中...' : '加载历史记录'}
               </button>
             )}
-            <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4 animate-float">
-              <Icon name="icon-chat" size={38} bounce />
+            <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4">
+              <Icon name="icon-chat" size={38} />
             </div>
             <p className="text-body font-bold text-gm-text mb-1">开始对话</p>
             <p className="text-caption text-gm-text-secondary text-center leading-relaxed">
               选择文档中的文字，或直接提问
             </p>
-            <Divider type="line-brown" className="my-4 w-16 opacity-40" />
-            <div className="flex flex-wrap gap-2 justify-center">
-              <SuggestionChip label="总结这篇文档" onClick={(l) => setDraftInput(l)} />
-              <SuggestionChip label="搜索知识库" onClick={(l) => setDraftInput(l)} />
-              <SuggestionChip label="解释这段代码" onClick={(l) => setDraftInput(l)} />
-              <SuggestionChip label="网上搜索最新资讯" onClick={(l) => setDraftInput(l)} />
-            </div>
           </div>
         ) : (
           <div className="p-4 space-y-4">
@@ -249,12 +321,17 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
             )}
             {visibleMessages.map((msg, i) => {
               const prevMsg = i > 0 ? visibleMessages[i - 1] : null
+              const messageKey = msg.id || `${msg.role}-${msg.sessionId || 'live'}-${msg.timestamp || i}`
               // 历史会话之间的分隔线
               const showSessionDivider = Boolean(msg.sessionId && msg.sessionId !== prevMsg?.sessionId)
               // 历史消息 → 当前消息的分隔线
               const showHistoryBoundary = !msg.sessionId && prevMsg?.sessionId
               return (
-              <div key={msg.id || `${msg.role}-${msg.sessionId || 'live'}-${msg.timestamp || i}`}>
+              <div
+                key={messageKey}
+                data-chat-message-id={messageKey}
+                data-chat-streaming={msg.role === 'assistant' && i === visibleMessages.length - 1 && streaming ? 'true' : undefined}
+              >
                 {showSessionDivider && (
                   <SessionDivider title={msg.sessionTitle} timestamp={msg.timestamp} sessionId={msg.sessionId} onDelete={handleDeleteSession} />
                 )}
@@ -434,19 +511,6 @@ function AgentTimeline({ timeline }: { timeline: TimelineItem[] }) {
   )
 }
 
-function SuggestionChip({ label, onClick }: { label: string; onClick?: (label: string) => void }) {
-  return (
-    <Button
-      type="default"
-      size="small"
-      onClick={() => onClick?.(label)}
-      className="rounded-full"
-    >
-      {label}
-    </Button>
-  )
-}
-
 const ChatBubble = memo(function ChatBubble({
   role,
   content,
@@ -464,12 +528,13 @@ const ChatBubble = memo(function ChatBubble({
 }) {
   const isUser = role === 'user'
   const isEmpty = !content && isLast && streaming
+  const isAssistantStreaming = !isUser && isLast && streaming
 
   return (
     <div className={`flex min-w-0 ${isUser ? 'justify-end' : 'justify-start'} animate-slideInUp`}>
       {!isUser && (
         <div className="w-8 h-8 rounded-xl bg-gm-primary-subtle flex items-center justify-center mr-2 flex-shrink-0 mt-1">
-          <Icon name="icon-chat" size={20} bounce={isEmpty} />
+          <Icon name="icon-chat" size={20} bounce={isEmpty} className="gm-ai-chat-icon" />
         </div>
       )}
       <div
@@ -477,17 +542,20 @@ const ChatBubble = memo(function ChatBubble({
           isUser
             ? 'rounded-br-md'
             : 'bg-gm-surface-elevated text-gm-text border border-gm-border rounded-bl-md'
-        }`}
+        } ${isAssistantStreaming ? 'gm-streaming-bubble' : ''}`}
         style={isUser ? { backgroundColor: 'var(--gm-user-bubble-bg)', color: 'var(--gm-user-bubble-text)' } : undefined}
       >
         {isEmpty ? (
-          <div className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-gm-primary animate-pulse" style={{ animationDelay: '0ms' }} />
-            <span className="w-2 h-2 rounded-full bg-gm-primary animate-pulse" style={{ animationDelay: '150ms' }} />
-            <span className="w-2 h-2 rounded-full bg-gm-primary animate-pulse" style={{ animationDelay: '300ms' }} />
+          <div className="gm-typing-loader" aria-label="正在生成">
+            <span style={{ animationDelay: '0ms' }} />
+            <span style={{ animationDelay: '140ms' }} />
+            <span style={{ animationDelay: '280ms' }} />
           </div>
         ) : isUser || (isLast && streaming) ? (
-          <div className="whitespace-pre-wrap overflow-wrap-anywhere" style={{ wordBreak: 'normal' }}>{content}</div>
+          <div className={`whitespace-pre-wrap overflow-wrap-anywhere ${isAssistantStreaming ? 'gm-streaming-text' : ''}`} style={{ wordBreak: 'normal' }}>
+            <span>{content}</span>
+            {isAssistantStreaming && <span className="gm-streaming-caret" aria-hidden="true" />}
+          </div>
         ) : (
           <AssistantMarkdown content={content} />
         )}

@@ -142,15 +142,15 @@ export function ManualToolToggle({ onChange, disabled = false, resetKey }: Manua
               className={`
                 !px-2 !py-1 !h-7 !text-micro !font-medium
                 ${isSelected
-                  ? '!translate-y-[2px] !shadow-[0_1px_0_0_#bdaea0] !text-gm-primary'
+                  ? '!translate-y-[2px] !text-gm-text-on-primary'
                   : ''
                 }
                 ${!isEnabled ? '!opacity-50 !cursor-not-allowed' : ''}
               `}
               style={isSelected ? {
                 transform: 'translateY(2px)',
-                boxShadow: '0 1px 0 0 #bdaea0',
-                color: 'var(--gm-primary)',
+                boxShadow: '0 1px 0 0 var(--animal-button-primary-shadow)',
+                color: 'var(--animal-button-primary-text)',
               } : undefined}
             >
               {option.label}

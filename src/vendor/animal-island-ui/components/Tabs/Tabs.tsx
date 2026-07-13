@@ -48,7 +48,7 @@ export const Tabs: React.FC<TabsProps> = ({
 
     return (
         <div className={cls} style={style}>
-            <div className={styles.tabList}>
+            <div className={styles.tabList} role="tablist">
                 {items.map((item) => {
                     const isActive = item.key === currentActiveKey;
                     return (
@@ -56,6 +56,8 @@ export const Tabs: React.FC<TabsProps> = ({
                             key={item.key}
                             className={`${styles.tabItem} ${isActive ? styles.active : ''} ${isActive && shadow ? styles['active-shadow'] : ''}`}
                             onClick={() => handleTabClick(item.key)}
+                            role="tab"
+                            aria-selected={isActive}
                         >
                             <span className={styles.tabIcon}>
                                 {isActive ? '●' : '○'}

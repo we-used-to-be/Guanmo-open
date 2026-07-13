@@ -11,41 +11,41 @@
   align-items: center;
   justify-content: space-between;
   padding: 8px 13px;
-  background: #fff;
-  border: 2px solid #e8dcc8;
+  background: var(--animal-select-trigger-bg, #fff);
+  border: 2px solid var(--animal-select-trigger-border, #e8dcc8);
   border-radius: 12px;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 .trigger:hover {
-  border-color: #d4c4a8;
-  background: #fffdf7;
+  border-color: var(--animal-select-trigger-hover-border, #d4c4a8);
+  background: var(--animal-select-trigger-hover-bg, #fffdf7);
 }
 .trigger.open {
-  background: #fff;
+  background: var(--animal-select-trigger-bg, #fff);
   border-radius: 12px;
 }
 .value {
   font-size: 14px;
-  color: #725d42;
+  color: var(--animal-text-color, #725d42);
   font-weight: 600;
 }
 .placeholder {
   font-size: 14px;
-  color: #a09080;
+  color: var(--animal-text-color-muted, #a09080);
 }
 .arrow {
-  color: #a09080;
+  color: var(--animal-text-color-muted, #a09080);
   transition: transform 0.2s ease;
   display: flex;
   align-items: center;
 }
 .trigger.open .arrow {
   transform: rotate(180deg);
-  color: #19c8b9;
+  color: var(--animal-primary-color, #19c8b9);
 }
 .dropdown {
-  background: #FFEEA0;
+  background: var(--animal-select-dropdown-bg, #FFEEA0);
   border-radius: 28px;
   overflow: hidden;
   padding: 12px 0px;
@@ -85,7 +85,7 @@
   padding: 10px 14px;
   font-size: 14px;
   font-weight: 500;
-  color: #725d42;
+  color: var(--animal-text-color, #725d42);
   cursor: pointer;
   position: relative;
   white-space: nowrap;
@@ -134,7 +134,7 @@
   transform: translateY(-50%);
   height: 14px;
   margin: 0 20px;
-  background: #FFCC00;
+  background: var(--animal-select-pill-bg, #FFCC00);
   border-radius: 7px;
   z-index: -1;
   opacity: 0.3;
@@ -146,5 +146,5 @@
 .disabled .trigger {
   opacity: 0.5;
   cursor: not-allowed;
-  background: #f5f5f0;
+  background: var(--animal-select-disabled-bg, #f5f5f0);
 }

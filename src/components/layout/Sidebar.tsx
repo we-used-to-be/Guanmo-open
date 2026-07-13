@@ -4,12 +4,12 @@ import { useEditorStore } from '@/stores/editorStore'
 import { isTauri } from '@/hooks/useTauri'
 import { openFile } from '@/services/fileSystem'
 import { pickDirectory } from '@/services/fileSystem'
-import { isWorkspaceDisplayFile, getFileIcon } from '@/services/fileTree'
+import { isWorkspaceDisplayFile } from '@/services/fileTree'
 import { indexMarkdownDocument, indexWorkspaceMarkdown, scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { toast } from '@/services/toast'
 import { Button, Collapse, Divider } from 'animal-island-ui'
-import { FileTree, RecentFiles, FileIconSVG } from '@/components/file-tree/FileTree'
+import { FileTree, RecentFiles } from '@/components/file-tree/FileTree'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { addFileContextTag } from '@/services/aiContext'
 import { useChatStore } from '@/stores/chatStore'
@@ -559,9 +559,6 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
                   : 'text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover'
             }`}
           >
-            <span className={isMissing ? 'opacity-45 grayscale' : ''}>
-              <FileIconSVG icon={getFileIcon(file.name, 'file')} expanded={false} />
-            </span>
             {renamingPath === file.path ? (
               <input
                 autoFocus

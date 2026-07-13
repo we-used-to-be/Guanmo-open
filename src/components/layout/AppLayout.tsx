@@ -157,10 +157,6 @@ export function AppLayout() {
     setFullscreenFileDrawerOpen(false)
   }, [])
 
-  const handleFullscreenFileSelected = useCallback(() => {
-    setFullscreenFileDrawerOpen(false)
-  }, [])
-
   const handleExportHtml = useCallback(async () => {
     const state = useEditorStore.getState()
     const tab = state.tabs.find((t) => t.id === state.activeTabId)
@@ -301,7 +297,6 @@ export function AppLayout() {
           open={fullscreenFileDrawerOpen}
           onClose={closeFullscreenFileDrawer}
           onOpenSearch={handleOpenSearch}
-          onFileSelected={handleFullscreenFileSelected}
         />
       )}
 
@@ -351,7 +346,7 @@ export function AppLayout() {
         typewriter={false}
         cursor={customCursorEnabled}
       >
-        <div className={customCursorEnabled ? undefined : 'gm-system-cursor'} style={{ width: '100%', height: '560px', overflow: 'hidden', padding: '32px 36px', minHeight: 0 }}>
+        <div className={customCursorEnabled ? undefined : 'gm-system-cursor'} style={{ width: '100%', height: '560px', overflow: 'hidden', padding: '10px 14px', minHeight: 0 }}>
           <SettingsPage />
         </div>
       </Modal>
@@ -360,7 +355,7 @@ export function AppLayout() {
       <style>{`
         ::highlight(search-highlight) { background-color: rgba(251, 191, 36, 0.35); }
         ::highlight(search-highlight-active) { background-color: rgba(251, 191, 36, 0.7); }
-        ::highlight(preview-context-selection) { background-color: rgba(25, 200, 185, 0.28); }
+        ::highlight(preview-context-selection) { background-color: rgba(58, 175, 164, 0.28); }
       `}</style>
     </div>
   )

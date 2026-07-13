@@ -34,8 +34,8 @@ interface AppState {
 export const useAppStore = create<AppState>()(
   persist(
     (set) => ({
-      sidebarCollapsed: false,
-      aiPanelOpen: true,
+      sidebarCollapsed: true,
+      aiPanelOpen: false,
       sidebarWidth: 260,
       aiPanelWidth: 360,
       workspacePath: null,
@@ -53,11 +53,15 @@ export const useAppStore = create<AppState>()(
     {
       name: 'guanmo-app',
       partialize: (state) => ({
-        sidebarCollapsed: state.sidebarCollapsed,
-        aiPanelOpen: state.aiPanelOpen,
         sidebarWidth: state.sidebarWidth,
         aiPanelWidth: state.aiPanelWidth,
         workspacePath: state.workspacePath,
+      }),
+      merge: (persistedState, currentState) => ({
+        ...currentState,
+        ...(persistedState as Partial<AppState>),
+        sidebarCollapsed: true,
+        aiPanelOpen: false,
       }),
     }
   )

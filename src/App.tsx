@@ -113,11 +113,12 @@ function App() {
   const [appReady, setAppReady] = useState(false)
   const customCursorEnabled = useSettingsStore((s) => s.appearance.customCursorEnabled)
   const theme = useSettingsStore((s) => s.appearance.theme)
+  const lightPalette = useSettingsStore((s) => s.appearance.lightPalette)
   useExternalFileOpen(appReady)
 
   useLayoutEffect(() => {
-    syncDocumentTheme(theme)
-  }, [theme])
+    syncDocumentTheme(theme, lightPalette)
+  }, [lightPalette, theme])
 
   // 禁用浏览器默认右键菜单
   useEffect(() => {
