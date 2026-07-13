@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
-import { dirnamePath, isTauri, joinPath, readBinaryFile, saveFileDialog, writeFile } from '@/hooks/useTauri'
+import { authorizeSelectedPath, dirnamePath, isTauri, joinPath, readBinaryFile, saveFileDialog, writeFile } from '@/hooks/useTauri'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { normalizeLatexBlockDelimiters, remarkStandaloneDisplayMath } from '@/services/markdownMath'
 
@@ -67,6 +67,7 @@ export function buildMarkdownHtml(markdown: string, title: string): string {
     main { max-width: 860px; margin: 0 auto; padding: 48px 28px; background: #fffdf8; min-height: 100vh; }
     h1, h2, h3, h4 { color: #4f3520; line-height: 1.35; margin-top: 1.8em; }
     h1 { border-bottom: 1px solid #e8e2d6; padding-bottom: 12px; }
+    p, li { white-space: pre-wrap; overflow-wrap: anywhere; }
     a { color: #128b82; }
     code { background: #f0e8d8; border-radius: 6px; padding: 2px 5px; }
     pre { overflow-x: auto; border: 1px solid #e8e2d6; border-radius: 12px; background: #f8f3e9; padding: 16px; }
@@ -231,10 +232,11 @@ async function buildExportHtml(markdown: string, title: string, sourcePath?: str
 
   await Promise.all(Array.from(document.querySelectorAll('img')).map(async (image) => {
     const src = image.getAttribute('src')?.trim()
-    if (!src || /^(https?:|data:|blob:|asset:)/i.test(src) || src.startsWith('#')) return
+    if (!src || /^(https?:|data:|blob:)/i.test(src) || src.startsWith('#')) return
 
     try {
       const path = await resolveExportImagePath(src, sourceDir)
+      await authorizeSelectedPath(path)
       const bytes = await readBinaryFile(path)
       image.setAttribute('src', bytesToDataUrl(bytes, mimeTypeForImage(path)))
     } catch {
@@ -256,6 +258,10 @@ async function resolveExportImagePath(src: string, sourceDir: string): Promise<s
     const pathname = decodeURIComponent(url.pathname)
     if (url.host) return `\\\\${url.host}${pathname.replace(/\//g, '\\')}`
     return pathname.replace(/^\/([a-zA-Z]:\/)/, '$1')
+  }
+  if (/^asset:/i.test(cleanSrc)) {
+    const url = new URL(cleanSrc)
+    return decodeURIComponent(url.pathname).replace(/^\/([a-zA-Z]:\/)/, '$1')
   }
   if (/^[a-zA-Z]:[\\/]/.test(cleanSrc) || /^\\\\/.test(cleanSrc) || /^\/\//.test(cleanSrc)) {
     return cleanSrc

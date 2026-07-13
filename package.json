@@ -28,6 +28,7 @@
                     "build":  "tsc -b \u0026\u0026 vite build",
                     "test:agent-parser":  "node scripts/run-agent-parser-check.mjs",
                     "test:markdown-math":  "node scripts/run-markdown-math-check.mjs",
+                    "test:markdown-export":  "node scripts/run-markdown-export-check.mjs",
                     "check:paths":  "node scripts/check-paths.mjs",
                     "preview":  "vite preview",
                     "tauri":  "tauri"
