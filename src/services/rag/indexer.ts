@@ -1,7 +1,7 @@
 import { readFile, joinPath } from '@/hooks/useTauri'
 import { listDirectory } from '@/services/fileSystem'
 import { shouldSkipWorkspaceDirectory } from '@/services/fileTree'
-import { enqueueEmbeddingJob, ingestDocument, processEmbeddingQueue } from './pipeline'
+import { ingestDocument, processEmbeddingQueue, runSerializedDocumentOperation } from './pipeline'
 import { vectorStore } from './vectorStore'
 import { isEmbeddingReady } from '@/services/ai/aiClient'
 
@@ -36,17 +36,34 @@ export function indexMarkdownDocument(
   content: string
 ): boolean {
   if (!filePath || !isMarkdownPath(filePath)) return false
-  const doc = ingestDocument(filePath, title || getName(filePath), content)
-  if (!doc) return false
-  enqueueEmbeddingJob(doc)
-    .then(async () => {
-      await vectorStore.flushPersistence()
-      if (isEmbeddingReady()) {
-        processEmbeddingQueue().catch((err) => console.warn('[RAG] background embedding failed:', err))
-      }
-    })
-    .catch((err) => console.warn('[RAG] enqueue embedding job failed:', err))
+  performMarkdownDocumentIndex(filePath, title, content).catch((err) =>
+    console.warn('[RAG] document index failed, previous index preserved:', err)
+  )
   return true
+}
+
+async function performMarkdownDocumentIndex(
+  filePath: string,
+  title: string,
+  content: string,
+): Promise<boolean> {
+  const indexed = await runSerializedDocumentOperation(filePath, async () => {
+    const result = await ingestDocument(filePath, title || getName(filePath), content)
+    if (!result) return false
+    const { document, stats, unchanged } = result
+    if (!unchanged) {
+      const needsEmbedding = document.chunks.some((chunk) => !chunk.embedding)
+      await vectorStore.replaceDocument(document, needsEmbedding)
+    }
+    console.info(
+      `[RAG] index ${filePath}: total=${stats.total}, reused=${stats.reused}, added=${stats.added}, deleted=${stats.deleted}, reembedded=${stats.reembedded}`
+    )
+    return true
+  })
+  if (indexed && isEmbeddingReady()) {
+    processEmbeddingQueue().catch((err) => console.warn('[RAG] background embedding failed:', err))
+  }
+  return indexed
 }
 
 export function scheduleMarkdownDocumentIndex(
@@ -117,7 +134,7 @@ export async function indexWorkspaceMarkdown(
 
       try {
         const content = await readFile(fullPath)
-        if (indexMarkdownDocument(fullPath, entry.name, content)) {
+        if (await performMarkdownDocumentIndex(fullPath, entry.name, content)) {
           result.indexed++
         } else {
           result.skipped++

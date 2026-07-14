@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS documents (
   file_path TEXT UNIQUE NOT NULL,
   title TEXT NOT NULL,
   content TEXT NOT NULL,
+  content_hash TEXT,
   last_modified INTEGER NOT NULL,
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
@@ -35,6 +36,9 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE TABLE IF NOT EXISTS embeddings (
   chunk_id TEXT PRIMARY KEY,
   embedding BLOB NOT NULL,
+  embedding_model TEXT,
+  preprocess_version TEXT,
+  input_hash TEXT,
   FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE
 );
 
@@ -112,6 +116,26 @@ CREATE INDEX IF NOT EXISTS idx_embedding_jobs_status ON embedding_jobs(status);
 `
 
 export const DB_MIGRATIONS = [
+  {
+    table: 'documents',
+    column: 'content_hash',
+    sql: 'ALTER TABLE documents ADD COLUMN content_hash TEXT',
+  },
+  {
+    table: 'embeddings',
+    column: 'embedding_model',
+    sql: 'ALTER TABLE embeddings ADD COLUMN embedding_model TEXT',
+  },
+  {
+    table: 'embeddings',
+    column: 'preprocess_version',
+    sql: 'ALTER TABLE embeddings ADD COLUMN preprocess_version TEXT',
+  },
+  {
+    table: 'embeddings',
+    column: 'input_hash',
+    sql: 'ALTER TABLE embeddings ADD COLUMN input_hash TEXT',
+  },
   ...[
     ['scope_type', "ALTER TABLE memories ADD COLUMN scope_type TEXT NOT NULL DEFAULT 'global'"],
     ['scope_key', 'ALTER TABLE memories ADD COLUMN scope_key TEXT'],

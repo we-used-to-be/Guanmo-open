@@ -70,6 +70,25 @@ class VectorStore {
   }
 
   addDocument(doc: Document): void {
+    this.storeDocument(doc)
+    // Persist in background (non-blocking)
+    if (this._persistenceEnabled) {
+      this.trackPersistence(
+        persistDocument(doc).catch((err) =>
+          console.warn('[VectorStore] persist failed:', err)
+        )
+      )
+    }
+  }
+
+  async replaceDocument(doc: Document, enqueueEmbeddingJob: boolean): Promise<void> {
+    if (this._persistenceEnabled) {
+      await persistDocument(doc, { enqueueEmbeddingJob })
+    }
+    this.storeDocument(doc)
+  }
+
+  private storeDocument(doc: Document): void {
     const existing = this.findByFilePath(doc.filePath)
     if (existing && existing.id !== doc.id) {
       for (const chunk of existing.chunks) {
@@ -81,14 +100,6 @@ class VectorStore {
     for (const chunk of doc.chunks) {
       chunk.contentHash = chunk.contentHash || createContentHash(chunk.content)
       this.chunks.set(chunk.id, chunk)
-    }
-    // Persist in background (non-blocking)
-    if (this._persistenceEnabled) {
-      this.trackPersistence(
-        persistDocument(doc).catch((err) =>
-          console.warn('[VectorStore] persist failed:', err)
-        )
-      )
     }
   }
 
@@ -375,9 +386,9 @@ class VectorStore {
     if (chunk) {
       chunk.embedding = embedding
     }
-    if (this._persistenceEnabled) {
+    if (chunk && this._persistenceEnabled) {
       this.trackPersistence(
-        persistEmbedding(chunkId, embedding).catch((err) =>
+        persistEmbedding(chunk).catch((err) =>
           console.warn('[VectorStore] persist embedding failed:', err)
         )
       )

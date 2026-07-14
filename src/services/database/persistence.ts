@@ -3,7 +3,7 @@
  * Syncs documents, chunks, and embeddings to/from the database.
  */
 
-import { getDatabase, isDatabaseReady } from './db'
+import { getDatabase, isDatabaseReady, serializeDatabaseTransaction } from './db'
 import type { Document, Chunk } from '@/services/rag/types'
 
 interface DocumentRow {
@@ -11,6 +11,7 @@ interface DocumentRow {
   file_path: string
   title: string
   content: string
+  content_hash?: string | null
   last_modified: number
 }
 
@@ -32,6 +33,9 @@ interface ChunkRow {
 interface EmbeddingRow {
   chunk_id: string
   embedding: string
+  embedding_model?: string | null
+  preprocess_version?: string | null
+  input_hash?: string | null
 }
 
 export type EmbeddingJobStatus = 'pending' | 'running' | 'done' | 'failed'
@@ -59,71 +63,122 @@ export interface BackupPayload {
 /**
  * Save a document and its chunks/embeddings to the database.
  */
-export async function persistDocument(doc: Document): Promise<void> {
+export async function persistDocument(
+  doc: Document,
+  options: { enqueueEmbeddingJob?: boolean } = {},
+): Promise<void> {
   if (!isDatabaseReady()) return
-  const db = getDatabase()
-
-  const existingRows = await db.select<{ id: string }>(
-    'SELECT id FROM documents WHERE file_path = $1 OR id = $2',
-    [doc.filePath, doc.id]
-  )
-  for (const row of existingRows) {
-    await db.execute(
-      'DELETE FROM embeddings WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = $1)',
-      [row.id]
-    )
-    await db.execute('DELETE FROM chunks WHERE document_id = $1', [row.id])
-    if (row.id !== doc.id) {
-      await db.execute('DELETE FROM documents WHERE id = $1', [row.id])
-    }
-  }
-
-  // Upsert document
-  await db.execute(
-    `INSERT OR REPLACE INTO documents (id, file_path, title, content, last_modified, created_at)
-     VALUES ($1, $2, $3, $4, $5, COALESCE((SELECT created_at FROM documents WHERE id = $1), unixepoch()))`,
-    [doc.id, doc.filePath, doc.title, doc.content, doc.lastModified]
-  )
-
-  const now = Date.now()
-
-  // Insert chunks
-  for (const chunk of doc.chunks) {
-    await db.execute(
-      `INSERT OR REPLACE INTO chunks (
-        id, document_id, content, content_hash, chunk_index, start_line, end_line,
-        title_path, heading, source_type, created_at, updated_at
+  await serializeDatabaseTransaction(async () => {
+    const db = getDatabase()
+    await db.execute('BEGIN')
+    try {
+    const [byPath, byId, existingChunks] = await Promise.all([
+      db.select<{ id: string }>('SELECT id FROM documents WHERE file_path = $1', [doc.filePath]),
+      db.select<{ id: string }>('SELECT id FROM documents WHERE id = $1', [doc.id]),
+      db.select<{ id: string }>('SELECT id FROM chunks WHERE document_id = $1', [doc.id]),
+    ])
+    const conflictingIds = new Set([...byPath, ...byId].map((row) => row.id))
+    conflictingIds.delete(doc.id)
+    for (const id of conflictingIds) {
+      const conflictingChunks = await db.select<{ id: string }>(
+        'SELECT id FROM chunks WHERE document_id = $1',
+        [id]
       )
-       VALUES (
-        $1, $2, $3, $4, $5, $6, $7,
-        $8, $9, $10,
-        COALESCE((SELECT created_at FROM chunks WHERE id = $1), $11),
-        $12
-      )`,
-      [
-        chunk.id,
-        doc.id,
-        chunk.content,
-        chunk.contentHash || null,
-        chunk.index,
-        chunk.startLine,
-        chunk.endLine,
-        chunk.titlePath ? JSON.stringify(chunk.titlePath) : null,
-        chunk.heading || null,
-        chunk.sourceType || 'markdown',
-        chunk.createdAt || now,
-        chunk.updatedAt || now,
-      ]
+      for (const chunk of conflictingChunks) {
+        await db.execute('DELETE FROM embeddings WHERE chunk_id = $1', [chunk.id])
+        await db.execute('DELETE FROM chunks WHERE id = $1', [chunk.id])
+      }
+      await db.execute('DELETE FROM documents WHERE id = $1', [id])
+    }
+
+    await db.execute(
+      `INSERT INTO documents (id, file_path, title, content, content_hash, last_modified, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, COALESCE((SELECT created_at FROM documents WHERE id = $1), unixepoch()))
+       ON CONFLICT(id) DO UPDATE SET
+         file_path = excluded.file_path,
+         title = excluded.title,
+         content = excluded.content,
+         content_hash = excluded.content_hash,
+         last_modified = excluded.last_modified`,
+      [doc.id, doc.filePath, doc.title, doc.content, doc.contentHash || null, doc.lastModified]
     )
 
-    // Persist embedding as JSON blob
-    if (chunk.embedding) {
+    const nextIds = new Set(doc.chunks.map((chunk) => chunk.id))
+    for (const row of existingChunks) {
+      if (!nextIds.has(row.id)) {
+        await db.execute('DELETE FROM embeddings WHERE chunk_id = $1', [row.id])
+        await db.execute('DELETE FROM chunks WHERE id = $1', [row.id])
+      }
+    }
+
+    const now = Date.now()
+    for (const chunk of doc.chunks) {
       await db.execute(
-        `INSERT OR REPLACE INTO embeddings (chunk_id, embedding) VALUES ($1, $2)`,
-        [chunk.id, JSON.stringify(chunk.embedding)]
+        `INSERT INTO chunks (
+          id, document_id, content, content_hash, chunk_index, start_line, end_line,
+          title_path, heading, source_type, created_at, updated_at
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7,
+          $8, $9, $10,
+          COALESCE((SELECT created_at FROM chunks WHERE id = $1), $11),
+          $12
+        ) ON CONFLICT(id) DO UPDATE SET
+          document_id = excluded.document_id,
+          content = excluded.content,
+          content_hash = excluded.content_hash,
+          chunk_index = excluded.chunk_index,
+          start_line = excluded.start_line,
+          end_line = excluded.end_line,
+          title_path = excluded.title_path,
+          heading = excluded.heading,
+          source_type = excluded.source_type,
+          updated_at = excluded.updated_at`,
+        [
+          chunk.id, doc.id, chunk.content, chunk.contentHash || null, chunk.index,
+          chunk.startLine, chunk.endLine,
+          chunk.titlePath ? JSON.stringify(chunk.titlePath) : null,
+          chunk.heading || null, chunk.sourceType || 'markdown',
+          chunk.createdAt || now, chunk.updatedAt || now,
+        ]
       )
+
+      if (chunk.embedding) {
+        await db.execute(
+          `INSERT INTO embeddings (
+            chunk_id, embedding, embedding_model, preprocess_version, input_hash
+          ) VALUES ($1, $2, $3, $4, $5)
+          ON CONFLICT(chunk_id) DO UPDATE SET
+            embedding = excluded.embedding,
+            embedding_model = excluded.embedding_model,
+            preprocess_version = excluded.preprocess_version,
+            input_hash = excluded.input_hash`,
+          [
+            chunk.id, JSON.stringify(chunk.embedding), chunk.embeddingModel || null,
+            chunk.embeddingPreprocessVersion || null, chunk.embeddingInputHash || null,
+          ]
+        )
+      } else {
+        await db.execute('DELETE FROM embeddings WHERE chunk_id = $1', [chunk.id])
+      }
     }
-  }
+
+    if (options.enqueueEmbeddingJob !== undefined) {
+      await db.execute('DELETE FROM embedding_jobs WHERE file_path = $1', [doc.filePath])
+      if (options.enqueueEmbeddingJob) {
+        await db.execute(
+          `INSERT INTO embedding_jobs
+            (id, document_id, file_path, status, error, retry_count, created_at, updated_at)
+           VALUES ($1, $2, $3, 'pending', NULL, 0, unixepoch(), unixepoch())`,
+          [`job-${doc.id}`, doc.id, doc.filePath]
+        )
+      }
+    }
+      await db.execute('COMMIT')
+    } catch (error) {
+      await db.execute('ROLLBACK')
+      throw error
+    }
+  })
 }
 
 /**
@@ -168,6 +223,7 @@ export async function loadAllDocuments(): Promise<Document[]> {
       filePath: row.file_path,
       title: row.title,
       content: row.content,
+      contentHash: row.content_hash || undefined,
       lastModified: row.last_modified,
       chunks,
     })
@@ -188,9 +244,7 @@ export async function loadAllDocumentsBulk(): Promise<Document[]> {
     db.select<EmbeddingRow>('SELECT * FROM embeddings'),
   ])
 
-  const embeddingByChunkId = new Map(
-    embeddingRows.map((row) => [row.chunk_id, row.embedding])
-  )
+  const embeddingByChunkId = new Map(embeddingRows.map((row) => [row.chunk_id, row]))
   const chunksByDocumentId = new Map<string, Chunk[]>()
 
   for (const row of chunkRows) {
@@ -212,6 +266,7 @@ export async function loadAllDocumentsBulk(): Promise<Document[]> {
     filePath: row.file_path,
     title: row.title,
     content: row.content,
+    contentHash: row.content_hash || undefined,
     lastModified: row.last_modified,
     chunks: chunksByDocumentId.get(row.id) || [],
   }))
@@ -241,16 +296,16 @@ async function loadChunksForDocument(docId: string): Promise<Chunk[]> {
       'SELECT * FROM embeddings WHERE chunk_id = $1',
       [row.id]
     )
-    chunks.push(mapChunkRow(row, embRows[0]?.embedding))
+    chunks.push(mapChunkRow(row, embRows[0]))
   }
   return chunks
 }
 
-function mapChunkRow(row: ChunkRow, serializedEmbedding?: string): Chunk {
+function mapChunkRow(row: ChunkRow, embeddingRow?: EmbeddingRow): Chunk {
   let embedding: number[] | undefined
-  if (serializedEmbedding) {
+  if (embeddingRow?.embedding) {
     try {
-      embedding = JSON.parse(serializedEmbedding)
+      embedding = JSON.parse(embeddingRow.embedding)
     } catch {
       console.warn(`Failed to parse embedding for chunk ${row.id}`)
     }
@@ -273,6 +328,9 @@ function mapChunkRow(row: ChunkRow, serializedEmbedding?: string): Chunk {
     documentId: row.document_id,
     content: row.content,
     contentHash: row.content_hash || undefined,
+    embeddingInputHash: embeddingRow?.input_hash || undefined,
+    embeddingModel: embeddingRow?.embedding_model || null,
+    embeddingPreprocessVersion: embeddingRow?.preprocess_version || null,
     index: row.chunk_index,
     startLine: row.start_line,
     endLine: row.end_line,
@@ -288,12 +346,17 @@ function mapChunkRow(row: ChunkRow, serializedEmbedding?: string): Chunk {
 /**
  * Persist a single embedding update.
  */
-export async function persistEmbedding(chunkId: string, embedding: number[]): Promise<void> {
+export async function persistEmbedding(chunk: Chunk): Promise<void> {
   if (!isDatabaseReady()) return
   const db = getDatabase()
   await db.execute(
-    'INSERT OR REPLACE INTO embeddings (chunk_id, embedding) VALUES ($1, $2)',
-    [chunkId, JSON.stringify(embedding)]
+    `INSERT OR REPLACE INTO embeddings
+      (chunk_id, embedding, embedding_model, preprocess_version, input_hash)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [
+      chunk.id, JSON.stringify(chunk.embedding), chunk.embeddingModel || null,
+      chunk.embeddingPreprocessVersion || null, chunk.embeddingInputHash || null,
+    ]
   )
 }
 
@@ -514,9 +577,10 @@ export async function confirmMemoryCandidate(id: string): Promise<boolean> {
   if (!isDatabaseReady()) return false
   const candidate = (await loadAllMemories(undefined, ['candidate'])).find((memory) => memory.id === id)
   if (!candidate) return false
-  const db = getDatabase()
-  await db.execute('BEGIN')
-  try {
+  return serializeDatabaseTransaction(async () => {
+    const db = getDatabase()
+    await db.execute('BEGIN')
+    try {
     if (candidate.supersedesId) {
       await db.execute(
         `UPDATE memories SET status = 'superseded', updated_at = unixepoch() * 1000
@@ -531,11 +595,12 @@ export async function confirmMemoryCandidate(id: string): Promise<boolean> {
       [id]
     )
     await db.execute('COMMIT')
-    return result.rowsAffected > 0
-  } catch (error) {
-    await db.execute('ROLLBACK')
-    throw error
-  }
+      return result.rowsAffected > 0
+    } catch (error) {
+      await db.execute('ROLLBACK')
+      throw error
+    }
+  })
 }
 
 function safeParseEmbedding(value: string): number[] | null {

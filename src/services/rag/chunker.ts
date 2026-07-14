@@ -12,14 +12,10 @@ export function chunkMarkdown(
   _options: { chunkSize?: number; overlap?: number } = {}
 ): Chunk[] {
   const semanticChunks = buildSemanticDocumentChunks(content, true)
-  const seenHashes = new Set<string>()
   const now = Date.now()
-  return semanticChunks.flatMap((chunk) => {
+  return semanticChunks.map((chunk, index) => {
     const contentHash = createContentHash(chunk.content)
-    if (seenHashes.has(contentHash)) return []
-    seenHashes.add(contentHash)
-    const index = seenHashes.size - 1
-    return [{
+    return {
       id: `${documentId}-chunk-${index}`,
       documentId,
       content: chunk.content,
@@ -32,6 +28,6 @@ export function chunkMarkdown(
       sourceType: 'markdown' as const,
       createdAt: now,
       updatedAt: now,
-    }]
+    }
   })
 }

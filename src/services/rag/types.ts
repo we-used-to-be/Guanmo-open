@@ -5,6 +5,9 @@ export interface Chunk {
   documentId: string
   content: string
   contentHash?: string
+  embeddingInputHash?: string
+  embeddingModel?: string | null
+  embeddingPreprocessVersion?: string | null
   index: number
   startLine: number
   endLine: number
@@ -21,6 +24,7 @@ export interface Document {
   filePath: string
   title: string
   content: string
+  contentHash?: string
   lastModified: number
   chunks: Chunk[]
 }

@@ -427,6 +427,19 @@ class IndexedDBAdapter implements DBAdapter {
 // --- Module state ---
 
 let db: DBAdapter | null = null
+let transactionTail: Promise<void> = Promise.resolve()
+
+export async function serializeDatabaseTransaction<T>(operation: () => Promise<T>): Promise<T> {
+  const previous = transactionTail
+  let release!: () => void
+  transactionTail = new Promise<void>((resolve) => { release = resolve })
+  await previous.catch(() => undefined)
+  try {
+    return await operation()
+  } finally {
+    release()
+  }
+}
 
 export async function initDatabase(): Promise<void> {
   if (isTauri()) {
