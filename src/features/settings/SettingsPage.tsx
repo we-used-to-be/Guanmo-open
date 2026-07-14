@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Collapse, Divider, Footer, Icon, Input, Select, Switch, Table, Tabs } from 'animal-island-ui'
 import appIcon from '@/assets/icon.png'
 
@@ -34,6 +34,7 @@ import { useAppStore } from '@/stores/appStore'
 import { cleanupMissingWorkspaceDocuments, rebuildWorkspaceDocuments } from '@/services/workspaceIndex'
 import { exportDataBackup, importDataBackup } from '@/services/dataBackup'
 import { useChatStore } from '@/stores/chatStore'
+import { SettingSlider } from '@/components/common/SettingSlider'
 
 async function openUrl(url: string, external: boolean) {
   if (external) {
@@ -182,87 +183,23 @@ function SliderField({
   format?: (v: number) => string
   debounceMs?: number
 }) {
-  const precision = step < 1 ? (step.toString().split('.')[1]?.length ?? 1) : 0
-  const ticks: number[] = []
-  for (let t = min; t <= max + step * 0.5; t = +(t + step).toFixed(10)) {
-    ticks.push(+t.toFixed(precision))
-  }
-  const datalistId = `slider-${label}`
-
-  // Debounce: use local state for instant visual feedback, defer onChange until user stops dragging
-  const [localValue, setLocalValue] = useState(value)
-  const debounceRef = useRef<number | null>(null)
-  const draggingRef = useRef(false)
-
-  // Sync external value → local when not dragging (e.g. Ctrl+scroll wheel changes)
-  useEffect(() => {
-    if (!draggingRef.current) {
-      setLocalValue(value)
-    }
-  }, [value])
-
-  const displayValue = debounceMs ? localValue : value
-  const progress = Math.max(0, Math.min(100, ((displayValue - min) / (max - min)) * 100))
-  const sliderStyle = {
-    '--gm-setting-slider-thumb-position': `calc(${progress}% + ${9 - progress * 0.18}px)`,
-    '--gm-setting-slider-fill-width': `calc(${progress}% + ${18 - progress * 0.18}px)`,
-  } as CSSProperties
-
-  const commitValue = useCallback((v: number) => {
-    draggingRef.current = false
-    onChange(v)
-  }, [onChange])
-
-  const handleChange = useCallback((raw: number) => {
-    const v = +raw.toFixed(precision)
-    if (debounceMs) {
-      draggingRef.current = true
-      setLocalValue(v)
-      if (debounceRef.current !== null) window.clearTimeout(debounceRef.current)
-      debounceRef.current = window.setTimeout(() => commitValue(v), debounceMs)
-    } else {
-      onChange(v)
-    }
-  }, [debounceMs, precision, onChange, commitValue])
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (debounceRef.current !== null) window.clearTimeout(debounceRef.current)
-    }
-  }, [])
-
   return (
     <div className="gm-setting-field flex items-center justify-between py-1.5 min-h-[42px]">
       <div style={{ width: 260, flexShrink: 0 }}>
         <span className="text-body text-gm-text">{label}</span>
         {description && <p className="text-caption text-gm-text-tertiary mt-0.5">{description}</p>}
       </div>
-      <div className="gm-setting-control flex-1 flex items-center gap-3 min-w-0">
-        <div className="gm-setting-slider" style={sliderStyle}>
-          <div className="gm-setting-slider__track" aria-hidden="true">
-            <span className="gm-setting-slider__fill" />
-            <span className="gm-setting-slider__thumb" />
-          </div>
-          <input
-            type="range"
-            min={min}
-            max={max}
-            step={step}
-            value={displayValue}
-            list={datalistId}
-            aria-label={label}
-            onChange={(e) => handleChange(+parseFloat(e.target.value))}
-            className="gm-setting-slider__input"
-          />
-        </div>
-        <datalist id={datalistId}>
-          {ticks.map((t) => <option key={t} value={t} />)}
-        </datalist>
-        <span className="text-mono text-caption text-gm-text-secondary w-12 text-right tabular-nums">
-          {format ? format(displayValue) : displayValue}
-        </span>
-      </div>
+      <SettingSlider
+        label={label}
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        onChange={onChange}
+        format={format}
+        debounceMs={debounceMs}
+        className="gm-setting-control flex-1"
+      />
     </div>
   )
 }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { invoke } from '@tauri-apps/api/core'
 import { useEditorStore, type Tab } from '@/stores/editorStore'
 import { useAppStore } from '@/stores/appStore'
-import { useSettingsStore } from '@/stores/settingsStore'
+import { FULLSCREEN_CONTENT_PADDING, useSettingsStore } from '@/stores/settingsStore'
 import { useChatStore } from '@/stores/chatStore'
 import { addFileContextTag } from '@/services/aiContext'
 import { indexMarkdownDocument } from '@/services/rag/indexer'
@@ -12,6 +12,7 @@ import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { toast } from '@/services/toast'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { useFullscreen } from '@/hooks/useFullscreen'
+import { SettingSlider } from '@/components/common/SettingSlider'
 
 type ViewMode = 'edit' | 'preview' | 'edit-preview' | 'dual-preview' | 'diff-preview'
 
@@ -23,6 +24,7 @@ const MODES: Array<{ key: ViewMode; label: string }> = [
   { key: 'diff-preview', label: 'Diff' },
 ]
 const PANEL_CONTENT_REVEAL_DELAY = 190
+const FULLSCREEN_PADDING_DEBOUNCE_MS = 150
 
 interface FullscreenControlBarProps {
   fileDrawerOpen: boolean
@@ -47,6 +49,8 @@ export function FullscreenControlBar({
   const aiPanelOpen = useAppStore((s) => s.aiPanelOpen)
   const toggleAiPanel = useAppStore((s) => s.toggleAiPanel)
   const theme = useSettingsStore((s) => s.appearance.theme)
+  const fullscreenContentPadding = useSettingsStore((s) => s.editor.fullscreenContentPadding)
+  const updateEditorSettings = useSettingsStore((s) => s.updateEditorSettings)
   const { exitFullscreen } = useFullscreen()
   const [visible, setVisible] = useState(false)
   const [tabMode, setTabMode] = useState(false)
@@ -55,6 +59,7 @@ export function FullscreenControlBar({
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null)
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  const [paddingCardOpen, setPaddingCardOpen] = useState(false)
   const hideTimerRef = useRef<number | null>(null)
   const contentTimerRef = useRef<number | null>(null)
   const renameCancelledRef = useRef(false)
@@ -111,13 +116,13 @@ export function FullscreenControlBar({
   }, [clearHideTimer, fileDrawerOpen, onCloseFileDrawer, switchPanel])
 
   const scheduleHide = useCallback(() => {
-    if (fileDrawerOpen) return
+    if (fileDrawerOpen || paddingCardOpen) return
     clearHideTimer()
     hideTimerRef.current = window.setTimeout(() => {
       setVisible(false)
       if (!contextMenu) switchPanel(false)
     }, tabMode ? 2200 : 700)
-  }, [clearHideTimer, contextMenu, fileDrawerOpen, switchPanel, tabMode])
+  }, [clearHideTimer, contextMenu, fileDrawerOpen, paddingCardOpen, switchPanel, tabMode])
 
   useEffect(() => () => {
     clearHideTimer()
@@ -142,6 +147,12 @@ export function FullscreenControlBar({
         e.preventDefault()
         e.stopPropagation()
         setContextMenu(null)
+        return
+      }
+      if (paddingCardOpen) {
+        e.preventDefault()
+        e.stopPropagation()
+        setPaddingCardOpen(false)
         return
       }
       if (fileDrawerOpen) {
@@ -172,7 +183,18 @@ export function FullscreenControlBar({
 
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [contextMenu, exitFullscreen, fileDrawerOpen, onCloseFileDrawer, switchPanel, tabMode])
+  }, [contextMenu, exitFullscreen, fileDrawerOpen, onCloseFileDrawer, paddingCardOpen, switchPanel, tabMode])
+
+  useEffect(() => {
+    if (!paddingCardOpen) return
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target?.closest('[data-fullscreen-padding-control]')) return
+      setPaddingCardOpen(false)
+    }
+    window.addEventListener('pointerdown', handlePointerDown, true)
+    return () => window.removeEventListener('pointerdown', handlePointerDown, true)
+  }, [paddingCardOpen])
 
   useLayoutEffect(() => {
     const shell = shellRef.current
@@ -212,6 +234,12 @@ export function FullscreenControlBar({
   const toggleTheme = useCallback(() => {
     useSettingsStore.getState().updateAppearanceSettings({ theme: theme === 'dark' ? 'light' : 'dark' })
   }, [theme])
+
+  const togglePaddingCard = useCallback(() => {
+    clearHideTimer()
+    setVisible(true)
+    setPaddingCardOpen((open) => !open)
+  }, [clearHideTimer])
 
   const contextTab = contextMenu ? tabs.find((tab) => tab.id === contextMenu.tabId) : null
 
@@ -365,6 +393,17 @@ export function FullscreenControlBar({
               <BubbleButton onClick={toggleAiPanel} active={aiPanelOpen} title="切换 AI 助手">
                 AI
               </BubbleButton>
+              <div data-fullscreen-padding-control="true">
+                <BubbleButton
+                  onClick={togglePaddingCard}
+                  active={paddingCardOpen}
+                  title="调整正文左右边距"
+                  ariaExpanded={paddingCardOpen}
+                  ariaControls="fullscreen-padding-card"
+                >
+                  边距
+                </BubbleButton>
+              </div>
               <BubbleButton onClick={toggleTheme} title={theme === 'dark' ? '切换为浅色主题' : '切换为深色主题'}>
                 主题
               </BubbleButton>
@@ -443,6 +482,39 @@ export function FullscreenControlBar({
             </div>
           </div>
         </div>
+
+        {paddingCardOpen && (
+          <div
+            id="fullscreen-padding-card"
+            data-fullscreen-padding-control="true"
+            role="dialog"
+            aria-label="调整全屏正文边距"
+            className="gm-fullscreen-spacing-card absolute left-1/2 top-[calc(100%+10px)] w-[min(320px,calc(100vw-32px))] -translate-x-1/2 rounded-2xl border p-4"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-body font-bold text-gm-text">正文边距</div>
+                <div className="mt-0.5 text-caption text-gm-text-tertiary">仅调整文字区域，不移动滚动条与目录</div>
+              </div>
+            </div>
+            <SettingSlider
+              label="全屏正文边距"
+              value={fullscreenContentPadding}
+              min={FULLSCREEN_CONTENT_PADDING.min}
+              max={FULLSCREEN_CONTENT_PADDING.max}
+              step={FULLSCREEN_CONTENT_PADDING.step}
+              debounceMs={FULLSCREEN_PADDING_DEBOUNCE_MS}
+              onChange={(value) => updateEditorSettings({ fullscreenContentPadding: Math.round(value) })}
+              format={(value) => `${value}px`}
+              className="mt-3"
+              valueClassName="w-14"
+            />
+            <div className="mt-1 flex justify-between text-micro text-gm-text-tertiary" aria-hidden="true">
+              <span>紧凑</span>
+              <span>宽松</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {contextMenu && (
@@ -514,18 +586,24 @@ function BubbleButton({
   onClick,
   title,
   variant,
+  ariaExpanded,
+  ariaControls,
 }: {
   children: React.ReactNode
   active?: boolean
   onClick: () => void
   title?: string
   variant?: 'pill' | 'text'
+  ariaExpanded?: boolean
+  ariaControls?: string
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       title={title}
+      aria-expanded={ariaExpanded}
+      aria-controls={ariaControls}
       data-active={active ? 'true' : 'false'}
       className={`gm-fullscreen-bubble h-8 flex-shrink-0 whitespace-nowrap rounded-full px-3 text-body font-bold transition-colors ${
         active

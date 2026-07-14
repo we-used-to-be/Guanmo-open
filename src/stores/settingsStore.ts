@@ -27,6 +27,7 @@ interface EditorSettings {
   syncScroll: boolean
   autoSendAiShortcut: boolean
   modePrewarm: 'off' | 'smart' | 'turbo'
+  fullscreenContentPadding: number
 }
 
 interface AppearanceSettings {
@@ -58,6 +59,13 @@ interface SettingsState {
   removeCustomEmbeddingPreset: (id: string) => void
 }
 
+export const FULLSCREEN_CONTENT_PADDING = {
+  min: 32,
+  max: 160,
+  step: 8,
+  default: 88,
+} as const
+
 const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   fontSize: 14,
   lineHeight: 1.65,
@@ -71,6 +79,7 @@ const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   syncScroll: true,
   autoSendAiShortcut: false,
   modePrewarm: 'smart',
+  fullscreenContentPadding: FULLSCREEN_CONTENT_PADDING.default,
 }
 
 const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {

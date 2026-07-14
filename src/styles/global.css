@@ -1220,6 +1220,24 @@ body {
   color: var(--gm-text);
 }
 
+.gm-fullscreen-spacing-card {
+  color: var(--gm-text);
+  background: var(--gm-fullscreen-control-bg);
+  border-color: var(--gm-fullscreen-control-border);
+  box-shadow: var(--gm-fullscreen-control-shadow);
+  backdrop-filter: blur(18px);
+}
+
+.gm-fullscreen-editor-content .cm-content {
+  padding-left: var(--gm-fullscreen-content-padding, 88px);
+  padding-right: var(--gm-fullscreen-content-padding, 88px);
+}
+
+.gm-fullscreen-preview-content {
+  padding-left: var(--gm-fullscreen-content-padding, 88px);
+  padding-right: var(--gm-fullscreen-content-padding, 88px);
+}
+
 .gm-markdown-preview h1,
 .gm-markdown-preview h2,
 .gm-markdown-preview h3,
