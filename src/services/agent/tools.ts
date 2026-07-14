@@ -15,7 +15,12 @@ import { normalizeFilePath } from '@/services/pathIdentity'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useAppStore } from '@/stores/appStore'
 import { getEmbeddingClient, getEmbeddingConfig, isEmbeddingReady } from '@/services/ai/aiClient'
-import { buildSelectionContextWindow, serializeSelectionContextWindow } from './selectionContext'
+import {
+  buildSelectionContextWindow,
+  SELECTION_CONTEXT_DIRECTIONS,
+  serializeSelectionContextWindow,
+  type SelectionContextDirection,
+} from './selectionContext'
 
 function validateString(value: unknown, name: string): string | null {
   if (!value || typeof value !== 'string') {
@@ -296,16 +301,21 @@ export function registerBuiltinTools() {
 
   registerTool({
     name: 'read_selection_context',
-    description: '按相关性读取本轮 selection 标签附近的 AST 语义原子。Level 1 在 700 tokens 总预算内返回当前语义原子及高相关邻居；仅当信息不足时再调用 Level 2，累计预算扩展到 1400 tokens 且只返回新增语义原子。允许没有相关 before/after，禁止跳过 Level 1、重复读取同一级或直接读取全文。',
+    description: '读取本轮 selection 标签附近的 AST 语义原子。direction=auto 按相关性读取，before/after/both 按指定方向和文档顺序读取；框选 Markdown 标题并读取 after 时，范围限定为该标题及其子标题正文。Level 1 总预算 700 tokens；仅当信息不足时再调用 Level 2，累计扩展到 1400 tokens 且只返回新增语义原子。禁止跳过 Level 1、重复读取同一级或直接读取全文。',
     parameters: [
       { name: 'targetId', type: 'string', description: '本轮 selection 目标 ID；只有一个选区目标时可省略', required: false },
       { name: 'level', type: 'number', description: '递进读取层级，只能是 1 或 2，默认 1', required: false },
+      { name: 'direction', type: 'string', description: '读取方向：auto、before、after 或 both，默认 auto', required: false },
     ],
     execute: async (args) => {
       if (args.level !== undefined && args.level !== 1 && args.level !== 2) {
         return '读取选区上下文失败：level 只能是 1 或 2。'
       }
       const level: 1 | 2 = args.level === 2 ? 2 : 1
+      if (args.direction !== undefined && !SELECTION_CONTEXT_DIRECTIONS.includes(args.direction as SelectionContextDirection)) {
+        return '读取选区上下文失败：direction 只能是 auto、before、after 或 both。'
+      }
+      const direction = (args.direction || 'auto') as SelectionContextDirection
       const selectionTargets = getCurrentEditTargets().filter((target) => target.type === 'selection')
       const target = args.targetId
         ? findEditTargetById(args.targetId)
@@ -348,13 +358,18 @@ export function registerBuiltinTools() {
         range,
         /\.(?:md|markdown|mdx)$/i.test(tag.filePath),
         level,
+        direction,
       )
       if (!contextWindow) {
         return '读取选区上下文失败：选区范围已失效，或无法建立稳定的语义 Chunk。'
       }
 
+      if (contextWindow.diagnostics.emptyReason === 'heading-without-content') {
+        return '读取选区上下文失败：所选标题下没有可读取的正文。'
+      }
+
       if (level === 2 && contextWindow.chunks.length === 0) {
-        return '读取选区上下文失败：Level 2 没有新的高相关语义块。'
+        return '读取选区上下文失败：Level 2 没有新的可用语义块。'
       }
 
       const contextSummary = contextWindow.chunks

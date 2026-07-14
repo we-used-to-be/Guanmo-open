@@ -1,12 +1,15 @@
 import {
-  buildSemanticDocumentChunks,
+  buildSemanticDocumentStructure,
   estimateSemanticTokens,
   scoreSemanticRelation,
   type SemanticChunk,
+  type SemanticHeading,
 } from '@/services/rag/semanticChunker'
 import type { TextRange } from './editTarget'
 
 type SelectionContextRole = 'before' | 'current' | 'after'
+export const SELECTION_CONTEXT_DIRECTIONS = ['auto', 'before', 'after', 'both'] as const
+export type SelectionContextDirection = typeof SELECTION_CONTEXT_DIRECTIONS[number]
 
 export interface SelectionContextChunk {
   role: SelectionContextRole
@@ -29,6 +32,7 @@ export interface SelectionContextWindow {
       selected: boolean
       reason: string
     }>
+    emptyReason?: 'heading-without-content'
   }
 }
 
@@ -57,6 +61,18 @@ function nearestChunkIndex(chunks: SemanticChunk[], selectionRange: TextRange): 
     }
   })
   return nearestIndex
+}
+
+function selectedHeadingScope(
+  headings: SemanticHeading[],
+  selectionRange: TextRange,
+  contentLength: number,
+): { heading: SemanticHeading; end: number } | null {
+  const headingIndex = headings.findIndex((heading) => overlaps(selectionRange, heading.start, heading.end))
+  if (headingIndex < 0) return null
+  const heading = headings[headingIndex]
+  const nextBoundary = headings.slice(headingIndex + 1).find((candidate) => candidate.depth <= heading.depth)
+  return { heading, end: nextBoundary?.start ?? contentLength }
 }
 
 function toOutputChunk(role: SelectionContextRole, chunk: SemanticChunk): SelectionContextChunk {
@@ -90,6 +106,7 @@ interface ContextCandidate {
   chunk: SemanticChunk
   score: number
   distance: number
+  eligible: boolean
 }
 
 function selectContextIndexes(
@@ -104,7 +121,7 @@ function selectContextIndexes(
     if (index >= currentIndex && index <= lastCurrentIndex) return []
     const role = index < currentIndex ? 'before' : 'after'
     const distance = role === 'before' ? currentIndex - index : index - lastCurrentIndex
-    return [{ index, role, chunk, distance, score: scoreSemanticRelation(currentChunk, chunk, distance) }]
+    return [{ index, role, chunk, distance, score: scoreSemanticRelation(currentChunk, chunk, distance), eligible: true }]
   })
   const ranked = [...candidates].sort((left, right) => right.score - left.score || left.distance - right.distance)
   const selected = new Set(initialIndexes)
@@ -137,30 +154,122 @@ function selectContextIndexes(
   return { selected, directlySelected, candidates }
 }
 
+function takeDirectionalIndexes(
+  chunks: SemanticChunk[],
+  indexes: number[],
+  maxTokens: number,
+): Set<number> {
+  const selected = new Set<number>()
+  let totalTokens = 0
+  for (const index of indexes) {
+    const chunkTokens = estimateSemanticTokens(chunks[index].content)
+    if (totalTokens + chunkTokens > maxTokens) break
+    selected.add(index)
+    totalTokens += chunkTokens
+  }
+  return selected
+}
+
+function selectDirectionalIndexes(
+  chunks: SemanticChunk[],
+  currentChunk: SemanticChunk,
+  currentIndex: number,
+  lastCurrentIndex: number,
+  maxTokens: number,
+  direction: Exclude<SelectionContextDirection, 'auto'>,
+  afterBoundary: number = chunks.length,
+): { selected: Set<number>; directlySelected: Set<number>; candidates: ContextCandidate[] } {
+  const contextBudget = Math.max(0, maxTokens - estimateSemanticTokens(currentChunk.content))
+  const beforeIndexes = Array.from({ length: currentIndex }, (_, offset) => currentIndex - offset - 1)
+  const afterIndexes = Array.from(
+    { length: Math.max(0, afterBoundary - lastCurrentIndex - 1) },
+    (_, offset) => lastCurrentIndex + offset + 1,
+  )
+  const selected = direction === 'before'
+    ? takeDirectionalIndexes(chunks, beforeIndexes, contextBudget)
+    : direction === 'after'
+      ? takeDirectionalIndexes(chunks, afterIndexes, contextBudget)
+      : new Set([
+        ...takeDirectionalIndexes(chunks, beforeIndexes, Math.floor(contextBudget / 2)),
+        ...takeDirectionalIndexes(chunks, afterIndexes, Math.ceil(contextBudget / 2)),
+      ])
+  const candidates = chunks.flatMap((chunk, index): ContextCandidate[] => {
+    if (index >= currentIndex && index <= lastCurrentIndex) return []
+    const role = index < currentIndex ? 'before' : 'after'
+    const distance = role === 'before' ? currentIndex - index : index - lastCurrentIndex
+    const eligible = role === 'before'
+      ? direction !== 'after'
+      : direction !== 'before' && index < afterBoundary
+    return [{
+      index,
+      role,
+      chunk,
+      distance,
+      score: scoreSemanticRelation(currentChunk, chunk, distance),
+      eligible,
+    }]
+  })
+  return { selected, directlySelected: new Set(selected), candidates }
+}
+
 export function buildSelectionContextWindow(
   content: string,
   selectionRange: TextRange,
   isMarkdown: boolean,
   level: 1 | 2 = 1,
+  direction: SelectionContextDirection = 'auto',
 ): SelectionContextWindow | null {
   if (selectionRange.from < 0 || selectionRange.to <= selectionRange.from || selectionRange.to > content.length) {
     return null
   }
 
-  const chunks = buildSemanticDocumentChunks(content, isMarkdown)
+  const structure = buildSemanticDocumentStructure(content, isMarkdown)
+  const { chunks } = structure
   if (chunks.length === 0) return null
 
-  const matchingIndexes = chunks
+  const headingScope = selectedHeadingScope(structure.headings, selectionRange, content.length)
+  const matchingIndexes = headingScope
+    ? chunks
+      .map((chunk, index) => chunk.start >= headingScope.heading.end && chunk.end <= headingScope.end ? index : -1)
+      .filter((index) => index >= 0)
+      .slice(0, 1)
+    : chunks
     .map((chunk, index) => overlaps(selectionRange, chunk.start, chunk.end) ? index : -1)
     .filter((index) => index >= 0)
-  const currentIndex = matchingIndexes[0] ?? nearestChunkIndex(chunks, selectionRange)
-  if (currentIndex < 0) return null
+  const currentIndex = matchingIndexes[0] ?? (headingScope ? -1 : nearestChunkIndex(chunks, selectionRange))
+  if (currentIndex < 0) {
+    return headingScope
+      ? { chunks: [], diagnostics: { level, totalTokens: 0, candidates: [], emptyReason: 'heading-without-content' } }
+      : null
+  }
   const lastCurrentIndex = matchingIndexes[matchingIndexes.length - 1] ?? currentIndex
   const currentChunk = mergeSelectedChunks(content, chunks.slice(currentIndex, lastCurrentIndex + 1))
-  const levelOne = selectContextIndexes(chunks, currentChunk, currentIndex, lastCurrentIndex, LEVEL_1_MAX_TOKENS)
+  let headingScopeLastIndex = -1
+  if (headingScope) {
+    chunks.forEach((chunk, index) => {
+      if (chunk.start >= headingScope.heading.end && chunk.end <= headingScope.end) {
+        headingScopeLastIndex = index
+      }
+    })
+  }
+  const afterBoundary = headingScope && (direction === 'after' || direction === 'both')
+    ? headingScopeLastIndex + 1
+    : chunks.length
+  const selectIndexes = (maxTokens: number) => direction === 'auto'
+    ? selectContextIndexes(chunks, currentChunk, currentIndex, lastCurrentIndex, maxTokens)
+    : selectDirectionalIndexes(
+      chunks,
+      currentChunk,
+      currentIndex,
+      lastCurrentIndex,
+      maxTokens,
+      direction,
+      afterBoundary,
+    )
+  const levelOne = selectIndexes(LEVEL_1_MAX_TOKENS)
   const cumulative = level === 1
     ? levelOne
-    : selectContextIndexes(chunks, currentChunk, currentIndex, lastCurrentIndex, LEVEL_2_MAX_TOKENS, levelOne.selected)
+    : selectIndexes(LEVEL_2_MAX_TOKENS)
   const selectedIndexes = level === 1
     ? cumulative.selected
     : new Set([...cumulative.selected].filter((index) => !levelOne.selected.has(index)))
@@ -178,8 +287,7 @@ export function buildSelectionContextWindow(
       const selected = selectedIndexes.has(candidate.index)
       const directlySelected = cumulative.directlySelected.has(candidate.index)
       const inLevelOne = level === 2 && levelOne.selected.has(candidate.index)
-      const overBudget = candidate.score >= MIN_RELEVANCE_SCORE
-        && !cumulative.selected.has(candidate.index)
+      const overBudget = candidate.eligible && !cumulative.selected.has(candidate.index)
       return {
         role: candidate.role,
         content: candidate.chunk.content,
@@ -189,6 +297,8 @@ export function buildSelectionContextWindow(
         reason: selected
           ? directlySelected ? 'selected' : 'bridge-context'
           : inLevelOne ? 'already-returned-in-level-1'
+          : !candidate.eligible ? 'direction-excluded'
+          : direction !== 'auto' ? 'token-budget'
           : candidate.score < MIN_RELEVANCE_SCORE ? 'low-relevance'
           : overBudget ? 'token-budget'
           : 'not-selected',

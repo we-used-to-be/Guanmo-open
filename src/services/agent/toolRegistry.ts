@@ -18,7 +18,8 @@ const TOOL_USAGE_GUIDANCE: Record<string, string> = {
   list_memories: '使用时机：只用于查看记忆库概览和候选记忆，不返回知识库文档；需要本地文档索引概览时用 list_database_contents。',
   read_selection_context: [
     '使用时机：本轮有 selection，且问题明确提到上下文、前后文、结合上下文、附近内容、周围内容，或依赖原因、推导、正确性、对比、关系时优先调用。普通总结、翻译、润色、改写、解释、说明不需要调用。',
-    '返回内容：先按标题、说明文本、数学公式、代码和逻辑依赖合并语义 Chunk。Level 1 返回上文 2 Chunk、当前 Chunk、下文 1 Chunk；Level 2 累计为上文 4 Chunk、当前 Chunk、下文 2 Chunk，第二次只返回新增 Chunk。',
+    '方向参数：用户明确说“上文/上方/前面/之前”时传 before；“下文/下方/下面/后面/之后/后续”时传 after；“前后文/两侧/周围”时传 both；未指定方向时传 auto。before/after 是硬约束，不得用 auto 代替。',
+    '返回内容：auto 按语义相关性选择邻居；before/after/both 按指定方向和文档顺序读取。框选 Markdown 标题并读取 after 时，只返回该标题及其子标题管辖的正文。Level 1 总预算 700 tokens；Level 2 累计扩展到 1400 tokens，第二次只返回新增 Chunk。',
     '工具顺序：先使用选区正文，再调用 level=1；只有信息明显不足且问题涉及原因、推导、对比、关系、错误分析或选区孤立时，才调用 level=2。禁止跳级、重复层级和自动读取全文；read_context_file 仅用于用户明确要求全文。',
   ].join('\n'),
 }

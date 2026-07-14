@@ -31,6 +31,7 @@
                     "test:markdown-math":  "node scripts/run-markdown-math-check.mjs",
                     "test:markdown-preview":  "node scripts/run-markdown-preview-check.mjs",
                     "test:markdown-export":  "node scripts/run-markdown-export-check.mjs",
+                    "test:selection-context":  "node scripts/run-selection-context-check.mjs",
                     "check:paths":  "node scripts/check-paths.mjs",
                     "check:push":  "node scripts/pre-push-check.mjs",
                     "check:release":  "node scripts/pre-push-check.mjs --release",

@@ -19,6 +19,21 @@ export interface SemanticChunk {
   heading?: string
 }
 
+export interface SemanticHeading {
+  start: number
+  end: number
+  startLine: number
+  endLine: number
+  depth: number
+  text: string
+  headingPath: string[]
+}
+
+export interface SemanticDocumentStructure {
+  chunks: SemanticChunk[]
+  headings: SemanticHeading[]
+}
+
 interface AstNode {
   type: string
   depth?: number
@@ -194,13 +209,16 @@ function fallbackBlocks(content: string): SemanticChunk[] {
   return chunks
 }
 
-export function buildSemanticDocumentChunks(content: string, isMarkdown = true): SemanticChunk[] {
-  if (!content.trim()) return []
-  if (!isMarkdown) return fallbackBlocks(content).flatMap(splitAtSemanticBoundaries)
+export function buildSemanticDocumentStructure(content: string, isMarkdown = true): SemanticDocumentStructure {
+  if (!content.trim()) return { chunks: [], headings: [] }
+  if (!isMarkdown) {
+    return { chunks: fallbackBlocks(content).flatMap(splitAtSemanticBoundaries), headings: [] }
+  }
 
   try {
     const tree = markdownParser.parse(normalizeLatexBlockDelimiters(content))
     const headingPath: string[] = []
+    const headings: SemanticHeading[] = []
     const chunks: SemanticChunk[] = []
     for (const rawNode of tree.children as AstNode[]) {
       const start = rawNode.position?.start.offset
@@ -208,7 +226,17 @@ export function buildSemanticDocumentChunks(content: string, isMarkdown = true):
       if (typeof start !== 'number' || typeof end !== 'number' || start >= end) continue
       if (rawNode.type === 'heading' && rawNode.depth) {
         headingPath.splice(rawNode.depth - 1)
-        headingPath[rawNode.depth - 1] = headingText(content, start, end)
+        const text = headingText(content, start, end)
+        headingPath[rawNode.depth - 1] = text
+        headings.push({
+          start,
+          end,
+          startLine: rawNode.position!.start.line,
+          endLine: rawNode.position!.end.line,
+          depth: rawNode.depth,
+          text,
+          headingPath: headingPath.filter(Boolean),
+        })
         continue
       }
       const parsedType = blockType(rawNode.type)
@@ -227,8 +255,12 @@ export function buildSemanticDocumentChunks(content: string, isMarkdown = true):
         heading: headingPath[headingPath.length - 1],
       })
     }
-    return chunks.flatMap(splitAtSemanticBoundaries)
+    return { chunks: chunks.flatMap(splitAtSemanticBoundaries), headings }
   } catch {
-    return fallbackBlocks(content).flatMap(splitAtSemanticBoundaries)
+    return { chunks: fallbackBlocks(content).flatMap(splitAtSemanticBoundaries), headings: [] }
   }
+}
+
+export function buildSemanticDocumentChunks(content: string, isMarkdown = true): SemanticChunk[] {
+  return buildSemanticDocumentStructure(content, isMarkdown).chunks
 }

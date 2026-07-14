@@ -602,6 +602,17 @@ assert.equal('afterChunks' in selectionContextResult, false)
 assert.equal('before' in selectionContextResult, false)
 assert.equal('after' in selectionContextResult, false)
 
+const afterSelectionContextResult = JSON.parse(await readSelectionContext.execute({
+  targetId: 'edit-target-1',
+  direction: 'after',
+}))
+assert.deepEqual(afterSelectionContextResult.chunks.map((chunk: { role: string }) => chunk.role), ['current', 'after'])
+const invalidSelectionDirection = await readSelectionContext.execute({
+  targetId: 'edit-target-1',
+  direction: 'sideways',
+})
+assert.match(invalidSelectionDirection, /direction 只能是/)
+
 const selectionEditResult = JSON.parse(await replaceCurrentTabText.execute({
   targetId: 'edit-target-1',
   newText: 'BETA',

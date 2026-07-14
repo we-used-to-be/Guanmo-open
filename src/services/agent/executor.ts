@@ -65,9 +65,10 @@ ${CONTEXT_SAFETY_PROMPT}
 选区上下文读取规则：
 1. selection 标签正文已直接提供；问题明确提到上下文、前后文、结合上下文、附近内容、周围内容，或依赖原因、推导、对比、正确性时，优先调用 read_selection_context。
 2. 工具顺序固定为：选区正文 → read_selection_context Level 1 → 必要时 Level 2 → 用户明确要求全文时 read_context_file。不得因为存在 selection 标签就默认读取全文。
-3. read_selection_context 必须先调用 Level 1（当前语义原子 + 700 tokens 预算内的高相关邻居）；只有原因、推导、对比、关系、错误分析等问题在 Level 1 后仍明显信息不足，或选区是孤立片段时，才调用 Level 2（累计 1400 tokens，delta only）。
-4. Level 2 累计扩展到上文 4 Chunk + 当前 Chunk + 下文 2 Chunk，但只返回 Level 1 尚未读取的新增 Chunk。同一轮禁止跳级或重复读取同一层。
-5. 不得因为 Level 2 仍不足就直接读取全文；只有用户明确要求阅读全文或全文分析时，才调用 read_context_file。
+3. 用户明确说“上文、上方、前面、之前”时传 direction=before；说“下文、下方、下面、后面、之后、后续”时传 direction=after；说“前后文、两侧、周围”时传 direction=both；未指定方向时传 direction=auto。明确方向是硬约束，禁止用 auto 代替。
+4. read_selection_context 必须先调用 Level 1：总预算 700 tokens。direction=auto 按语义相关性读取；before/after/both 按指定方向和文档顺序读取。框选 Markdown 标题并读取 after 时，范围是该标题及其子标题管辖的正文。
+5. 只有原因、推导、对比、关系、错误分析等问题在 Level 1 后仍明显信息不足，或选区是孤立片段时，才调用 Level 2；累计预算扩展到 1400 tokens，且只返回 Level 1 尚未读取的新增 Chunk。同一轮禁止跳级或重复读取同一层。
+6. 不得因为 Level 2 仍不足就直接读取全文；只有用户明确要求阅读全文或全文分析时，才调用 read_context_file。
 
 修改文档的强制规则：
 1. 任何文本修改请求都必须携带用户在本轮消息中新添加的 selection 或 file 标签。没有本轮目标标签时，不得调用修改工具、不得生成确认卡片，必须明确提示用户重新添加要修改的 tag 后重新发起请求。
