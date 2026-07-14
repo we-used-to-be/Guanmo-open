@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { isTauri, readFile } from '@/hooks/useTauri'
+import { authorizeSelectedPath, isTauri, readFile } from '@/hooks/useTauri'
 import { pickDirectory } from '@/services/fileSystem'
 import { isWorkspaceDisplayFile } from '@/services/fileTree'
 import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
@@ -60,6 +60,7 @@ export function FullscreenFileDrawer({
   const openFileByPath = useCallback(async (path: string, fallbackName?: string) => {
     try {
       if (!isWorkspaceDisplayFile(path)) return
+      await authorizeSelectedPath(path)
       const content = await readFile(path)
       const name = fallbackName || path.split(/[/\\]/).pop() || 'untitled.md'
       const state = useEditorStore.getState()

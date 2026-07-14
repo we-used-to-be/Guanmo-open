@@ -136,7 +136,8 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
         state.setActiveTab(existing.id)
         return
       }
-      const { readFile } = await import('@/hooks/useTauri')
+      const { authorizeSelectedPath, readFile } = await import('@/hooks/useTauri')
+      await authorizeSelectedPath(file.path)
       const content = await readFile(file.path)
       state.addTab(file.path, file.name, content)
       scheduleMarkdownDocumentIndex(file.path, file.name, content)
@@ -146,6 +147,7 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
         return
       }
       console.error('Open recent file failed:', err)
+      toast.error(describeFileOperationError(err, '打开最近文件失败'))
     }
   }, [])
 
@@ -504,7 +506,8 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
       if (existing) {
         state.setActiveTab(existing.id)
       } else {
-        const { readFile } = await import('@/hooks/useTauri')
+        const { authorizeSelectedPath, readFile } = await import('@/hooks/useTauri')
+        await authorizeSelectedPath(file.path)
         const content = await readFile(file.path)
         state.addTab(file.path, file.name, content)
         scheduleMarkdownDocumentIndex(file.path, file.name, content)
