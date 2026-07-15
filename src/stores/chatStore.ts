@@ -507,8 +507,19 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function sanitizeMessageSources(value: unknown): ChatMessageSource[] | undefined {
   if (!Array.isArray(value)) return undefined
 
-  const normalized = value.flatMap((item) => {
+  const normalized = value.flatMap((item): ChatMessageSource[] => {
     if (!isPlainObject(item)) return []
+    if (item.kind === 'web') {
+      if (typeof item.url !== 'string') return []
+      return [{
+        kind: 'web' as const,
+        title: typeof item.title === 'string' && item.title.trim() ? item.title : item.url,
+        url: item.url,
+        siteName: typeof item.siteName === 'string' ? item.siteName : undefined,
+        publishedAt: typeof item.publishedAt === 'string' ? item.publishedAt : undefined,
+        snippet: typeof item.snippet === 'string' ? item.snippet : undefined,
+      }]
+    }
     if (
       typeof item.filePath !== 'string'
       || typeof item.fileName !== 'string'
@@ -519,6 +530,7 @@ function sanitizeMessageSources(value: unknown): ChatMessageSource[] | undefined
     }
 
     return [{
+      kind: 'local' as const,
       filePath: item.filePath,
       fileName: item.fileName,
       titlePath: Array.isArray(item.titlePath)

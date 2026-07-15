@@ -9,6 +9,8 @@ import {
   shouldAllowMemoryWrite,
   isImplicitEditContinuation,
   shouldIncludeFullDocumentContext,
+  isLocalResearchIntent,
+  isWebComparisonIntent,
   type Capability,
   type AppContext,
 } from './intentDetector'
@@ -142,12 +144,46 @@ function truncate(text: string, maxLen: number): string {
   return text.slice(0, maxLen) + `\n... (已截断，共 ${text.length} 字符)`
 }
 
-function buildFinalAnswerMessages(messages: ChatMessage[]): ChatMessage[] {
+const LOCAL_RESEARCH_ANSWER_PROMPT = `本轮是本地阅读研究问题。必须基于已调用的本地资料工具结果回答，不能接 Web 搜索，不能编造未检索到的资料。
+
+回答结构必须包含：
+1. 结论摘要
+2. 主要依据
+3. 来源列表
+4. 推断部分
+5. 信息不足 / 需要补充的资料
+
+要求：
+- 每条关键结论都要能回到本地来源；来源至少写出文件名、标题路径或 heading、行号范围。
+- 多个来源冲突、片段不足或覆盖不完整时，必须明确说明冲突或缺口，不能强行下结论。
+- “推断部分”只能写从来源合理推出的内容，并标明它不是原文直接结论。
+- 如果 search_knowledge 返回空结果或只有弱相关片段，回答重点应是信息缺口，不要套用确定性结论。`
+
+const WEB_COMPARISON_ANSWER_PROMPT = `本轮是“Web + 本地资料对照”问题。必须区分本地知识库结果与 Web 搜索结果，不得把 Web 结果写成本地资料事实，也不得把本地片段当作最新外部事实。
+回答结构优先包含：
+1. 本地资料结论
+2. Web 资料结论
+3. 一致点
+4. 冲突点
+5. 补充点
+6. 无法确认 / 仍需人工判断
+
+要求：
+- 本地来源写出文件名、标题路径或 heading、行号范围。
+- Web 来源写出标题、URL、站点名或发布日期（如有）。
+- 如果本地资料为空但 Web 有结果，明确说明“未找到本地依据，仅基于外部资料”。
+- 如果 Web 搜索关闭、未配置、失败或为空，降级为本地研究回答，并明确说明未完成外部对照。
+- 多个来源冲突或覆盖不完整时，只能说明冲突、缺口和可推断范围，不能强行下结论。`
+
+function buildFinalAnswerMessages(messages: ChatMessage[], finalInstruction?: string): ChatMessage[] {
   return [
     ...messages,
     {
       role: 'user',
-      content: '现在请直接输出给用户的最终答案。若已有工具结果，请基于结果回答；不要再调用工具，不要输出 JSON，不要复述内部处理过程。',
+      content: [
+        '现在请直接输出给用户的最终答案。若已有工具结果，请基于结果回答；不要再调用工具，不要输出 JSON，不要复述内部处理过程。',
+        finalInstruction,
+      ].filter(Boolean).join('\n\n'),
     },
   ]
 }
@@ -196,10 +232,99 @@ function extractKnowledgeSourcesFromResult(result: string): ChatMessageSource[] 
   }
 }
 
+function extractSelectionContextSourcesFromResult(result: string): ChatMessageSource[] {
+  try {
+    const parsed = JSON.parse(result)
+    if (!isPlainObject(parsed) || !Array.isArray(parsed.chunks) || !isPlainObject(parsed.source)) return []
+    const source = parsed.source
+    if (typeof source.filePath !== 'string') return []
+    const filePath = source.filePath
+
+    return parsed.chunks.flatMap((chunk): ChatMessageSource[] => {
+      if (!isPlainObject(chunk)) return []
+      if (typeof chunk.startLine !== 'number' || typeof chunk.endLine !== 'number') return []
+      const titlePath = Array.isArray(chunk.headingPath)
+        ? chunk.headingPath.filter((part): part is string => typeof part === 'string')
+        : undefined
+      return [{
+        filePath,
+        fileName: typeof source.fileName === 'string'
+          ? source.fileName
+          : sourceFileName(filePath, typeof source.title === 'string' ? source.title : undefined),
+        titlePath,
+        heading: titlePath?.length ? titlePath[titlePath.length - 1] : undefined,
+        startLine: chunk.startLine,
+        endLine: chunk.endLine,
+      }]
+    })
+  } catch {
+    return []
+  }
+}
+
+function extractContextFileSourcesFromResult(result: string): ChatMessageSource[] {
+  try {
+    const parsed = JSON.parse(result)
+    if (!isPlainObject(parsed) || !isPlainObject(parsed.source)) return []
+    const source = parsed.source
+    if (
+      typeof source.filePath !== 'string'
+      || typeof source.startLine !== 'number'
+      || typeof source.endLine !== 'number'
+    ) {
+      return []
+    }
+
+    return [{
+      filePath: source.filePath,
+      fileName: typeof source.fileName === 'string'
+        ? source.fileName
+        : sourceFileName(source.filePath, typeof source.title === 'string' ? source.title : undefined),
+      heading: typeof source.title === 'string' ? source.title : undefined,
+      startLine: source.startLine,
+      endLine: source.endLine,
+    }]
+  } catch {
+    return []
+  }
+}
+
+function extractWebSourcesFromResult(result: string): ChatMessageSource[] {
+  try {
+    const parsed = JSON.parse(result)
+    if (!isPlainObject(parsed) || !Array.isArray(parsed.results)) return []
+
+    return parsed.results.flatMap((item): ChatMessageSource[] => {
+      if (!isPlainObject(item) || typeof item.url !== 'string') return []
+      return [{
+        kind: 'web',
+        title: typeof item.title === 'string' && item.title.trim() ? item.title : item.url,
+        url: item.url,
+        siteName: typeof item.siteName === 'string' ? item.siteName : undefined,
+        publishedAt: typeof item.publishedAt === 'string' ? item.publishedAt : undefined,
+        snippet: typeof item.snippet === 'string' ? item.snippet : undefined,
+      }]
+    })
+  } catch {
+    return []
+  }
+}
+
+function extractSourcesFromToolResult(toolName: string, result: string): ChatMessageSource[] {
+  if (toolName === 'search_knowledge') return extractKnowledgeSourcesFromResult(result)
+  if (toolName === 'read_selection_context') return extractSelectionContextSourcesFromResult(result)
+  if (toolName === 'read_context_file') return extractContextFileSourcesFromResult(result)
+  if (toolName === 'web_search') return extractWebSourcesFromResult(result)
+  return []
+}
+
 function addUniqueSources(target: ChatMessageSource[], sources: ChatMessageSource[]) {
-  const seen = new Set(target.map((source) => `${source.filePath}:${source.startLine}:${source.endLine}`))
+  const sourceKey = (source: ChatMessageSource) => source.kind === 'web'
+    ? `web:${source.url}`
+    : `local:${source.filePath}:${source.startLine}:${source.endLine}`
+  const seen = new Set(target.map(sourceKey))
   for (const source of sources) {
-    const key = `${source.filePath}:${source.startLine}:${source.endLine}`
+    const key = sourceKey(source)
     if (seen.has(key)) continue
     seen.add(key)
     target.push(source)
@@ -428,6 +553,11 @@ export async function runAgent(
 
   // 意图检测
   const intentResult = detectIntentScores(userIntent, appContext)
+  const isWebComparison = isWebComparisonIntent(userIntent)
+  const isLocalResearch = !isWebComparison && isLocalResearchIntent(userIntent)
+  const answerInstruction = isWebComparison
+    ? WEB_COMPARISON_ANSWER_PROMPT
+    : isLocalResearch ? LOCAL_RESEARCH_ANSWER_PROMPT : undefined
 
   // 合并外部传入的 requiredCapabilities
   const mergedRequired = requiredCapabilities && requiredCapabilities.length > 0
@@ -464,6 +594,7 @@ export async function runAgent(
     { role: 'system', content: systemPrompt },
     ...chatHistory.slice(-4), // Keep last 4 messages for context
     ...(contextMessage ? [contextMessage] : []),
+    ...(answerInstruction ? [{ role: 'user' as const, content: answerInstruction }] : []),
     { role: 'user', content: query },
   ]
 
@@ -570,7 +701,7 @@ export async function runAgent(
       runnableRepairTools.map(name => ({
         name,
         args: name === 'search_memory' ? { query: userIntent, topK: 5 }
-          : name === 'search_knowledge' ? { query: userIntent, topK: 8 }
+          : name === 'search_knowledge' ? { query: userIntent, topK: (isLocalResearch || isWebComparison) ? 12 : 8 }
           : name === 'read_selection_context' ? { targetId: scopeSelectionTargetId }
           : name === 'read_context_file' ? { path: scopeFilePath, maxLength: 12000 }
           : name === 'get_current_time' ? {}
@@ -583,9 +714,7 @@ export async function runAgent(
     )
 
     for (const { name, result, rawResult } of repairResults) {
-      if (name === 'search_knowledge') {
-        addUniqueSources(knowledgeSources, extractKnowledgeSourcesFromResult(rawResult || result))
-      }
+      addUniqueSources(knowledgeSources, extractSourcesFromToolResult(name, rawResult || result))
       calledToolNames.push(name)
       toolCalls++
       pushStep({
@@ -732,7 +861,7 @@ export async function runAgent(
           steps,
           toolCalls,
           reason: 'completed',
-          finalMessages: buildFinalAnswerMessages(messages),
+          finalMessages: buildFinalAnswerMessages(messages, answerInstruction),
           sources: knowledgeSources,
         }
       }
@@ -772,8 +901,8 @@ export async function runAgent(
     for (const toolResult of toolResults) {
       const { name } = toolResult
       const executed = toolResult.executed !== false
-      if (executed && name === 'search_knowledge') {
-        addUniqueSources(knowledgeSources, extractKnowledgeSourcesFromResult(toolResult.rawResult || toolResult.result))
+      if (executed) {
+        addUniqueSources(knowledgeSources, extractSourcesFromToolResult(name, toolResult.rawResult || toolResult.result))
       }
       if (executed) {
         calledToolNames.push(name)
@@ -870,7 +999,7 @@ export async function runAgent(
       steps,
       toolCalls,
       reason: 'completed',
-      finalMessages: buildFinalAnswerMessages(messages),
+      finalMessages: buildFinalAnswerMessages(messages, answerInstruction),
       sources: knowledgeSources,
     }
   }
@@ -882,7 +1011,7 @@ export async function runAgent(
       steps,
       toolCalls,
       reason: 'max_steps',
-      finalMessages: buildFinalAnswerMessages(messages),
+      finalMessages: buildFinalAnswerMessages(messages, answerInstruction),
       sources: knowledgeSources,
     }
   }

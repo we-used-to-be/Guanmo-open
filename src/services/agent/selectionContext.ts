@@ -12,6 +12,8 @@ export interface SelectionContextChunk {
   role: SelectionContextRole
   headingPath: string[]
   content: string
+  startLine: number
+  endLine: number
 }
 
 export interface SelectionContextWindow {
@@ -58,7 +60,13 @@ function nearestChunkIndex(chunks: SemanticChunk[], selectionRange: TextRange): 
 }
 
 function toOutputChunk(role: SelectionContextRole, chunk: SemanticChunk): SelectionContextChunk {
-  return { role, headingPath: chunk.headingPath, content: chunk.content }
+  return {
+    role,
+    headingPath: chunk.headingPath,
+    content: chunk.content,
+    startLine: chunk.startLine,
+    endLine: chunk.endLine,
+  }
 }
 
 function mergeSelectedChunks(content: string, chunks: SemanticChunk[]): SemanticChunk {
@@ -198,6 +206,8 @@ export function serializeSelectionContextWindow(
   return JSON.stringify({ chunks: window.chunks.map((chunk) => ({
     role: chunk.role,
     headingPath: chunk.headingPath,
+    startLine: chunk.startLine,
+    endLine: chunk.endLine,
     content: chunk.content,
   })) })
 }

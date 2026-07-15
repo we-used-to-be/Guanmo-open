@@ -2,6 +2,8 @@ export interface SearchResult {
   title: string
   url: string
   snippet: string
+  siteName?: string
+  publishedAt?: string
 }
 
 export interface SearchResponse {
@@ -36,6 +38,21 @@ export function getSearchConfig(): WebSearchConfig {
 }
 
 const SEARCH_TIMEOUT = 15000
+
+function siteNameFromUrl(url: string): string | undefined {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '')
+  } catch {
+    return undefined
+  }
+}
+
+function normalizeSearchResult(result: SearchResult): SearchResult {
+  return {
+    ...result,
+    siteName: result.siteName || siteNameFromUrl(result.url),
+  }
+}
 
 function createCombinedAbortSignal(signal?: AbortSignal): { signal: AbortSignal; cleanup: () => void } {
   const controller = new AbortController()
@@ -83,10 +100,11 @@ async function searchTavily(query: string, maxResults: number, signal?: AbortSig
 
     const data = await res.json()
     return {
-      results: (data.results || []).map((r: { title: string; url: string; content: string }) => ({
+      results: (data.results || []).map((r: { title: string; url: string; content: string; published_date?: string; publishedDate?: string }) => normalizeSearchResult({
         title: r.title,
         url: r.url,
         snippet: r.content,
+        publishedAt: r.published_date || r.publishedDate,
       })),
       query,
       totalResults: data.results?.length || 0,
@@ -127,10 +145,11 @@ async function searchSerper(query: string, maxResults: number, signal?: AbortSig
     const data = await res.json()
     return {
       results: (data.organic || []).map(
-        (r: { title: string; link: string; snippet: string }) => ({
+        (r: { title: string; link: string; snippet: string; date?: string }) => normalizeSearchResult({
           title: r.title,
           url: r.link,
           snippet: r.snippet,
+          publishedAt: r.date,
         })
       ),
       query,
@@ -169,10 +188,11 @@ async function searchBrave(query: string, maxResults: number, signal?: AbortSign
     const data = await res.json()
     return {
       results: (data.web?.results || []).map(
-        (r: { title: string; url: string; description: string }) => ({
+        (r: { title: string; url: string; description: string; age?: string; page_age?: string }) => normalizeSearchResult({
           title: r.title,
           url: r.url,
           snippet: r.description,
+          publishedAt: r.page_age || r.age,
         })
       ),
       query,
@@ -233,6 +253,14 @@ async function searchCustom(query: string, maxResults: number, signal?: AbortSig
         title: String(item.title ?? item.name ?? ''),
         url: String(item.url ?? item.link ?? item.href ?? ''),
         snippet: String(item.snippet ?? item.description ?? item.content ?? item.abstract ?? ''),
+        siteName: typeof item.siteName === 'string' ? item.siteName
+          : typeof item.site_name === 'string' ? item.site_name
+            : typeof item.source === 'string' ? item.source
+              : undefined,
+        publishedAt: typeof item.publishedAt === 'string' ? item.publishedAt
+          : typeof item.date === 'string' ? item.date
+            : typeof item.published_date === 'string' ? item.published_date
+              : undefined,
       }
     })
 
@@ -295,6 +323,7 @@ async function searchDuckDuckGo(query: string, maxResults: number, signal?: Abor
       title: match[2].trim(),
       url: match[1],
       snippet: snippets[i] || '',
+      siteName: siteNameFromUrl(match[1]),
     })
     i++
   }

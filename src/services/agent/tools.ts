@@ -1,7 +1,7 @@
 import { registerTool } from './toolRegistry'
 import { searchRelevant, getKnowledgeDocumentStates, getKnowledgeIndexStateSummary, getRagStatsAsync } from '@/services/rag/pipeline'
 import type { SearchResult } from '@/services/rag/types'
-import { webSearch, buildSearchContext, updateSearchConfig } from '@/services/webSearch'
+import { webSearch, updateSearchConfig, type SearchResponse } from '@/services/webSearch'
 import { useEditorStore, type Tab } from '@/stores/editorStore'
 import { useChatStore } from '@/stores/chatStore'
 import { getAgentScopeContext } from '@/services/aiScope'
@@ -185,6 +185,15 @@ function limitText(content: string, maxLength: number): string {
   return `${content.slice(0, maxLength)}\n... (已截断，共 ${content.length} 字符)`
 }
 
+function countLines(content: string): number {
+  if (!content) return 1
+  return content.split(/\r\n|\r|\n/).length
+}
+
+function fileNameFromPath(filePath: string): string {
+  return filePath.split(/[/\\]/).pop() || filePath
+}
+
 function formatKnowledgeSearchResults(results: SearchResult[]): string {
   if (results.length === 0) return '未找到相关内容。'
 
@@ -240,6 +249,23 @@ async function formatKnowledgeSearchResultsStructured(results: SearchResult[]): 
       retrievalMode: result.retrievalMode,
       startLine: result.chunk.startLine,
       endLine: result.chunk.endLine,
+    })),
+  }, null, 2)
+}
+
+function formatWebSearchResultsStructured(response: SearchResponse): string {
+  return JSON.stringify({
+    status: response.results.length > 0 ? 'ok' : 'empty',
+    query: response.query,
+    totalResults: response.totalResults,
+    usage: 'Web search results are external sources. Do not treat them as local knowledge-base facts.',
+    results: response.results.map((result, index) => ({
+      sourceIndex: index + 1,
+      title: result.title,
+      url: result.url,
+      siteName: result.siteName,
+      publishedAt: result.publishedAt,
+      snippet: limitText(result.snippet, 800),
     })),
   }, null, 2)
 }
@@ -349,7 +375,16 @@ export function registerBuiltinTools() {
       })))
       console.groupEnd()
 
-      return serializeSelectionContextWindow(contextWindow)
+      const parsedWindow = JSON.parse(serializeSelectionContextWindow(contextWindow))
+      return JSON.stringify({
+        ...parsedWindow,
+        source: {
+          kind: 'selection_context',
+          filePath: tag.filePath,
+          fileName: fileNameFromPath(tag.filePath),
+          title: tag.title,
+        },
+      })
     },
   })
 
@@ -374,12 +409,32 @@ export function registerBuiltinTools() {
 
       const openTab = getOpenTabByPath(path)
       if (openTab) {
-        return `文件路径: ${path}\n来源: 当前打开标签页的最新编辑内容\n---\n${limitText(openTab.content, maxLength)}`
+        return JSON.stringify({
+          source: {
+            kind: 'context_file',
+            filePath: path,
+            fileName: fileNameFromPath(path),
+            title: openTab.title,
+            startLine: 1,
+            endLine: countLines(openTab.content),
+          },
+          content: `文件路径: ${path}\n来源: 当前打开标签页的最新编辑内容\n---\n${limitText(openTab.content, maxLength)}`,
+        })
       }
 
       try {
         const content = await readFile(path)
-        return `文件路径: ${path}\n来源: 磁盘文件内容\n---\n${limitText(content, maxLength)}`
+        return JSON.stringify({
+          source: {
+            kind: 'context_file',
+            filePath: path,
+            fileName: fileNameFromPath(path),
+            title: fileNameFromPath(path),
+            startLine: 1,
+            endLine: countLines(content),
+          },
+          content: `文件路径: ${path}\n来源: 磁盘文件内容\n---\n${limitText(content, maxLength)}`,
+        })
       } catch (readErr) {
         const msg = readErr instanceof Error ? readErr.message : String(readErr)
         return `读取文件失败: ${msg}`
@@ -470,7 +525,7 @@ export function registerBuiltinTools() {
       }
       updateSearchConfig(useSettingsStore.getState().webSearch)
       const response = await webSearch(args.query as string, context?.signal)
-      return buildSearchContext(response) || '未找到搜索结果。'
+      return formatWebSearchResultsStructured(response)
     },
   })
 

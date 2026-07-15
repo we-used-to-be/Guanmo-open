@@ -50,7 +50,8 @@ export interface ChatMessageContextMeta {
   webSearchUsed: boolean
 }
 
-export interface ChatMessageSource {
+export interface LocalChatMessageSource {
+  kind?: 'local'
   filePath: string
   fileName: string
   titlePath?: string[]
@@ -58,6 +59,17 @@ export interface ChatMessageSource {
   startLine: number
   endLine: number
 }
+
+export interface WebChatMessageSource {
+  kind: 'web'
+  title: string
+  url: string
+  siteName?: string
+  publishedAt?: string
+  snippet?: string
+}
+
+export type ChatMessageSource = LocalChatMessageSource | WebChatMessageSource
 
 export interface EditConfirmation {
   id: string

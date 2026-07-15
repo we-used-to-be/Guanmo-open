@@ -95,6 +95,7 @@ function extractKnowledgeSourcesFromSteps(steps: AgentStep[]): ChatMessageSource
         seen.add(key)
 
         sources.push({
+          kind: 'local',
           filePath: item.filePath,
           fileName: sourceFileName(item.filePath, typeof item.title === 'string' ? item.title : undefined),
           titlePath: Array.isArray(item.titlePath)
@@ -111,34 +112,6 @@ function extractKnowledgeSourcesFromSteps(steps: AgentStep[]): ChatMessageSource
   }
 
   return sources
-}
-
-function sourceNeedles(source: ChatMessageSource): string[] {
-  const fileStem = source.fileName.replace(/\.[^.]+$/, '')
-  return [
-    source.fileName,
-    fileStem,
-    source.heading,
-    ...(source.titlePath || []),
-  ].filter((item): item is string => Boolean(item && item.trim().length >= 2))
-}
-
-function filterSourcesForAnswer(answer: string, sources: ChatMessageSource[]): ChatMessageSource[] {
-  if (sources.length <= 1) return sources
-  const normalizedAnswer = answer.toLowerCase()
-  const matchedPaths = new Set<string>()
-
-  for (const source of sources) {
-    if (sourceNeedles(source).some((needle) => normalizedAnswer.includes(needle.toLowerCase()))) {
-      matchedPaths.add(source.filePath)
-    }
-  }
-
-  if (matchedPaths.size > 0) {
-    return sources.filter((source) => matchedPaths.has(source.filePath))
-  }
-
-  return sources.filter((source) => source.filePath === sources[0].filePath)
 }
 
 function buildEditTargets(tags: ContextTag[] = []): AgentEditTarget[] {
@@ -628,8 +601,7 @@ export function useAiChat() {
             : extractKnowledgeSourcesFromSteps(result.steps)
           const updateAgentSourceMetadata = () => {
             if (!isCurrentRequest()) return
-            const answer = useChatStore.getState().messages.find((msg) => msg.id === assistantMessageId)?.content || ''
-            const filteredSources = filterSourcesForAnswer(stripToolCallJson(answer), agentSources)
+            const filteredSources = agentSources
             updateMessageContextMeta(assistantMessageId, createContextMeta({
               tagCount: tagMetadata.length,
               ragSourceCount: filteredSources.length,
@@ -774,6 +746,7 @@ export function useAiChat() {
       })
       if (isCurrentRequest()) updateMessageContextMeta(assistantMessageId, contextMeta)
       const messageSources = useChatStore.getState().ragSources.map((source) => ({
+        kind: 'local' as const,
         filePath: source.filePath,
         fileName: source.fileName,
         titlePath: source.titlePath,

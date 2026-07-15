@@ -16,7 +16,7 @@ import { useEditorStore } from '@/stores/editorStore'
 import { deleteChatSession } from '@/services/database/persistence'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { toast } from '@/services/toast'
-import type { ChatMessageSource } from '@/services/ai/types'
+import type { ChatMessageSource, LocalChatMessageSource } from '@/services/ai/types'
 import { AI_SHORTCUT_SUBMIT_EVENT } from '@/services/aiContext'
 
 type AiPanelProps = {
@@ -349,6 +349,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
                   isLast={i === visibleMessages.length - 1}
                   streaming={streaming}
                   sources={msg.sources}
+                  showNoSourceNotice={msg.role === 'assistant' && !msg.editConfirmation}
                   onOpenSource={handleOpenRagSource}
                 />
                 {msg.role === 'assistant' && msg.editConfirmation && (
@@ -522,6 +523,7 @@ const ChatBubble = memo(function ChatBubble({
   isLast,
   streaming,
   sources,
+  showNoSourceNotice,
   onOpenSource,
 }: {
   role: 'system' | 'user' | 'assistant'
@@ -529,11 +531,13 @@ const ChatBubble = memo(function ChatBubble({
   isLast: boolean
   streaming: boolean
   sources?: ChatMessageSource[]
-  onOpenSource?: (source: ChatMessageSource) => void
+  showNoSourceNotice?: boolean
+  onOpenSource?: (source: LocalChatMessageSource) => void
 }) {
   const isUser = role === 'user'
   const isEmpty = !content && isLast && streaming
   const isAssistantStreaming = !isUser && isLast && streaming
+  const shouldShowNoSourceNotice = !isUser && !isAssistantStreaming && !isEmpty && showNoSourceNotice && (!sources || sources.length === 0)
 
   return (
     <div className={`flex min-w-0 ${isUser ? 'justify-end' : 'justify-start'} animate-slideInUp`}>
@@ -564,6 +568,9 @@ const ChatBubble = memo(function ChatBubble({
         )}
         {!isUser && sources && sources.length > 0 && onOpenSource && (
           <MessageSources sources={sources} onOpenSource={onOpenSource} />
+        )}
+        {shouldShowNoSourceNotice && (
+          <NoSourceNotice />
         )}
       </div>
     </div>
@@ -603,7 +610,7 @@ function AiAvatar({
   )
 }
 
-function MessageSources({ sources, onOpenSource }: { sources: ChatMessageSource[]; onOpenSource: (source: ChatMessageSource) => void }) {
+function MessageSources({ sources, onOpenSource }: { sources: ChatMessageSource[]; onOpenSource: (source: LocalChatMessageSource) => void }) {
   const [expanded, setExpanded] = useState(false)
 
   return (
@@ -616,32 +623,59 @@ function MessageSources({ sources, onOpenSource }: { sources: ChatMessageSource[
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`flex-shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}>
           <path d="M9 18l6-6-6-6" />
         </svg>
-        <span>参考来源 {sources.length} 个</span>
+        <span>Sources {sources.length}</span>
       </button>
       {expanded && (
         <div className="mt-2 space-y-1">
           {sources.map((source, index) => (
-            <button
-              key={`${source.filePath}-${source.startLine}-${source.endLine}-${index}`}
-              type="button"
-              onClick={() => onOpenSource(source)}
-              className="block w-full rounded-lg px-2 py-1 text-left text-micro leading-relaxed text-gm-text-secondary hover:bg-gm-surface hover:text-gm-primary"
-              title={`打开 ${source.filePath}:${source.startLine}-${source.endLine}`}
-            >
-              <span className="font-bold">{source.fileName}</span>
-              {formatSourceHeading(source) && (
-                <span> · {formatSourceHeading(source)}</span>
-              )}
-              <span> · 第 {source.startLine}-{source.endLine} 行</span>
-            </button>
+            source.kind === 'web' ? (
+              <a
+                key={`${source.url}-${index}`}
+                href={source.url}
+                target="_blank"
+                rel="noreferrer"
+                className="block w-full rounded-lg px-2 py-1 text-left text-micro leading-relaxed text-gm-text-secondary hover:bg-gm-surface hover:text-gm-primary"
+                title={source.url}
+              >
+                <span className="mr-1 rounded border border-gm-border px-1 text-[10px] font-bold text-gm-text-tertiary">Web</span>
+                <span className="font-bold">{source.title}</span>
+                {(source.siteName || source.publishedAt) && (
+                  <span> / {[source.siteName, source.publishedAt].filter(Boolean).join(' / ')}</span>
+                )}
+                <span className="mt-0.5 block truncate text-gm-text-tertiary">{source.url}</span>
+              </a>
+            ) : (
+              <button
+                key={`${source.filePath}-${source.startLine}-${source.endLine}-${index}`}
+                type="button"
+                onClick={() => onOpenSource(source)}
+                className="block w-full rounded-lg px-2 py-1 text-left text-micro leading-relaxed text-gm-text-secondary hover:bg-gm-surface hover:text-gm-primary"
+                title={`Open ${source.filePath}:${source.startLine}-${source.endLine}`}
+              >
+                <span className="mr-1 rounded border border-gm-border px-1 text-[10px] font-bold text-gm-text-tertiary">Local</span>
+                <span className="font-bold">{source.fileName}</span>
+                {formatSourceHeading(source) && (
+                  <span> / {formatSourceHeading(source)}</span>
+                )}
+                <span> / L{source.startLine}-{source.endLine}</span>
+                <span className="mt-0.5 block truncate text-gm-text-tertiary">{source.filePath}</span>
+              </button>
+            )
           ))}
         </div>
       )}
     </div>
   )
 }
+function NoSourceNotice() {
+  return (
+    <div className="mt-3 border-t border-gm-border-subtle pt-2 text-micro text-gm-text-tertiary">
+      本次回答未使用本地文档来源
+    </div>
+  )
+}
 
-function formatSourceHeading(source: ChatMessageSource): string {
+function formatSourceHeading(source: LocalChatMessageSource): string {
   if (source.titlePath?.length) return source.titlePath.join(' / ')
   return source.heading || ''
 }
