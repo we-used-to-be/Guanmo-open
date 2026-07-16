@@ -19,7 +19,10 @@ tauri-plugin-dialog = "2"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 tauri-plugin-shell = "2"
 tauri-plugin-single-instance = "2"
-tauri-plugin-http = { version = "=2.4.3", features = ["unsafe-headers"] }
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "sync"] }
+url = "2"
 
 [lib]
 name = "guanmo_lib"

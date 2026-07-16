@@ -13,12 +13,6 @@
     "sql:allow-execute",
     "sql:allow-select",
     "sql:allow-close",
-    {
-      "identifier": "http:default",
-      "allow": [
-        { "url": "https://api.github.com/repos/we-used-to-be/Guanmo-open/releases/latest" }
-      ]
-    },
     "core:window:allow-start-dragging",
     "core:window:allow-minimize",
     "core:window:allow-close",

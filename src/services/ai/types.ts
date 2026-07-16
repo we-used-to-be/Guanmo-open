@@ -244,6 +244,7 @@ export const AI_CHAT_PRESETS: AiPreset[] = [
   { key: 'ollama', label: 'Ollama 本地', protocol: 'openai-chat', provider: 'ollama', baseUrl: 'http://localhost:11434/v1', chatModel: 'qwen2.5:7b' },
 
   // ── Coding Plan 系列 (均为 openai-chat 协议) ──
+  { key: 'coding-volcengine', label: 'Coding Plan · 火山方舟', protocol: 'openai-chat', provider: 'coding-plan', baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3', chatModel: 'glm-5.2' },
   { key: 'coding-ali', label: 'Coding Plan · 阿里百炼', protocol: 'openai-chat', provider: 'coding-plan', baseUrl: 'https://coding.dashscope.aliyuncs.com/v1', chatModel: 'qwen3.7-plus' },
   { key: 'coding-iflytek', label: 'Coding Plan · 讯飞星辰', protocol: 'openai-chat', provider: 'coding-plan', baseUrl: 'https://maas-coding-api.cn-huabei-1.xf-yun.com/v2', chatModel: 'xingchen-coding-plus' },
   { key: 'coding-tencent', label: 'Coding Plan · 腾讯云', protocol: 'openai-chat', provider: 'coding-plan', baseUrl: 'https://api.lkeap.cloud.tencent.com/coding/v3', chatModel: 'hunyuan-code' },

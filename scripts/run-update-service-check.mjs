@@ -15,8 +15,8 @@ const result = await build({
         path: 'tauri-app',
         namespace: 'update-mock',
       }))
-      context.onResolve({ filter: /^@tauri-apps\/plugin-http$/ }, () => ({
-        path: 'tauri-http',
+      context.onResolve({ filter: /^@\/services\/externalHttp$/ }, () => ({
+        path: 'external-http',
         namespace: 'update-mock',
       }))
       context.onResolve({ filter: /^@\/hooks\/useTauri$/ }, () => ({
@@ -26,8 +26,8 @@ const result = await build({
       context.onLoad({ filter: /.*/, namespace: 'update-mock' }, (args) => ({
         contents: args.path === 'tauri-app'
           ? "export async function getVersion() { return '1.2.1' }"
-          : args.path === 'tauri-http'
-            ? 'export const fetch = (...args) => globalThis.fetch(...args)'
+          : args.path === 'external-http'
+            ? 'export const externalFetch = (...args) => globalThis.fetch(...args)'
             : 'export function isTauri() { return true }',
         loader: 'js',
       }))

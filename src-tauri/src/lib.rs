@@ -11,6 +11,9 @@ use std::{
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_fs::FsExt;
 
+mod api_http;
+use api_http::ApiOriginState;
+
 const SECRET_FILE: &str = "secrets.json";
 const FILE_ACCESS_GRANTS_FILE: &str = "file-access-grants.json";
 const MAX_LEGACY_WORKSPACES: usize = 16;
@@ -1304,6 +1307,7 @@ pub fn run() {
 
     let mut builder = tauri::Builder::default()
         .manage(FsAccessState::default())
+        .manage(ApiOriginState::default())
         .manage(pending_open_files)
         .on_webview_event(|webview, event| {
             if let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
@@ -1334,7 +1338,6 @@ pub fn run() {
 
     builder
         .plugin(tauri_plugin_sql::Builder::default().build())
-        .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -1368,6 +1371,11 @@ pub fn run() {
             reveal_file_in_folder,
             take_pending_open_files,
             has_pending_open_files,
+            api_http::authorize_api_origin,
+            api_http::list_authorized_api_origins,
+            api_http::revoke_api_origin,
+            api_http::external_http_request,
+            api_http::external_http_stream,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

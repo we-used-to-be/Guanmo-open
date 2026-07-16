@@ -1,7 +1,7 @@
 import { getVersion } from '@tauri-apps/api/app'
-import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { isTauri } from '@/hooks/useTauri'
 import { compareSemVer, normalizeVersion } from '@/services/semver'
+import { externalFetch } from '@/services/externalHttp'
 
 export { compareSemVer, normalizeVersion } from '@/services/semver'
 
@@ -87,7 +87,7 @@ async function requestLatestRelease(manual: boolean): Promise<FetchedUpdateResul
   const etag = manual ? null : storage()?.getItem(UPDATE_STORAGE_KEYS.releaseEtag)
   const [currentVersion, response] = await Promise.all([
     getCurrentAppVersion(),
-    tauriFetch(LATEST_RELEASE_URL, {
+    externalFetch(LATEST_RELEASE_URL, {
       headers: {
         Accept: 'application/vnd.github+json',
         'User-Agent': 'Guanmo-Update-Checker',

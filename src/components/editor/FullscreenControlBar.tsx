@@ -352,7 +352,7 @@ export function FullscreenControlBar({
 
   return (
     <>
-      <div className="fixed left-0 right-0 top-0 z-40 h-9" onMouseEnter={showBar} />
+      <div className="fixed left-1/2 top-0 z-40 h-9 w-[min(960px,calc(100vw-32px))] -translate-x-1/2" onMouseEnter={showBar} />
       <div
         data-fullscreen-control-bar="true"
         className={`fixed left-1/2 top-4 z-50 max-w-[calc(100vw-32px)] -translate-x-1/2 overflow-visible transition-[opacity,transform] duration-300 ease-out ${

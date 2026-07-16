@@ -3,6 +3,7 @@ import type { AiServiceStatus } from '../../stores/appStore'
 import { AiConfigError } from './errors'
 import { OpenAICompatibleProvider } from './providers/openaiCompatible'
 import { getSearchConfig } from '../webSearch'
+import { externalFetch, UnsupportedCapabilityError } from '../externalHttp'
 
 let currentProvider: AiProvider | null = null
 let currentConfig: AiConfig | null = null
@@ -174,7 +175,7 @@ async function validateSearchApi(provider: string, apiKey: string): Promise<bool
   if (!apiKey) return false
   try {
     if (provider === 'tavily') {
-      const res = await fetch('https://api.tavily.com/search', {
+      const res = await externalFetch('https://api.tavily.com/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ api_key: apiKey, query: 'test', max_results: 1 }),
@@ -182,7 +183,7 @@ async function validateSearchApi(provider: string, apiKey: string): Promise<bool
       return res.ok
     }
     if (provider === 'serper') {
-      const res = await fetch('https://google.serper.dev/search', {
+      const res = await externalFetch('https://google.serper.dev/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-API-KEY': apiKey },
         body: JSON.stringify({ q: 'test', num: 1 }),
@@ -190,13 +191,14 @@ async function validateSearchApi(provider: string, apiKey: string): Promise<bool
       return res.ok
     }
     if (provider === 'brave') {
-      const res = await fetch('https://api.search.brave.com/res/v1/web/search?q=test&count=1', {
+      const res = await externalFetch('https://api.search.brave.com/res/v1/web/search?q=test&count=1', {
         headers: { 'X-Subscription-Token': apiKey },
       })
       return res.ok
     }
     return true
-  } catch {
+  } catch (error) {
+    if (error instanceof UnsupportedCapabilityError) throw error
     return false
   }
 }

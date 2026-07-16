@@ -9,6 +9,7 @@ import type {
 } from '../types'
 import { AiAuthError, AiNetworkError, AiError } from '../errors'
 import { parseSSEStream } from '../stream'
+import { ExternalHttpError, externalFetch, UnsupportedCapabilityError } from '../../externalHttp'
 
 function isLocalApi(baseUrl: string): boolean {
   try {
@@ -88,7 +89,7 @@ export class OpenAICompatibleProvider implements AiProvider {
     const abort = this.createAbortContext(request.signal)
 
     try {
-      const res = await fetch(`${this.baseUrl}/chat/completions`, {
+      const res = await externalFetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: this.headers,
         body: JSON.stringify(body),
@@ -129,6 +130,7 @@ export class OpenAICompatibleProvider implements AiProvider {
           : undefined,
       }
     } catch (err) {
+      if (err instanceof UnsupportedCapabilityError || err instanceof ExternalHttpError) throw err
       if (err instanceof AiError) throw err
       if ((err as Error).name === 'AbortError') {
         throw new AiNetworkError(request.signal?.aborted ? 'Request aborted' : 'Request timeout')
@@ -154,7 +156,7 @@ export class OpenAICompatibleProvider implements AiProvider {
     const abort = this.createAbortContext(request.signal)
 
     try {
-      const res = await fetch(`${this.baseUrl}/chat/completions`, {
+      const res = await externalFetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: this.headers,
         body: JSON.stringify(body),
@@ -173,6 +175,7 @@ export class OpenAICompatibleProvider implements AiProvider {
         yield chunk
       }
     } catch (err) {
+      if (err instanceof UnsupportedCapabilityError || err instanceof ExternalHttpError) throw err
       if (err instanceof AiError) throw err
       if ((err as Error).name === 'AbortError') {
         throw new AiNetworkError(request.signal?.aborted ? 'Request aborted' : 'Request timeout')
@@ -192,7 +195,7 @@ export class OpenAICompatibleProvider implements AiProvider {
     const abort = this.createAbortContext(signal)
 
     try {
-      const res = await fetch(`${this.baseUrl}/embeddings`, {
+      const res = await externalFetch(`${this.baseUrl}/embeddings`, {
         method: 'POST',
         headers: this.headers,
         body: JSON.stringify(body),
@@ -213,6 +216,7 @@ export class OpenAICompatibleProvider implements AiProvider {
           : undefined,
       }
     } catch (err) {
+      if (err instanceof UnsupportedCapabilityError || err instanceof ExternalHttpError) throw err
       if (err instanceof AiError) throw err
       if ((err as Error).name === 'AbortError') {
         throw new AiNetworkError(signal?.aborted ? 'Request aborted' : 'Request timeout')
@@ -234,7 +238,7 @@ export class OpenAICompatibleProvider implements AiProvider {
     const abort = this.createAbortContext(signal)
 
     try {
-      const res = await fetch(`${this.baseUrl}/embeddings`, {
+      const res = await externalFetch(`${this.baseUrl}/embeddings`, {
         method: 'POST',
         headers: this.headers,
         body: JSON.stringify(body),
@@ -252,6 +256,7 @@ export class OpenAICompatibleProvider implements AiProvider {
         .sort((a: { index: number; embedding: number[] }, b: { index: number }) => a.index - b.index)
         .map((item: { embedding: number[] }) => item.embedding)
     } catch (err) {
+      if (err instanceof UnsupportedCapabilityError || err instanceof ExternalHttpError) throw err
       if (err instanceof AiError) throw err
       if ((err as Error).name === 'AbortError') {
         throw new AiNetworkError(signal?.aborted ? 'Request aborted' : 'Request timeout')
@@ -265,7 +270,7 @@ export class OpenAICompatibleProvider implements AiProvider {
   async validateConfig(): Promise<ValidateResult> {
     // 1. 先尝试 /models 端点
     try {
-      const res = await fetch(`${this.baseUrl}/models`, {
+      const res = await externalFetch(`${this.baseUrl}/models`, {
         headers: this.headers,
       })
       if (res.ok) {
@@ -277,6 +282,7 @@ export class OpenAICompatibleProvider implements AiProvider {
         return { ok: false, error: 'auth_failed', message: 'API Key 无效或权限不足' }
       }
     } catch (err) {
+      if (err instanceof UnsupportedCapabilityError || err instanceof ExternalHttpError) throw err
       // /models 网络不通，继续 fallback
       if ((err as Error).name === 'AbortError') {
         return { ok: false, error: 'timeout', message: '连接超时，请检查网络或地址是否正确' }
@@ -288,7 +294,7 @@ export class OpenAICompatibleProvider implements AiProvider {
     try {
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(), 15000)
-      const res = await fetch(`${this.baseUrl}/chat/completions`, {
+      const res = await externalFetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: this.headers,
         body: JSON.stringify({
@@ -322,6 +328,7 @@ export class OpenAICompatibleProvider implements AiProvider {
       const hint = body ? `（${body.slice(0, 200)}）` : ''
       return { ok: false, error: 'unknown', message: `服务返回 HTTP ${res.status}${hint}` }
     } catch (err) {
+      if (err instanceof UnsupportedCapabilityError || err instanceof ExternalHttpError) throw err
       if ((err as Error).name === 'AbortError') {
         return { ok: false, error: 'timeout', message: '连接超时，请检查网络或地址是否正确' }
       }
@@ -331,7 +338,7 @@ export class OpenAICompatibleProvider implements AiProvider {
   }
 
   async listModels(): Promise<string[]> {
-    const res = await fetch(`${this.baseUrl}/models`, {
+    const res = await externalFetch(`${this.baseUrl}/models`, {
       headers: this.headers,
     })
 
