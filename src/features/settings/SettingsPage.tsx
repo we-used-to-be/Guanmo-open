@@ -1191,7 +1191,7 @@ function GeneralSettings() {
       autoSave: true,
       autoSaveDelay: 1000,
       syncScroll: true,
-      autoSendAiShortcut: false,
+      autoSendAiShortcut: true,
       modePrewarm: 'smart',
     })
     updateAppearanceSettings({ customCursorEnabled: true, aiMascotAvatarEnabled: false, theme: 'light', lightPalette: 'warm' })

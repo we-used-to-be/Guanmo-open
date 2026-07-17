@@ -184,6 +184,17 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     return () => window.removeEventListener(AI_SHORTCUT_SUBMIT_EVENT, handleSend)
   }, [handleSend])
 
+  // 挂载时检查是否有待发送的快捷提问（解决首次使用时事件监听器未注册的问题）
+  useEffect(() => {
+    const chatState = useChatStore.getState()
+    if (chatState.draftInput.trim() && useSettingsStore.getState().editor.autoSendAiShortcut) {
+      // 延迟发送，确保事件监听器已注册
+      window.setTimeout(() => {
+        window.dispatchEvent(new Event(AI_SHORTCUT_SUBMIT_EVENT))
+      }, 100)
+    }
+  }, [])
+
   const handleRetry = () => {
     // Find the last user message and resend it
     for (let i = visibleMessages.length - 1; i >= 0; i--) {

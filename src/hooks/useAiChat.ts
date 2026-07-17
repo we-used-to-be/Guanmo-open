@@ -21,6 +21,8 @@ import { buildMemoryContext, classifyMemoryRetrievalIntent, isPersonalizedRewrit
 import type { Memory } from '@/services/database/persistence'
 import type { ManualCapability } from '@/components/ai/ManualToolToggle'
 import { hydrateSettingsSecrets } from '@/services/settingsSecrets'
+import { singletonManager, SINGLETON_IDS } from '@/services/singletonPromise'
+import { promoteTask } from '@/services/idleScheduler'
 
 function isCancelLastAppliedEdit(content: string, history: ChatMessage[]): boolean {
   const text = content.trim()
@@ -200,9 +202,18 @@ export function useAiChat() {
     if (chatReady) {
       const configKey = `${currentAi.baseUrl}|${currentAi.apiKey}|${currentAi.chatModel}`
       if (configKey !== lastConfigRef.current || !isAiReady()) {
+        // 提升 AI 客户端初始化优先级（如果正在闲时加载）
+        promoteTask(SINGLETON_IDS.CHAT_AI)
         try {
-          initAiClient(currentAi)
-          lastConfigRef.current = configKey
+          // 如果闲时初始化已完成，直接使用
+          if (!isAiReady()) {
+            // 等待闲时初始化完成
+            await singletonManager.init(SINGLETON_IDS.CHAT_AI, async () => {
+              const provider = initAiClient(currentAi)
+              lastConfigRef.current = configKey
+              return provider
+            })
+          }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
           setError(`AI 初始化失败：${msg}`)
@@ -220,8 +231,14 @@ export function useAiChat() {
         || currentEmbeddingConfig.baseUrl !== emb.baseUrl
         || currentEmbeddingConfig.embeddingModel !== emb.embeddingModel
       if (embeddingConfigChanged || !isEmbeddingReady()) {
+        // 提升 Embedding 客户端初始化优先级
+        promoteTask(SINGLETON_IDS.EMBEDDING_AI)
         try {
-          initEmbeddingClient(emb)
+          if (!isEmbeddingReady()) {
+            await singletonManager.init(SINGLETON_IDS.EMBEDDING_AI, async () => {
+              return initEmbeddingClient(emb)
+            })
+          }
         } catch (err) {
           console.warn('[AI] Embedding client init failed:', err)
         }

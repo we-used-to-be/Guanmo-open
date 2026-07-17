@@ -77,7 +77,7 @@ const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   autoSave: true,
   autoSaveDelay: 1000,
   syncScroll: true,
-  autoSendAiShortcut: false,
+  autoSendAiShortcut: true,
   modePrewarm: 'smart',
   fullscreenContentPadding: FULLSCREEN_CONTENT_PADDING.default,
 }
