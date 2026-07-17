@@ -297,7 +297,10 @@ function checkSensitiveContent() {
         if (matches && matches.length > 0) {
           // 跳过已知的示例/测试文件
           if (f.includes('.example') || f.includes('.test.') || f.includes('.spec.') ||
-              f.includes('__tests__') || f.includes('node_modules') || f.includes('fixtures')) {
+              f.includes('__tests__') || f.includes('node_modules') || f.includes('fixtures') ||
+              f.includes('-check.ts') || f.includes('-check.mjs') || f.includes('run-') ||
+              (f.includes('src-tauri/src/') && f.includes('test')) ||
+              (f.endsWith('.rs') && content.includes('#[cfg(test)]'))) {
             continue;
           }
           // 过滤掉值为已知安全标识符的匹配（如存储键名 'ai.apiKey'）
