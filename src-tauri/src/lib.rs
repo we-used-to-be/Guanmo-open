@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
+#[cfg(target_os = "windows")]
+use std::process::Command;
 use std::{
     collections::{HashMap, HashSet},
     ffi::OsString,
     fs,
     path::{Component, Path, PathBuf},
-    process::Command,
     sync::Mutex,
 };
 use tauri::{Emitter, Manager, State};

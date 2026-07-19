@@ -9,7 +9,119 @@ permissions:
   contents: write
 
 jobs:
+  security-check:
+    name: 安全校验
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: 安装系统依赖 (Tauri)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - name: 安装 npm 依赖
+        run: npm ci
+
+      - name: 运行推送前安全校验
+        id: check
+        run: node scripts/pre-push-check.mjs --release
+        continue-on-error: true
+
+      - name: 报告校验结果
+        if: always()
+        run: |
+          if [ ${{ steps.check.outcome }} = 'success' ]; then
+            echo "✅ 安全校验通过"
+          else
+            echo "❌ 安全校验发现阻断项，请查看上方日志"
+            exit 1
+          fi
+
+  quality:
+    name: 前端与 Rust 检查
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 安装 Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: 安装 Tauri Linux 依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - name: 按锁文件安装依赖
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: TypeScript 类型检查
+        run: npm run typecheck
+
+      - name: 前端测试
+        run: npm test
+
+      - name: 前端构建
+        run: npm run build
+
+      - name: Rust 格式检查
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Rust Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features --jobs 1 -- -D warnings
+
+      - name: Rust 测试
+        run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets --all-features --jobs 1
+
+      - name: Rust 编译检查
+        run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets --all-features --jobs 1
+
   release:
+    needs: [security-check, quality]
     runs-on: windows-latest
 
     steps:

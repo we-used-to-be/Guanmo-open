@@ -1627,7 +1627,7 @@ dependencies = [
 
 [[package]]
 name = "guanmo"
-version = "1.2.3"
+version = "1.2.4"
 dependencies = [
  "futures-util",
  "reqwest 0.12.28",

@@ -3,8 +3,6 @@ name: 安全校验
 on:
   pull_request:
     branches: [master, main]
-  push:
-    branches: [master, main]
   workflow_dispatch:
     inputs:
       release_mode:
