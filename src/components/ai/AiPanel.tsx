@@ -321,7 +321,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
             </p>
           </div>
         ) : (
-          <div className="p-4 space-y-4">
+          <div className="p-3 space-y-4">
             {hasMoreHistory && (
               <div className="flex justify-center">
                 <button
@@ -439,7 +439,7 @@ function AgentTimeline({ timeline }: { timeline: TimelineItem[] }) {
   } satisfies Record<TimelineItem['type'], string>
 
   return (
-    <div className="border-b border-gm-border-subtle bg-gm-surface px-4 py-2">
+    <div className="border-b border-gm-border bg-gm-surface px-4 py-2">
       <button
         onClick={() => setCollapsed(!collapsed)}
         className="w-full flex items-center gap-2 text-micro font-bold text-gm-text-tertiary"
@@ -447,24 +447,17 @@ function AgentTimeline({ timeline }: { timeline: TimelineItem[] }) {
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`flex-shrink-0 transition-transform ${collapsed ? '' : 'rotate-90'}`}>
           <path d="M9 18l6-6-6-6" />
         </svg>
-        <span>Agent 状态链路</span>
-        {collapsed && (
-          <span className={`ml-auto flex-shrink-0 h-2 w-2 rounded-full ${tone[latest.type]} ${latest.type === 'answer_streaming' ? 'animate-pulse' : ''}`} />
+        {collapsed ? (
+          <>
+            <span className="flex-shrink-0">Agent 状态链路：</span>
+            <span className="font-bold text-gm-text-secondary truncate">{latest.label}</span>
+            <span className={`ml-auto flex-shrink-0 h-2 w-2 rounded-full ${tone[latest.type]} ${latest.type === 'answer_streaming' ? 'animate-pulse' : ''}`} />
+          </>
+        ) : (
+          <span>Agent 状态链路</span>
         )}
       </button>
-      {collapsed ? (
-        <div className="mt-1 grid grid-cols-[10px_minmax(0,1fr)] gap-2 text-micro pl-0.5">
-          <span className={`mt-1.5 h-2 w-2 rounded-full ${tone[latest.type]} ${latest.type === 'answer_streaming' ? 'animate-pulse' : ''}`} />
-          <div className="min-w-0">
-            <span className="font-bold text-gm-text-secondary">{latest.label}</span>
-            {latest.detail && (
-              <div className="mt-0.5 truncate text-gm-text-tertiary" title={latest.detail}>
-                {latest.detail}
-              </div>
-            )}
-          </div>
-        </div>
-      ) : (
+      {!collapsed && (
         <div className="mt-2 space-y-2">
           {timeline.map((item) => (
             <div key={item.id} className="grid grid-cols-[10px_minmax(0,1fr)] gap-2 text-micro">

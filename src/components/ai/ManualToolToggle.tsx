@@ -126,7 +126,7 @@ export function ManualToolToggle({ onChange, disabled = false, resetKey }: Manua
   }, [disabled, enabledStates, selected, onChange])
 
   return (
-    <div className="flex items-center gap-1.5 px-2 py-1.5 mb-1">
+    <div className="flex items-center gap-1.5 px-2 pt-0.5 pb-1">
       {TOGGLE_OPTIONS.map((option) => {
         const isSelected = selected.includes(option.id)
         const isEnabled = enabledStates[option.id]
@@ -140,7 +140,7 @@ export function ManualToolToggle({ onChange, disabled = false, resetKey }: Manua
               onClick={() => toggleCapability(option.id)}
               icon={option.icon}
               className={`
-                gm-manual-tool-toggle !px-2 !py-1 !h-7 !text-micro !font-medium
+                gm-manual-tool-toggle !px-2 !py-1 !h-7 !text-micro !font-medium !rounded-2xl
                 ${isSelected
                   ? 'gm-manual-tool-toggle--active'
                   : ''

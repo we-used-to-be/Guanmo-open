@@ -102,7 +102,7 @@ export function PromptComposer({ onSend, streaming, onCancel, onManualCapabiliti
 
   return (
     <div
-      className={`absolute bottom-0 left-0 right-0 p-3 border-t border-gm-border-subtle backdrop-blur-xl bg-gm-surface/70 z-20 ${isDragOver ? 'bg-gm-primary-subtle/30' : ''}`}
+      className={`absolute bottom-0 left-0 right-0 p-3 border-t border-gm-border backdrop-blur-xl bg-gm-surface/90 z-20 ${isDragOver ? 'bg-gm-primary-subtle/30' : ''}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
