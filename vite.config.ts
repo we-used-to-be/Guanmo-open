@@ -4,11 +4,19 @@ import path from 'path'
 
 export default defineConfig(({ mode }) => ({
   base: './',
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: 'guanmo-build-mode',
+      transformIndexHtml(html) {
+        return html.replace('<head>', `<head>\n    <meta name="guanmo-build-mode" content="${mode}" />`)
+      },
+    },
+  ],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
-      '@app-entry': path.resolve(__dirname, './src/App.tsx'),
+      '@app-entry': path.resolve(__dirname, mode === 'web' ? './src/WebApp.tsx' : './src/App.tsx'),
       'animal-island-ui': path.resolve(__dirname, './src/vendor/animal-island-ui/index.ts'),
     },
   },
@@ -26,19 +34,21 @@ export default defineConfig(({ mode }) => ({
   build: {
     rollupOptions: {
       output: {
-        manualChunks: {
-          'codemirror-core': [
-            '@codemirror/view',
-            '@codemirror/state',
-            '@codemirror/commands',
-            '@codemirror/search',
-            '@codemirror/autocomplete',
-          ],
-          'codemirror-lang': [
-            '@codemirror/lang-markdown',
-            '@codemirror/language-data',
-          ],
-        },
+        manualChunks: mode === 'web'
+          ? undefined
+          : {
+              'codemirror-core': [
+                '@codemirror/view',
+                '@codemirror/state',
+                '@codemirror/commands',
+                '@codemirror/search',
+                '@codemirror/autocomplete',
+              ],
+              'codemirror-lang': [
+                '@codemirror/lang-markdown',
+                '@codemirror/language-data',
+              ],
+            },
       },
     },
   },
