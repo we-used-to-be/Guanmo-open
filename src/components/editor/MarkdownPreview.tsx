@@ -1,28 +1,19 @@
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeKatex from 'rehype-katex'
-import { Fragment, isValidElement, memo, useEffect, useMemo, useRef, useState } from 'react'
-import { jsx, jsxs } from 'react/jsx-runtime'
-import { toJsxRuntime, type Components } from 'hast-util-to-jsx-runtime'
+import { isValidElement, memo, useEffect, useMemo, useState } from 'react'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { isTauri } from '@/hooks/useTauri'
 import { createHeadingId, type TocItem } from '@/services/markdownToc'
 import { normalizeLatexBlockDelimiters, remarkStandaloneDisplayMath } from '@/services/markdownMath'
-import { MarkdownPreviewWorkerSession } from '@/services/markdownPreviewParser'
-import type { MarkdownPreviewBlock, MarkdownPreviewParseResult } from '@/services/markdownPreviewParserCore'
 import { useSettingsStore } from '@/stores/settingsStore'
 
 const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath, remarkStandaloneDisplayMath]
 const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex, rehypeHighlight]
 const NORMALIZED_MARKDOWN_CACHE_LIMIT = 4
-const LARGE_MARKDOWN_THRESHOLD = 50_000
-const EAGER_PREVIEW_BLOCK_COUNT = 12
-const PREVIEW_BLOCK_OVERSCAN = '1200px 0px'
-const PREVIEW_HEIGHT_CACHE_LIMIT = 400
 const normalizedMarkdownCache = new Map<string, string>()
-const previewBlockHeightCache = new Map<string, number>()
 
 interface MarkdownPreviewProps {
   content: string
@@ -56,48 +47,8 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   onTaskToggle,
   onHeadingClick,
 }: MarkdownPreviewProps) {
-  const useWorkerPipeline = content.length >= LARGE_MARKDOWN_THRESHOLD
-  const normalizedContent = useMemo(
-    () => useWorkerPipeline ? '' : getNormalizedMarkdown(content),
-    [content, useWorkerPipeline],
-  )
-  const [workerResult, setWorkerResult] = useState<{
-    content: string
-    result?: MarkdownPreviewParseResult
-    error?: string
-  } | null>(null)
-  const workerSessionRef = useRef<MarkdownPreviewWorkerSession | null>(null)
+  const normalizedContent = useMemo(() => getNormalizedMarkdown(content), [content])
   const [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(null)
-
-  useEffect(() => {
-    const workerSession = new MarkdownPreviewWorkerSession()
-    workerSessionRef.current = workerSession
-    return () => {
-      workerSession.dispose()
-      if (workerSessionRef.current === workerSession) workerSessionRef.current = null
-    }
-  }, [])
-
-  useEffect(() => {
-    const workerSession = workerSessionRef.current
-    if (!workerSession) return
-    if (!useWorkerPipeline) {
-      workerSession.cancel()
-      return
-    }
-    void workerSession.parse(content).then(
-      (result) => {
-        setWorkerResult({ content, result })
-      },
-      (error) => {
-        if (error instanceof Error && error.name === 'AbortError') return
-        setWorkerResult({
-          content,
-          error: error instanceof Error ? error.message : String(error),
-        })
-      },
-    )
-  }, [content, useWorkerPipeline])
 
   const components = useMemo<Partial<Components>>(() => {
     const headingIds = new Map<string, number>()
@@ -300,44 +251,19 @@ export const MarkdownPreview = memo(function MarkdownPreview({
         }
   }, [filePath, fontSize, onHeadingClick, onTaskToggle])
 
-  const currentWorkerResult = workerResult?.content === content ? workerResult : null
-  const fallbackContent = currentWorkerResult?.error ? getNormalizedMarkdown(content) : normalizedContent
-
   return (
     <div
       className="prose gm-markdown-preview max-w-none min-w-0 text-gm-text"
       style={{ fontSize: `${fontSize}px`, lineHeight }}
     >
-      {useWorkerPipeline ? (
-        currentWorkerResult?.result ? (
-          <IncrementalMarkdownPreview
-            blocks={currentWorkerResult.result.blocks}
-            components={components}
-            fontSize={fontSize}
-            lineHeight={lineHeight}
-          />
-        ) : currentWorkerResult?.error ? (
-          <ReactMarkdown
-            skipHtml={skipHtml}
-            remarkPlugins={MARKDOWN_REMARK_PLUGINS}
-            rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
-            components={components}
-          >
-            {fallbackContent}
-          </ReactMarkdown>
-        ) : (
-          <div className="py-3 text-caption text-gm-text-tertiary">正在解析预览...</div>
-        )
-      ) : (
-        <ReactMarkdown
-          skipHtml={skipHtml}
-          remarkPlugins={MARKDOWN_REMARK_PLUGINS}
-          rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
-          components={components}
-        >
-          {normalizedContent}
-        </ReactMarkdown>
-      )}
+      <ReactMarkdown
+        skipHtml={skipHtml}
+        remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+        rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
+        components={components}
+      >
+        {normalizedContent}
+      </ReactMarkdown>
       {zoomImage && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-8"
@@ -364,155 +290,6 @@ export const MarkdownPreview = memo(function MarkdownPreview({
     </div>
   )
 })
-
-function IncrementalMarkdownPreview({
-  blocks,
-  components,
-  fontSize,
-  lineHeight,
-}: {
-  blocks: MarkdownPreviewBlock[]
-  components: Partial<Components>
-  fontSize: number
-  lineHeight: number
-}) {
-  return blocks.map((block, index) => (
-    <VirtualMarkdownBlock
-      key={block.key}
-      block={block}
-      components={components}
-      eager={index < EAGER_PREVIEW_BLOCK_COUNT}
-      fontSize={fontSize}
-      lineHeight={lineHeight}
-    />
-  ))
-}
-
-function VirtualMarkdownBlock({
-  block,
-  components,
-  eager,
-  fontSize,
-  lineHeight,
-}: {
-  block: MarkdownPreviewBlock
-  components: Partial<Components>
-  eager: boolean
-  fontSize: number
-  lineHeight: number
-}) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [mounted, setMounted] = useState(eager)
-  const [placeholderHeight, setPlaceholderHeight] = useState(() => estimateBlockHeight(block, fontSize, lineHeight))
-
-  useEffect(() => {
-    if (eager) setMounted(true)
-  }, [eager])
-
-  useEffect(() => {
-    if (mounted) return
-    const element = containerRef.current
-    if (!element || typeof IntersectionObserver === 'undefined') {
-      setMounted(true)
-      return
-    }
-
-    const cacheKey = getPreviewHeightCacheKey(block.key, element.clientWidth, fontSize, lineHeight)
-    const cachedHeight = previewBlockHeightCache.get(cacheKey)
-    if (cachedHeight) setPlaceholderHeight(cachedHeight)
-
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) {
-        setMounted(true)
-        observer.disconnect()
-      }
-    }, {
-      root: findPreviewScrollContainer(element),
-      rootMargin: PREVIEW_BLOCK_OVERSCAN,
-    })
-    observer.observe(element)
-    return () => observer.disconnect()
-  }, [block.key, fontSize, lineHeight, mounted])
-
-  useEffect(() => {
-    if (!mounted) return
-    const element = containerRef.current
-    if (!element || typeof ResizeObserver === 'undefined') return
-
-    const cacheHeight = () => {
-      const height = element.getBoundingClientRect().height
-      if (height <= 0) return
-      const cacheKey = getPreviewHeightCacheKey(block.key, element.clientWidth, fontSize, lineHeight)
-      setPreviewBlockHeight(cacheKey, height)
-    }
-    cacheHeight()
-    const observer = new ResizeObserver(cacheHeight)
-    observer.observe(element)
-    return () => observer.disconnect()
-  }, [block.key, fontSize, lineHeight, mounted])
-
-  return (
-    <div
-      ref={containerRef}
-      data-md-line={block.startLine}
-      data-md-end-line={block.endLine}
-      data-preview-block-state={mounted ? 'mounted' : 'placeholder'}
-      style={mounted ? undefined : { height: `${placeholderHeight}px` }}
-    >
-      {mounted && <MarkdownAstBlock block={block} components={components} />}
-    </div>
-  )
-}
-
-const MarkdownAstBlock = memo(function MarkdownAstBlock({
-  block,
-  components,
-}: {
-  block: MarkdownPreviewBlock
-  components: Partial<Components>
-}) {
-  return toJsxRuntime(block.tree, {
-    Fragment,
-    jsx,
-    jsxs,
-    components,
-    ignoreInvalidStyle: true,
-    passKeys: true,
-    passNode: true,
-  })
-}, (previous, next) => (
-  previous.block.key === next.block.key
-  && previous.block.startLine === next.block.startLine
-  && previous.block.endLine === next.block.endLine
-  && previous.components === next.components
-))
-
-function estimateBlockHeight(block: MarkdownPreviewBlock, fontSize: number, lineHeight: number): number {
-  const sourceLines = Math.max(1, block.endLine - block.startLine + 1)
-  return Math.max(fontSize * lineHeight * 1.5, sourceLines * fontSize * lineHeight + 16)
-}
-
-function findPreviewScrollContainer(element: HTMLElement): Element | null {
-  let parent = element.parentElement
-  while (parent) {
-    const overflowY = window.getComputedStyle(parent).overflowY
-    if (overflowY === 'auto' || overflowY === 'scroll') return parent
-    parent = parent.parentElement
-  }
-  return null
-}
-
-function getPreviewHeightCacheKey(key: string, width: number, fontSize: number, lineHeight: number): string {
-  return `${key}:${Math.round(width / 50)}:${fontSize}:${lineHeight}`
-}
-
-function setPreviewBlockHeight(key: string, height: number) {
-  previewBlockHeightCache.delete(key)
-  previewBlockHeightCache.set(key, height)
-  if (previewBlockHeightCache.size <= PREVIEW_HEIGHT_CACHE_LIMIT) return
-  const oldest = previewBlockHeightCache.keys().next().value
-  if (oldest !== undefined) previewBlockHeightCache.delete(oldest)
-}
 
 function handleHeadingClick(line: number | undefined, onHeadingClick?: (line: number) => void) {
   if (!onHeadingClick || typeof line !== 'number') return

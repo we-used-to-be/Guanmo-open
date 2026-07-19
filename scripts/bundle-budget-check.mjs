@@ -42,6 +42,11 @@ if (mode === 'web') {
   assert.deepEqual(oversized, [], `存在超出 1.3 MB 的桌面脚本：${oversized.join(', ')}`)
   assert.ok(initialJsBytes <= 2_000_000, `桌面首屏 JS 超出 2 MB：${initialJsBytes} bytes`)
   assert.ok(jsBytes <= 7_500_000, `桌面 JS 总量超出 7.5 MB：${jsBytes} bytes`)
+  assert.equal(
+    jsFiles.some((file) => /^markdownPreview\.worker-.*\.js$/.test(file)),
+    false,
+    'Markdown 预览必须保持同步 ReactMarkdown 路径，不得重新打包独立 Worker',
+  )
 }
 
 console.log(`Bundle budget passed (${mode}): entry ${entryBytes} bytes, JS total ${jsBytes} bytes, ${jsFiles.length} chunks`)
