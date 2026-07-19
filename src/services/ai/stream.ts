@@ -24,9 +24,20 @@ export async function* parseSSEStream(
       const parsed = JSON.parse(data)
       const choice = parsed.choices?.[0]
       const content = choice?.delta?.content ?? choice?.message?.content ?? ''
+      const toolCallDeltas = Array.isArray(choice?.delta?.tool_calls)
+        ? choice.delta.tool_calls
+            .filter((call: { index?: unknown }) => typeof call.index === 'number')
+            .map((call: { index: number; id?: string; function?: { name?: string; arguments?: string } }) => ({
+              index: call.index,
+              id: call.id,
+              name: call.function?.name,
+              arguments: call.function?.arguments,
+            }))
+        : undefined
       const done = Boolean(choice?.finish_reason)
-      return { content, done }
-    } catch {
+      return { content, done, toolCallDeltas }
+    } catch (err) {
+      console.warn(`[AI Stream] 忽略无法解析的 SSE 事件（${data.length} 字符）`, err)
       return null
     }
   }
@@ -46,11 +57,8 @@ export async function* parseSSEStream(
         if (!event.trim()) continue
         const chunk = parseEvent(event)
         if (!chunk) continue
-        if (chunk.content) yield { content: chunk.content, done: false }
-        if (chunk.done) {
-          if (!chunk.content) yield { content: '', done: true }
-          return
-        }
+        if (chunk.content || chunk.toolCallDeltas?.length || chunk.done) yield chunk
+        if (chunk.done) return
       }
 
       // 改进：处理单行事件（没有空行分隔的情况）
@@ -64,11 +72,8 @@ export async function* parseSSEStream(
             const eventText = completeEvents.join('\n')
             const chunk = parseEvent(eventText)
             if (chunk) {
-              if (chunk.content) yield { content: chunk.content, done: false }
-              if (chunk.done) {
-                if (!chunk.content) yield { content: '', done: true }
-                return
-              }
+              if (chunk.content || chunk.toolCallDeltas?.length || chunk.done) yield chunk
+              if (chunk.done) return
             }
             completeEvents.length = 0
           }
@@ -84,7 +89,7 @@ export async function* parseSSEStream(
     buffer += decoder.decode()
     if (buffer.trim()) {
       const tail = parseEvent(buffer)
-      if (tail?.content) yield { content: tail.content, done: false }
+      if (tail && (tail.content || tail.toolCallDeltas?.length || tail.done)) yield tail
       if (tail?.done) return
     }
   } finally {

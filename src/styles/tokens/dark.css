@@ -1,49 +1,70 @@
 /* === 观墨 Deep Dark Theme === */
 [data-theme='dark'] {
   /* Canvas & Surfaces (4-step ladder) */
-  --gm-canvas: #0f1117;
-  --gm-surface: #161822;
-  --gm-surface-elevated: #1c1f2e;
-  --gm-surface-overlay: #232638;
-  --gm-surface-hover: #272a3a;
+  --gm-canvas: #15130f;
+  --gm-surface: #1d1a15;
+  --gm-surface-elevated: #252017;
+  --gm-surface-overlay: #30291e;
+  --gm-surface-hover: rgba(224, 190, 132, 0.1);
 
   /* Borders (hairline system) */
-  --gm-border: #2a2d3e;
-  --gm-border-subtle: #222536;
-  --gm-border-strong: #3a3d52;
-  --gm-border-focus: #5b8def;
+  --gm-border: #3b3327;
+  --gm-border-subtle: #2d271f;
+  --gm-border-strong: #514532;
+  --gm-border-focus: #58b8ae;
 
   /* Brand Primary */
-  --gm-primary: #5b8def;
-  --gm-primary-hover: #7aa5ff;
-  --gm-primary-active: #4a7de0;
-  --gm-primary-subtle: rgba(91, 141, 239, 0.12);
+  --gm-primary: #58b8ae;
+  --gm-primary-hover: #72c8bf;
+  --gm-primary-active: #449d94;
+  --gm-primary-subtle: rgba(88, 184, 174, 0.13);
 
   /* Accent (AI) */
-  --gm-accent: #a78bfa;
-  --gm-accent-subtle: rgba(167, 139, 250, 0.12);
+  --gm-accent: #e0be84;
+  --gm-accent-subtle: rgba(224, 190, 132, 0.14);
 
   /* Text Hierarchy */
-  --gm-text: #e4e6ef;
-  --gm-text-secondary: #9498ab;
-  --gm-text-tertiary: #6b6f82;
-  --gm-text-disabled: #4a4e60;
-  --gm-text-on-primary: #ffffff;
+  --gm-text: #eee4d2;
+  --gm-text-secondary: #b7aa94;
+  --gm-text-tertiary: #887b66;
+  --gm-text-disabled: #625746;
+  --gm-text-on-primary: #10211f;
+
+  /* User Message Bubble (柔和低饱和) */
+  --gm-user-bubble-bg: #2b3b46;
+  --gm-user-bubble-text: #e8f0f3;
+
+  /* Active Indicator (标签下划线、目录高亮) */
+  --gm-active-indicator: #58b8ae;
 
   /* Semantic */
-  --gm-success: #4ade80;
-  --gm-warning: #fbbf24;
-  --gm-error: #f87171;
-  --gm-info: #5b8def;
+  --gm-success: #7bcf9a;
+  --gm-warning: #e9b95d;
+  --gm-error: #ef7d74;
+  --gm-info: #8fb7d8;
 
   /* Editor Specific */
-  --gm-editor-bg: #0d0f14;
-  --gm-editor-gutter: #161822;
-  --gm-editor-line-highlight: rgba(91, 141, 239, 0.06);
-  --gm-editor-selection: rgba(91, 141, 239, 0.2);
+  --gm-editor-bg: #17140f;
+  --gm-editor-gutter: #1d1a15;
+  --gm-editor-line-highlight: rgba(88, 184, 174, 0.07);
+  --gm-editor-selection: rgba(88, 184, 174, 0.2);
+  --gm-editor-heading: #f2d9a8;
+  --gm-editor-quote: #70d7c7;
+  --gm-editor-code: #e0be84;
+  --gm-editor-link: #72c8bf;
+  --gm-editor-list: #d8a95c;
+  --gm-markdown-heading: #f2d9a8;
+  --gm-markdown-quote-bg: rgba(88, 184, 174, 0.1);
+  --gm-code-bg: #211d16;
+  --gm-code-text: #eee4d2;
+  --gm-code-muted: #9c8f79;
+  --gm-code-command: #72c8bf;
+  --gm-code-path: #f0c987;
+  --gm-code-error: #ff9a91;
+  --gm-code-info: #a8c7e6;
 
   /* Scrollbar */
   --gm-scrollbar-track: transparent;
-  --gm-scrollbar-thumb: #2a2d3e;
-  --gm-scrollbar-thumb-hover: #3a3d52;
+  --gm-scrollbar-thumb: #514532;
+  --gm-scrollbar-thumb-hover: #6a5a40;
 }

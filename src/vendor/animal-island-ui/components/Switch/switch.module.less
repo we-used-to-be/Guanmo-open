@@ -15,7 +15,7 @@
     cursor: pointer;
     transition: all var(--animal-motion-duration-base) var(--animal-motion-ease);
     outline: none;
-    box-shadow: inset 0 2px 4px rgba(114, 93, 66, 0.15);
+    box-shadow: none;
 
     &:hover:not(.switch-disabled) {
         border-color: #a89878;
@@ -29,13 +29,13 @@
 
 // ---------- Checked ----------
 .switch-checked {
-    background: #86d67a;
-    border-color: #6fba2c;
-    box-shadow: inset 0 2px 4px rgba(90, 158, 30, 0.2);
+    background: var(--animal-primary-color);
+    border-color: var(--animal-primary-color-active);
+    box-shadow: none;
 
     &:hover:not(.switch-disabled) {
-        border-color: #5a9e1e;
-        background: #7ccc70;
+        border-color: var(--animal-primary-color-active);
+        background: var(--animal-primary-color-hover);
     }
 }
 
@@ -83,7 +83,7 @@
 
 .switch-checked .handle {
     left: calc(100% - 24px);
-    border-color: #6fba2c;
+    border-color: var(--animal-primary-color-active);
 }
 
 // ---------- Inner Text ----------

@@ -16,6 +16,8 @@ export type AgentToolName =
   | 'save_memory'
   | 'search_knowledge'
   | 'list_database_contents'
+  | 'read_selection_context'
+  | 'list_current_edit_targets'
   | 'replace_current_tab_text'
   | 'read_context_file'
   | 'web_search'
@@ -25,8 +27,9 @@ export type AgentToolName =
 const CAPABILITY_TOOLS: Record<Capability, AgentToolName[]> = {
   memory: ['search_memory', 'list_memories'],
   knowledge: ['search_knowledge', 'list_database_contents'],
+  selection_context: ['read_selection_context'],
   file_read: ['read_context_file'],
-  file_write: ['replace_current_tab_text'],
+  file_write: ['list_current_edit_targets', 'replace_current_tab_text'],
   web: ['web_search'],
   time: ['get_current_time'],
 }
@@ -40,6 +43,8 @@ const READ_TOOLS: AgentToolName[] = [
   'list_memories',
   'search_knowledge',
   'list_database_contents',
+  'read_selection_context',
+  'list_current_edit_targets',
   'read_context_file',
   'web_search',
   'get_current_time',
@@ -126,6 +131,7 @@ export function getCapabilityHint(capability: Capability): string {
   const hints: Record<Capability, string> = {
     memory: '用户问题涉及长期记忆，已自动检索记忆库',
     knowledge: '用户问题涉及本地知识库，已自动检索文档',
+    selection_context: '用户问题依赖选区附近内容，已自动读取受限的选区上下文',
     file_read: '用户问题涉及文件读取，已自动读取文件',
     file_write: '用户问题涉及文件修改，需要用户确认',
     web: '用户问题需要网络搜索，已自动搜索',
@@ -143,6 +149,8 @@ export function getToolTokenBudget(toolName: string): number {
     list_memories: 4000,
     search_knowledge: 5000,
     list_database_contents: 5000,
+    read_selection_context: 1400,
+    list_current_edit_targets: 1000,
     read_context_file: 4000,
     web_search: 3000,
     get_current_time: 1000,

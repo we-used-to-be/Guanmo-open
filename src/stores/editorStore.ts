@@ -1,7 +1,6 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { persist, type PersistStorage, type StorageValue } from 'zustand/middleware'
 import { isSameFilePath, normalizeFilePath } from '@/services/pathIdentity'
-import { validatePersistedTabs } from '@/services/sessionRestore'
 
 export interface Tab {
   id: string
@@ -9,6 +8,8 @@ export interface Tab {
   filePath: string | null
   content: string
   savedContent: string
+  /** 文件打开时的内容，用于 diff 对比（不受自动保存影响） */
+  originalContent: string
   modified: boolean
   pinned?: boolean
 }
@@ -19,7 +20,25 @@ export interface RecentFile {
   lastOpened: number
 }
 
-type ViewMode = 'edit' | 'preview' | 'edit-preview' | 'dual-preview' | 'diff-preview'
+export type ViewMode = 'edit' | 'preview' | 'edit-preview' | 'dual-preview' | 'diff-preview'
+type PrewarmableViewMode = Exclude<ViewMode, 'edit'>
+
+export interface ViewModeUsageStat {
+  count: number
+  lastUsedAt: number
+}
+
+interface PersistedEditorState {
+  recentFiles: RecentFile[]
+  favorites: string[]
+  tabs: Tab[]
+  activeTabId: string | null
+  viewMode: ViewMode
+  rightPaneTabId: string | null
+  rightPaneUserSelected: boolean
+  viewModeUsage: Partial<Record<PrewarmableViewMode, ViewModeUsageStat>>
+  pendingReveal: null
+}
 
 interface EditorState {
   tabs: Tab[]
@@ -27,14 +46,18 @@ interface EditorState {
   previewVisible: boolean
   viewMode: ViewMode
   rightPaneTabId: string | null
+  rightPaneUserSelected: boolean
+  viewModeUsage: Partial<Record<PrewarmableViewMode, ViewModeUsageStat>>
   recentFiles: RecentFile[]
   favorites: string[]
   pendingReveal: { tabId: string; startLine: number; endLine?: number } | null
+  previewSwitchingTabId: string | null
 
   openTab: (tab: Tab) => void
   addTab: (filePath?: string, title?: string, content?: string) => void
   closeTab: (id: string) => void
   setActiveTab: (id: string) => void
+  clearPreviewSwitching: (tabId?: string) => void
   updateTabContent: (id: string, content: string) => void
   togglePreview: () => void
   toggleDiffPreview: () => void
@@ -52,6 +75,124 @@ interface EditorState {
   clearPendingReveal: () => void
 }
 
+function dedupeRecentFiles(files: RecentFile[] = []) {
+  const seen = new Set<string>()
+  return [...files]
+    .sort((a, b) => b.lastOpened - a.lastOpened)
+    .filter((file) => {
+      const key = normalizeFilePath(file.path)
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    .slice(0, 5)
+}
+
+function dedupeRestoredTabs(tabs: Tab[] = []) {
+  const restored: Tab[] = []
+  for (const tab of tabs) {
+    // 确保 originalContent 存在（兼容旧数据）
+    const hydratedTab = {
+      ...tab,
+      originalContent: tab.originalContent ?? tab.savedContent ?? tab.content,
+    }
+
+    if (!tab.filePath) {
+      restored.push(hydratedTab)
+      continue
+    }
+    const duplicate = restored.find((item) => isSameFilePath(item.filePath, tab.filePath))
+    const canMerge =
+      duplicate &&
+      !tab.modified &&
+      tab.content === tab.savedContent &&
+      tab.content === duplicate.content &&
+      tab.savedContent === duplicate.savedContent
+    if (canMerge) continue
+    restored.push(hydratedTab)
+  }
+  return restored
+}
+
+function compactPersistedTab(tab: Tab): Tab {
+  if (!tab.filePath || tab.modified) return tab
+  return {
+    ...tab,
+    content: '',
+    savedContent: '',
+    originalContent: '',
+  }
+}
+
+function createDeferredEditorStorage(delayMs: number): PersistStorage<PersistedEditorState> {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let pending: { name: string; value: StorageValue<PersistedEditorState> } | null = null
+
+  const flush = () => {
+    timer = null
+    if (!pending) return
+    const { name, value } = pending
+    pending = null
+    localStorage.setItem(name, JSON.stringify(value))
+  }
+
+  window.addEventListener('beforeunload', flush)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flush()
+  })
+
+  return {
+    getItem(name) {
+      const raw = localStorage.getItem(name)
+      return raw ? JSON.parse(raw) as StorageValue<PersistedEditorState> : null
+    },
+    setItem(name, value) {
+      pending = { name, value }
+      if (timer !== null) clearTimeout(timer)
+      timer = setTimeout(flush, delayMs)
+    },
+    removeItem(name) {
+      if (pending?.name === name) pending = null
+      if (timer !== null) {
+        clearTimeout(timer)
+        timer = null
+      }
+      localStorage.removeItem(name)
+    },
+  }
+}
+
+function shouldMaskPreviewSwitch(viewMode: ViewMode) {
+  return viewMode === 'preview' || viewMode === 'edit-preview' || viewMode === 'dual-preview'
+}
+
+function markPreviewSwitchStart(tabId: string, viewMode: ViewMode) {
+  if (!import.meta.env.DEV || !shouldMaskPreviewSwitch(viewMode)) return
+  const markName = `guanmo:preview-switch:${tabId}:start`
+  performance.clearMarks(markName)
+  performance.mark(markName)
+}
+
+function isPrewarmableViewMode(mode: ViewMode): mode is PrewarmableViewMode {
+  return mode !== 'edit'
+}
+
+function markUserViewModeUse(
+  usage: Partial<Record<PrewarmableViewMode, ViewModeUsageStat>>,
+  mode: ViewMode,
+  previousMode: ViewMode
+) {
+  if (mode === previousMode || !isPrewarmableViewMode(mode)) return usage
+  const current = usage[mode] ?? { count: 0, lastUsedAt: 0 }
+  return {
+    ...usage,
+    [mode]: {
+      count: current.count + 1,
+      lastUsedAt: Date.now(),
+    },
+  }
+}
+
 export const useEditorStore = create<EditorState>()(
   persist(
     (set, get) => ({
@@ -60,22 +201,36 @@ export const useEditorStore = create<EditorState>()(
       previewVisible: true,
       viewMode: 'edit',
       rightPaneTabId: null,
+      rightPaneUserSelected: false,
+      viewModeUsage: {},
       recentFiles: [],
       favorites: [],
       pendingReveal: null,
+      previewSwitchingTabId: null,
 
       openTab: (tab) => {
         const existing = get().tabs.find((t) => t.id === tab.id || isSameFilePath(t.filePath, tab.filePath))
         if (existing) {
-          set({ activeTabId: existing.id })
+          set((s) => ({
+            activeTabId: existing.id,
+            rightPaneTabId: s.viewMode === 'dual-preview' && !s.rightPaneUserSelected
+              ? existing.id
+              : s.rightPaneTabId,
+            previewSwitchingTabId: shouldMaskPreviewSwitch(s.viewMode) && s.activeTabId !== existing.id ? existing.id : null,
+          }))
         } else {
           const hydratedTab = {
             ...tab,
             savedContent: tab.savedContent ?? tab.content,
+            originalContent: tab.originalContent ?? tab.savedContent ?? tab.content,
           }
           set((s) => ({
             tabs: [hydratedTab, ...s.tabs],
             activeTabId: hydratedTab.id,
+            rightPaneTabId: s.viewMode === 'dual-preview' && !s.rightPaneUserSelected
+              ? hydratedTab.id
+              : s.rightPaneTabId,
+            previewSwitchingTabId: null,
           }))
         }
       },
@@ -83,7 +238,13 @@ export const useEditorStore = create<EditorState>()(
       addTab: (filePath, title, content) => {
         const existing = get().tabs.find((t) => isSameFilePath(t.filePath, filePath))
         if (existing) {
-          set({ activeTabId: existing.id })
+          set((s) => ({
+            activeTabId: existing.id,
+            rightPaneTabId: s.viewMode === 'dual-preview' && !s.rightPaneUserSelected
+              ? existing.id
+              : s.rightPaneTabId,
+            previewSwitchingTabId: shouldMaskPreviewSwitch(s.viewMode) && s.activeTabId !== existing.id ? existing.id : null,
+          }))
           return
         }
         const id = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
@@ -94,11 +255,16 @@ export const useEditorStore = create<EditorState>()(
           filePath: filePath || null,
           content: initialContent,
           savedContent: initialContent,
+          originalContent: initialContent,
           modified: false,
         }
         set((s) => ({
           tabs: [tab, ...s.tabs],
           activeTabId: id,
+          rightPaneTabId: s.viewMode === 'dual-preview' && !s.rightPaneUserSelected
+            ? id
+            : s.rightPaneTabId,
+          previewSwitchingTabId: null,
         }))
         if (filePath && title) {
           get().addRecentFile(filePath, title)
@@ -113,14 +279,47 @@ export const useEditorStore = create<EditorState>()(
             activeTabId = tabs.length > 0 ? tabs[0].id : null
           }
           let rightPaneTabId = s.rightPaneTabId
+          let rightPaneUserSelected = s.rightPaneUserSelected
           if (rightPaneTabId === id) {
             rightPaneTabId = null
+            rightPaneUserSelected = false
           }
-          return { tabs, activeTabId, rightPaneTabId }
+          if (s.viewMode === 'dual-preview' && !rightPaneUserSelected) {
+            rightPaneTabId = activeTabId
+          }
+          return {
+            tabs,
+            activeTabId,
+            rightPaneTabId,
+            rightPaneUserSelected,
+            previewSwitchingTabId: activeTabId && shouldMaskPreviewSwitch(s.viewMode) && s.activeTabId !== activeTabId
+              ? activeTabId
+              : null,
+          }
         })
       },
 
-      setActiveTab: (id) => set({ activeTabId: id }),
+      setActiveTab: (id) => set((s) => {
+        if (s.activeTabId !== id) {
+          markPreviewSwitchStart(id, s.viewMode)
+        }
+        let rightPaneTabId = s.rightPaneTabId
+        if (s.viewMode === 'dual-preview' && !s.rightPaneUserSelected) {
+          rightPaneTabId = id
+        }
+
+        return {
+          activeTabId: id,
+          rightPaneTabId,
+          previewSwitchingTabId: shouldMaskPreviewSwitch(s.viewMode) && s.activeTabId !== id ? id : null,
+        }
+      }),
+
+      clearPreviewSwitching: (tabId) => set((s) => (
+        !tabId || s.previewSwitchingTabId === tabId
+          ? { previewSwitchingTabId: null }
+          : s
+      )),
 
       updateTabContent: (id, content) => {
         set((s) => ({
@@ -135,16 +334,24 @@ export const useEditorStore = create<EditorState>()(
         if (viewMode === 'edit-preview' || viewMode === 'preview') {
           set({ viewMode: 'edit', previewVisible: false })
         } else {
-          set({ viewMode: 'edit-preview', previewVisible: true, rightPaneTabId: null })
+          set((s) => ({
+            viewMode: 'edit-preview',
+            previewVisible: true,
+            viewModeUsage: markUserViewModeUse(s.viewModeUsage, 'edit-preview', s.viewMode),
+          }))
         }
       },
 
       toggleDiffPreview: () => {
         const { viewMode } = get()
         if (viewMode === 'diff-preview') {
-          set({ viewMode: 'edit', previewVisible: false, rightPaneTabId: null })
+          set({ viewMode: 'edit', previewVisible: false })
         } else {
-          set({ viewMode: 'diff-preview', previewVisible: false, rightPaneTabId: null })
+          set((s) => ({
+            viewMode: 'diff-preview',
+            previewVisible: false,
+            viewModeUsage: markUserViewModeUse(s.viewModeUsage, 'diff-preview', s.viewMode),
+          }))
         }
       },
 
@@ -162,24 +369,45 @@ export const useEditorStore = create<EditorState>()(
 
       setViewMode: (mode) => {
         if (mode === 'edit') {
-          set({ viewMode: 'edit', previewVisible: false, rightPaneTabId: null })
+          set({ viewMode: 'edit', previewVisible: false })
         } else if (mode === 'preview') {
-          set({ viewMode: 'preview', previewVisible: true, rightPaneTabId: null })
+          set((s) => ({
+            viewMode: 'preview',
+            previewVisible: true,
+            viewModeUsage: markUserViewModeUse(s.viewModeUsage, mode, s.viewMode),
+          }))
         } else if (mode === 'edit-preview') {
-          set({ viewMode: 'edit-preview', previewVisible: true, rightPaneTabId: null })
+          set((s) => ({
+            viewMode: 'edit-preview',
+            previewVisible: true,
+            viewModeUsage: markUserViewModeUse(s.viewModeUsage, mode, s.viewMode),
+          }))
         } else if (mode === 'dual-preview') {
-          const { activeTabId, rightPaneTabId } = get()
+          const { activeTabId, rightPaneTabId, rightPaneUserSelected, tabs } = get()
+          const hasRightPaneTab = tabs.some((tab) => tab.id === rightPaneTabId)
+          const nextRightPaneTabId = rightPaneUserSelected && hasRightPaneTab
+            ? rightPaneTabId
+            : activeTabId
           set({
             viewMode: 'dual-preview',
             previewVisible: false,
-            rightPaneTabId: rightPaneTabId || activeTabId,
+            rightPaneTabId: nextRightPaneTabId,
+            rightPaneUserSelected: rightPaneUserSelected && hasRightPaneTab,
+            viewModeUsage: markUserViewModeUse(get().viewModeUsage, mode, get().viewMode),
           })
         } else if (mode === 'diff-preview') {
-          set({ viewMode: 'diff-preview', previewVisible: false, rightPaneTabId: null })
+          set((s) => ({
+            viewMode: 'diff-preview',
+            previewVisible: false,
+            viewModeUsage: markUserViewModeUse(s.viewModeUsage, mode, s.viewMode),
+          }))
         }
       },
 
-      setRightPaneTabId: (id) => set({ rightPaneTabId: id }),
+      setRightPaneTabId: (id) => set({
+        rightPaneTabId: id,
+        rightPaneUserSelected: Boolean(id),
+      }),
 
       addRecentFile: (path, name) => {
         set((s) => {
@@ -242,7 +470,7 @@ export const useEditorStore = create<EditorState>()(
         set((s) => ({
           tabs: s.tabs.map((tab) =>
             tab.id === id
-              ? { ...tab, filePath, title, content, savedContent: content, modified: false }
+              ? { ...tab, filePath, title, content, savedContent: content, originalContent: content, modified: false }
               : tab
           ),
         }))
@@ -257,32 +485,41 @@ export const useEditorStore = create<EditorState>()(
     }),
     {
       name: 'guanmo-editor',
+      storage: createDeferredEditorStorage(250),
       partialize: (state) => ({
         recentFiles: state.recentFiles,
         favorites: state.favorites,
-        tabs: state.tabs,
+        tabs: state.tabs.map(compactPersistedTab),
         activeTabId: state.activeTabId,
         viewMode: state.viewMode,
         rightPaneTabId: state.rightPaneTabId,
+        rightPaneUserSelected: state.rightPaneUserSelected,
+        viewModeUsage: state.viewModeUsage,
         pendingReveal: null,
       }),
-      onRehydrateStorage: () => (state) => {
-        if (!state) return
-        // 异步验证持久化的标签页文件是否存在
-        validatePersistedTabs(state.tabs).then((validTabs) => {
-          if (validTabs.length !== state.tabs.length) {
-            const validIds = new Set(validTabs.map((t) => t.id))
-            let activeTabId = state.activeTabId
-            if (activeTabId && !validIds.has(activeTabId)) {
-              activeTabId = validTabs.length > 0 ? validTabs[0].id : null
-            }
-            let rightPaneTabId = state.rightPaneTabId
-            if (rightPaneTabId && !validIds.has(rightPaneTabId)) {
-              rightPaneTabId = null
-            }
-            useEditorStore.setState({ tabs: validTabs, activeTabId, rightPaneTabId })
-          }
-        })
+      merge: (persisted, current) => {
+        const saved = persisted as Partial<EditorState>
+        const tabs = dedupeRestoredTabs(saved.tabs ?? current.tabs)
+        const activeTabId = tabs.some((tab) => tab.id === saved.activeTabId)
+          ? saved.activeTabId ?? null
+          : tabs[0]?.id ?? null
+        const rightPaneTabId = tabs.some((tab) => tab.id === saved.rightPaneTabId)
+          ? saved.rightPaneTabId ?? null
+          : null
+        const rightPaneUserSelected = Boolean(saved.rightPaneUserSelected && rightPaneTabId)
+
+        return {
+          ...current,
+          ...saved,
+          tabs,
+          activeTabId,
+          rightPaneTabId,
+          rightPaneUserSelected,
+          viewModeUsage: saved.viewModeUsage ?? current.viewModeUsage,
+          recentFiles: dedupeRecentFiles(saved.recentFiles ?? current.recentFiles),
+          pendingReveal: null,
+          previewSwitchingTabId: null,
+        }
       },
     }
   )

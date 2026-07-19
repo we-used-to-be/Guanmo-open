@@ -1,11 +1,24 @@
 import { useMemo } from 'react'
 import { useEditorStore } from '@/stores/editorStore'
-import { useSettingsStore } from '@/stores/settingsStore'
-import { Divider } from 'animal-island-ui'
+import { useAppStore } from '@/stores/appStore'
+
+const STATUS_MAP: Record<string, { label: string; color: string }> = {
+  ok: { label: 'AI 就绪', color: 'bg-gm-success' },
+  chat_unreachable: { label: '对话服务不可达', color: 'bg-gm-error' },
+  embedding_unreachable: { label: 'Embedding 服务不可达', color: 'bg-gm-error' },
+  both_unreachable: { label: '对话和 Embedding 不可达', color: 'bg-gm-error' },
+  search_unreachable: { label: '搜索 API 不可用', color: 'bg-gm-error' },
+  chat_search_unreachable: { label: '对话和搜索不可达', color: 'bg-gm-error' },
+  embedding_search_unreachable: { label: 'Embedding 和搜索不可达', color: 'bg-gm-error' },
+  all_unreachable: { label: 'AI 服务全部不可达', color: 'bg-gm-error' },
+  not_configured: { label: 'AI 未配置', color: 'bg-gm-text-disabled' },
+  unchecked: { label: 'AI 检测中…', color: 'bg-gm-text-disabled' },
+}
 
 export function StatusBar() {
-  const { tabs, activeTabId } = useEditorStore()
-  const { ai } = useSettingsStore()
+  const tabs = useEditorStore((s) => s.tabs)
+  const activeTabId = useEditorStore((s) => s.activeTabId)
+  const aiStatus = useAppStore((s) => s.aiStatus)
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
 
@@ -17,8 +30,6 @@ export function StatusBar() {
     const englishWords = text.replace(/[一-鿿]/g, ' ').split(/\s+/).filter(Boolean).length
     return chineseChars + englishWords
   }, [activeTab?.content])
-
-  const aiConfigured = ai.apiKey.length > 0
 
   return (
     <div className="h-8 flex items-center px-4 bg-gm-surface border-t border-gm-border-subtle text-caption text-gm-text-secondary gap-4">
@@ -51,8 +62,8 @@ export function StatusBar() {
       )}
 
       <StatusItem className="gap-1.5">
-        <div className={`w-2 h-2 rounded-full ${aiConfigured ? 'bg-gm-success' : 'bg-gm-text-disabled'}`} />
-        <span>{aiConfigured ? 'AI 就绪' : 'AI 未配置'}</span>
+        <div className={`w-2 h-2 rounded-full ${STATUS_MAP[aiStatus]?.color ?? STATUS_MAP.unchecked.color}`} />
+        <span>{STATUS_MAP[aiStatus]?.label ?? STATUS_MAP.unchecked.label}</span>
       </StatusItem>
     </div>
   )

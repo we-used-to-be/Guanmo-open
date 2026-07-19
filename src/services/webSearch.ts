@@ -1,7 +1,11 @@
+import { externalFetch } from './externalHttp'
+
 export interface SearchResult {
   title: string
   url: string
   snippet: string
+  siteName?: string
+  publishedAt?: string
 }
 
 export interface SearchResponse {
@@ -37,6 +41,21 @@ export function getSearchConfig(): WebSearchConfig {
 
 const SEARCH_TIMEOUT = 15000
 
+function siteNameFromUrl(url: string): string | undefined {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '')
+  } catch {
+    return undefined
+  }
+}
+
+function normalizeSearchResult(result: SearchResult): SearchResult {
+  return {
+    ...result,
+    siteName: result.siteName || siteNameFromUrl(result.url),
+  }
+}
+
 function createCombinedAbortSignal(signal?: AbortSignal): { signal: AbortSignal; cleanup: () => void } {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort('timeout'), SEARCH_TIMEOUT)
@@ -57,7 +76,7 @@ function createCombinedAbortSignal(signal?: AbortSignal): { signal: AbortSignal;
 async function searchTavily(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResponse> {
   const abort = createCombinedAbortSignal(signal)
   try {
-    const res = await fetch('https://api.tavily.com/search', {
+    const res = await externalFetch('https://api.tavily.com/search', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -83,10 +102,11 @@ async function searchTavily(query: string, maxResults: number, signal?: AbortSig
 
     const data = await res.json()
     return {
-      results: (data.results || []).map((r: { title: string; url: string; content: string }) => ({
+      results: (data.results || []).map((r: { title: string; url: string; content: string; published_date?: string; publishedDate?: string }) => normalizeSearchResult({
         title: r.title,
         url: r.url,
         snippet: r.content,
+        publishedAt: r.published_date || r.publishedDate,
       })),
       query,
       totalResults: data.results?.length || 0,
@@ -102,7 +122,7 @@ async function searchTavily(query: string, maxResults: number, signal?: AbortSig
 async function searchSerper(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResponse> {
   const abort = createCombinedAbortSignal(signal)
   try {
-    const res = await fetch('https://google.serper.dev/search', {
+    const res = await externalFetch('https://google.serper.dev/search', {
       method: 'POST',
       headers: {
         'X-API-KEY': searchConfig.apiKey,
@@ -127,10 +147,11 @@ async function searchSerper(query: string, maxResults: number, signal?: AbortSig
     const data = await res.json()
     return {
       results: (data.organic || []).map(
-        (r: { title: string; link: string; snippet: string }) => ({
+        (r: { title: string; link: string; snippet: string; date?: string }) => normalizeSearchResult({
           title: r.title,
           url: r.link,
           snippet: r.snippet,
+          publishedAt: r.date,
         })
       ),
       query,
@@ -147,7 +168,7 @@ async function searchSerper(query: string, maxResults: number, signal?: AbortSig
 async function searchBrave(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResponse> {
   const abort = createCombinedAbortSignal(signal)
   try {
-    const res = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${maxResults}`, {
+    const res = await externalFetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${maxResults}`, {
       method: 'GET',
       headers: {
         'Accept': 'application/json',
@@ -169,10 +190,11 @@ async function searchBrave(query: string, maxResults: number, signal?: AbortSign
     const data = await res.json()
     return {
       results: (data.web?.results || []).map(
-        (r: { title: string; url: string; description: string }) => ({
+        (r: { title: string; url: string; description: string; age?: string; page_age?: string }) => normalizeSearchResult({
           title: r.title,
           url: r.url,
           snippet: r.description,
+          publishedAt: r.page_age || r.age,
         })
       ),
       query,
@@ -205,7 +227,7 @@ async function searchCustom(query: string, maxResults: number, signal?: AbortSig
       headers['Authorization'] = `Bearer ${searchConfig.apiKey}`
     }
 
-    const res = await fetch(url.toString(), { headers, signal: abort.signal })
+    const res = await externalFetch(url.toString(), { headers, signal: abort.signal })
 
     if (!res.ok) {
       let detail = ''
@@ -233,6 +255,14 @@ async function searchCustom(query: string, maxResults: number, signal?: AbortSig
         title: String(item.title ?? item.name ?? ''),
         url: String(item.url ?? item.link ?? item.href ?? ''),
         snippet: String(item.snippet ?? item.description ?? item.content ?? item.abstract ?? ''),
+        siteName: typeof item.siteName === 'string' ? item.siteName
+          : typeof item.site_name === 'string' ? item.site_name
+            : typeof item.source === 'string' ? item.source
+              : undefined,
+        publishedAt: typeof item.publishedAt === 'string' ? item.publishedAt
+          : typeof item.date === 'string' ? item.date
+            : typeof item.published_date === 'string' ? item.published_date
+              : undefined,
       }
     })
 
@@ -248,7 +278,7 @@ async function searchCustom(query: string, maxResults: number, signal?: AbortSig
 
 /**
  * DuckDuckGo Lite search.
- * Note: Works in Tauri (no CORS) but may fail in browser due to CORS restrictions.
+ * Uses the desktop HTTP transport so the provider's browser CORS policy does not apply.
  */
 async function searchDuckDuckGo(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResponse> {
   const url = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`
@@ -256,19 +286,18 @@ async function searchDuckDuckGo(query: string, maxResults: number, signal?: Abor
 
   let res: Response
   try {
-    res = await fetch(url, {
+    res = await externalFetch(url, {
       signal: abort.signal,
     })
   } catch (err) {
+    if ((err as Error).name === 'UnsupportedCapabilityError') throw err
     if ((err as Error).name === 'TimeoutError') {
       throw new Error('DuckDuckGo 搜索超时，请检查网络连接')
     }
     if ((err as Error).name === 'AbortError') {
       throw new Error(signal?.aborted ? 'DuckDuckGo 搜索已取消' : 'DuckDuckGo 搜索超时，请检查网络连接')
     }
-    throw new Error(
-      'DuckDuckGo 搜索失败：可能被 CORS 策略阻止。在桌面应用（Tauri）中可正常使用。'
-    )
+    throw new Error(`DuckDuckGo 搜索失败：${(err as Error).message || String(err)}`)
   } finally {
     abort.cleanup()
   }
@@ -295,6 +324,7 @@ async function searchDuckDuckGo(query: string, maxResults: number, signal?: Abor
       title: match[2].trim(),
       url: match[1],
       snippet: snippets[i] || '',
+      siteName: siteNameFromUrl(match[1]),
     })
     i++
   }

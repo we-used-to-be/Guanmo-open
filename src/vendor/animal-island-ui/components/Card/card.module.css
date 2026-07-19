@@ -1,8 +1,8 @@
 .card {
   border-radius: 20px;
-  background: #f7f3df;
+  background: var(--animal-bg-color-secondary, #f7f3df);
   padding: 16px 24px;
-  color: #725d42;
+  color: var(--animal-text-color, #725d42);
   font-weight: 500;
   transition: all 0.3s ease;
   cursor: pointer;
@@ -11,65 +11,65 @@
   transform: translateY(-2px);
 }
 .card-title {
-  background: #fdfdf5;
+  background: var(--animal-bg-color, #fdfdf5);
   border-radius: 40px 35px 45px 38px / 38px 45px 35px 40px;
   padding: 12px 32px;
   font-weight: 600;
 }
 .card-dashed {
-  background: #faf8f2;
-  border: 2px dashed #e8dcc8;
+  background: var(--animal-bg-color-secondary, #faf8f2);
+  border: 2px dashed var(--animal-border-color, #e8dcc8);
   box-shadow: none;
 }
 .card-dashed:hover {
   transform: none;
-  border-color: #d4c4a8;
+  border-color: var(--animal-border-color-hover, #d4c4a8);
 }
 .card-app-pink {
-  background: #f8a6b2;
-  color: #fff;
+  background: var(--card-color-pink, #f8a6b2);
+  color: var(--card-color-pink-text, #fff);
 }
 .card-purple {
-  background: #b77dee;
-  color: #fff;
+  background: var(--card-color-purple, #b77dee);
+  color: var(--card-color-purple-text, #fff);
 }
 .card-app-blue {
-  background: #889df0;
-  color: #fff;
+  background: var(--card-color-blue, #889df0);
+  color: var(--card-color-blue-text, #fff);
 }
 .card-app-yellow {
-  background: #f7cd67;
-  color: #725d42;
+  background: var(--card-color-yellow, #f7cd67);
+  color: var(--card-color-yellow-text, #725d42);
 }
 .card-app-orange {
-  background: #e59266;
-  color: #fff;
+  background: var(--card-color-orange, #e59266);
+  color: var(--card-color-orange-text, #fff);
 }
 .card-app-teal {
-  background: #82d5bb;
-  color: #fff;
+  background: var(--card-color-teal, #82d5bb);
+  color: var(--card-color-teal-text, #fff);
 }
 .card-app-green {
-  background: #8ac68a;
-  color: #fff;
+  background: var(--card-color-green, #8ac68a);
+  color: var(--card-color-green-text, #fff);
 }
 .card-app-red {
-  background: #fc736d;
-  color: #fff;
+  background: var(--card-color-red, #fc736d);
+  color: var(--card-color-red-text, #fff);
 }
 .card-lime-green {
-  background: #d1da49;
-  color: #3d5a1a;
+  background: var(--card-color-lime-green, #d1da49);
+  color: var(--card-color-lime-green-text, #3d5a1a);
 }
 .card-yellow-green {
-  background: #ecdf52;
-  color: #725d42;
+  background: var(--card-color-yellow-green, #ecdf52);
+  color: var(--card-color-yellow-green-text, #725d42);
 }
 .card-brown {
-  background: #9a835a;
-  color: #fff;
+  background: var(--card-color-brown, #9a835a);
+  color: var(--card-color-brown-text, #fff);
 }
 .card-warm-peach-pink {
-  background: #e18c6f;
-  color: #fff;
+  background: var(--card-color-warm-peach-pink, #e18c6f);
+  color: var(--card-color-warm-peach-pink-text, #fff);
 }

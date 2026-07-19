@@ -1,4 +1,4 @@
-import { createDir, dirnamePath, fileExists, joinPath, readBinaryFile, writeBinaryFile } from '@/hooks/useTauri'
+import { dirnamePath, fileExists, joinPath, prepareMarkdownAssetsDir, readBinaryFile, writeBinaryFile } from '@/hooks/useTauri'
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
 
@@ -26,29 +26,13 @@ export async function saveImageFileForMarkdown(markdownPath: string, file: File)
 async function saveImageBytesForMarkdown(markdownPath: string, bytes: Uint8Array, ext: string): Promise<string> {
   const markdownDir = await dirnamePath(markdownPath)
   const assetsDir = await joinPath(markdownDir, 'assets')
-  await ensureAssetsDir(assetsDir)
+  await prepareMarkdownAssetsDir(markdownPath)
 
   const baseName = buildBaseName(markdownPath)
   const fileName = await nextAssetFileName(assetsDir, baseName, ext)
   const targetPath = await joinPath(assetsDir, fileName)
   await writeBinaryFile(targetPath, bytes)
   return `./assets/${fileName}`
-}
-
-async function ensureAssetsDir(assetsDir: string): Promise<void> {
-  if (await fileExists(assetsDir)) return
-
-  try {
-    await createDir(assetsDir)
-  } catch (err) {
-    if (isAlreadyExistsError(err)) return
-    throw err
-  }
-}
-
-function isAlreadyExistsError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err)
-  return /已存在|同名|already exists|exists/i.test(message)
 }
 
 async function nextAssetFileName(assetsDir: string, baseName: string, ext: string): Promise<string> {
@@ -78,7 +62,7 @@ function buildBaseName(markdownPath: string): string {
   const safe = withoutExt
     .trim()
     .replace(/\s+/g, '-')
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-')
+    .replace(/[^a-zA-Z0-9._-]/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
   return safe || 'image'

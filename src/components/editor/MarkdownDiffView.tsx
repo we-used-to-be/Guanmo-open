@@ -8,6 +8,11 @@ interface DiffLine {
 interface MarkdownDiffViewProps {
   original: string
   current: string
+  fontSize: number
+  lineHeight: number
+  fontFamily: string
+  wordWrap: boolean
+  lineNumbers: boolean
 }
 
 function buildLineDiff(original: string, current: string): DiffLine[] {
@@ -44,7 +49,15 @@ function buildLineDiff(original: string, current: string): DiffLine[] {
   return lines
 }
 
-export function MarkdownDiffView({ original, current }: MarkdownDiffViewProps) {
+export function MarkdownDiffView({
+  original,
+  current,
+  fontSize,
+  lineHeight,
+  fontFamily,
+  wordWrap,
+  lineNumbers,
+}: MarkdownDiffViewProps) {
   const lines = buildLineDiff(original, current)
   const changed = lines.filter((line) => line.type !== 'same').length
 
@@ -54,7 +67,7 @@ export function MarkdownDiffView({ original, current }: MarkdownDiffViewProps) {
         <div className="text-caption font-bold text-gm-text">Markdown Diff</div>
         <div className="text-micro text-gm-text-tertiary">{changed} 行变化</div>
       </div>
-      <div className="font-mono text-[12px] leading-6">
+      <div style={{ fontSize: `${fontSize}px`, lineHeight, fontFamily }}>
         {changed === 0 ? (
           <div className="px-4 py-8 text-center font-sans text-caption text-gm-text-tertiary">
             当前内容与保存基准一致
@@ -62,22 +75,27 @@ export function MarkdownDiffView({ original, current }: MarkdownDiffViewProps) {
         ) : lines.map((line, index) => (
           <div
             key={`${index}-${line.type}`}
-            className={`grid grid-cols-[56px_56px_24px_minmax(0,1fr)] border-b border-gm-border-subtle/50 px-3 ${
+            className={`grid border-b border-gm-border-subtle px-3 ${
               line.type === 'added'
                 ? 'bg-gm-success/10'
                 : line.type === 'removed'
                   ? 'bg-gm-error/10'
                   : 'bg-transparent'
             }`}
+            style={{ gridTemplateColumns: lineNumbers ? '56px 56px 24px minmax(0, 1fr)' : '24px minmax(0, 1fr)' }}
           >
-            <span className="select-none text-right text-gm-text-disabled">{line.oldLine ?? ''}</span>
-            <span className="select-none text-right text-gm-text-disabled">{line.newLine ?? ''}</span>
+            {lineNumbers && (
+              <>
+                <span className="select-none text-right text-gm-text-disabled">{line.oldLine ?? ''}</span>
+                <span className="select-none text-right text-gm-text-disabled">{line.newLine ?? ''}</span>
+              </>
+            )}
             <span className={`select-none text-center ${
               line.type === 'added' ? 'text-gm-success' : line.type === 'removed' ? 'text-gm-error' : 'text-gm-text-disabled'
             }`}>
               {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ''}
             </span>
-            <span className="whitespace-pre-wrap break-words pl-2 text-gm-text">{line.text || ' '}</span>
+            <span className={`${wordWrap ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'} pl-2 text-gm-text`}>{line.text || ' '}</span>
           </div>
         ))}
       </div>

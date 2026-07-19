@@ -1,8 +1,10 @@
 import { useAppStore } from '@/stores/appStore'
 import { useChatStore } from '@/stores/chatStore'
+import { useSettingsStore } from '@/stores/settingsStore'
 import { MAX_SELECTION_CHARS } from '@/types/contextTag'
 
 const PREVIEW_LENGTH = 160
+export const AI_SHORTCUT_SUBMIT_EVENT = 'guanmo:submit-ai-shortcut'
 
 function truncateSelection(text: string): string {
   if (text.length <= MAX_SELECTION_CHARS) return text
@@ -72,6 +74,19 @@ export function addFileContextTag(args: {
   })
 }
 
+export function buildFileSummaryPrompt(title?: string | null): string {
+  const target = title?.trim() ? `「${title.trim()}」` : '这个文件'
+  return `请对${target}做结构化总结，并标明来源依据、信息缺口和可后续操作建议`
+}
+
+export function summarizeFileWithAi(args: {
+  title: string
+  filePath?: string | null
+}) {
+  addFileContextTag(args)
+  useChatStore.getState().setDraftInput(buildFileSummaryPrompt(args.title))
+}
+
 // ─── 向后兼容：旧函数内部改为调用新 tag API ───
 
 /** @deprecated 使用 addSelectionContextTag 代替 */
@@ -97,6 +112,15 @@ export function appendToAiDraft(content: string) {
   if (!content.trim()) return
   ensureAiPanelOpen()
   useChatStore.getState().appendDraftInput(content.trim())
+}
+
+export function setAiShortcutPrompt(prompt: string) {
+  if (!prompt.trim()) return
+  ensureAiPanelOpen()
+  useChatStore.getState().setDraftInput(prompt)
+  if (useSettingsStore.getState().editor.autoSendAiShortcut && typeof window !== 'undefined') {
+    window.setTimeout(() => window.dispatchEvent(new Event(AI_SHORTCUT_SUBMIT_EVENT)), 0)
+  }
 }
 
 /**

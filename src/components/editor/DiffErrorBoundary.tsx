@@ -47,7 +47,7 @@ export class DiffErrorBoundary extends Component<DiffErrorBoundaryProps, DiffErr
           <button
             type="button"
             onClick={this.props.onExitDiff}
-            className="rounded-full bg-gm-primary px-3 py-1.5 text-caption font-bold text-white transition-opacity hover:opacity-90"
+            className="rounded-full bg-gm-primary px-3 py-1.5 text-caption font-bold text-gm-text-on-primary transition-opacity hover:opacity-90"
           >
             返回编辑模式
           </button>

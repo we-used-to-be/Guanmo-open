@@ -1,4 +1,4 @@
-import type { AgentConfig, AgentStep, AgentResult } from './types'
+import type { AgentConfig, AgentStep, AgentResult, AgentRunRequest } from './types'
 import type { ChatMessage, ChatMessageSource } from '@/services/ai/types'
 import { getAiClient, isAiReady } from '@/services/ai/aiClient'
 import { getAllTools, getTool, getToolDescriptions, getToolsForLLM } from './toolRegistry'
@@ -9,6 +9,10 @@ import {
   shouldAllowMemoryWrite,
   isImplicitEditContinuation,
   shouldIncludeFullDocumentContext,
+  isLocalResearchIntent,
+  isWebComparisonIntent,
+  isFileSummaryIntent,
+  isDocumentRewriteIntent,
   type Capability,
   type AppContext,
 } from './intentDetector'
@@ -48,15 +52,23 @@ ${CONTEXT_SAFETY_PROMPT}
 {"tool": "工具名", "args": {"参数名": "参数值"}}
 
 当你判断需要弹出文本修改确认卡片时，也可以输出以下 JSON。系统会校验 needsEditConfirmation，并自动转换为 replace_current_tab_text 工具调用：
-{"needsEditConfirmation": true, "path": "本轮已授权且已打开的文件绝对路径", "oldText": "当前编辑器中要替换的原文", "newText": "替换后的新文本"}
-修改用户添加到聊天框的 selection 或 file 标签所指向的文件时，必须附带路径：
-{"needsEditConfirmation": true, "path": "已授权且已打开的文件绝对路径", "oldText": "目标文件中的原文", "newText": "替换后的新文本"}
+{"needsEditConfirmation": true, "targetId": "本轮可编辑目标 ID", "oldText": "当前编辑器中要替换的原文", "newText": "替换后的新文本", "changeSummary": "简短变更摘要"}
+修改用户添加到聊天框的 selection 或 file 标签所指向的文件时，优先使用【本轮可编辑目标】里的 targetId：
+{"needsEditConfirmation": true, "targetId": "edit-target-1", "oldText": "目标文件中的原文", "newText": "替换后的新文本", "changeSummary": "调整语气、保留原意"}
 修改 selection 标签时不要回传 oldText，由工具读取授权范围内的当前原文：
-{"needsEditConfirmation": true, "path": "已授权且已打开的文件绝对路径", "newText": "替换后的新文本"}
+{"needsEditConfirmation": true, "targetId": "edit-target-1", "newText": "替换后的新文本", "changeSummary": "润色表达、保留原意"}
 修改整份已授权文件时，不要回传完整 oldText，使用：
-{"needsEditConfirmation": true, "path": "已授权且已打开的文件绝对路径", "replaceWholeDocument": true, "newText": "替换后的完整新稿"}
+{"needsEditConfirmation": true, "targetId": "edit-target-1", "replaceWholeDocument": true, "newText": "替换后的完整新稿", "changeSummary": "优化标题层级、压缩重复、保留原意"}
 
 当你能直接回答时，直接输出答案文本。
+
+选区上下文读取规则：
+1. selection 标签正文已直接提供；问题明确提到上下文、前后文、结合上下文、附近内容、周围内容，或依赖原因、推导、对比、正确性时，优先调用 read_selection_context。
+2. 工具顺序固定为：选区正文 → read_selection_context Level 1 → 必要时 Level 2 → 用户明确要求全文时 read_context_file。不得因为存在 selection 标签就默认读取全文。
+3. 用户明确说“上文、上方、前面、之前”时传 direction=before；说“下文、下方、下面、后面、之后、后续”时传 direction=after；说“前后文、两侧、周围”时传 direction=both；未指定方向时传 direction=auto。明确方向是硬约束，禁止用 auto 代替。
+4. read_selection_context 必须先调用 Level 1：总预算 700 tokens。direction=auto 按语义相关性读取；before/after/both 按指定方向和文档顺序读取。框选 Markdown 标题并读取 after 时，范围是该标题及其子标题管辖的正文。
+5. 只有原因、推导、对比、关系、错误分析等问题在 Level 1 后仍明显信息不足，或选区是孤立片段时，才调用 Level 2；累计预算扩展到 1400 tokens，且只返回 Level 1 尚未读取的新增 Chunk。同一轮禁止跳级或重复读取同一层。
+6. 不得因为 Level 2 仍不足就直接读取全文；只有用户明确要求阅读全文或全文分析时，才调用 read_context_file。
 
 修改文档的强制规则：
 1. 任何文本修改请求都必须携带用户在本轮消息中新添加的 selection 或 file 标签。没有本轮目标标签时，不得调用修改工具、不得生成确认卡片，必须明确提示用户重新添加要修改的 tag 后重新发起请求。
@@ -65,15 +77,16 @@ ${CONTEXT_SAFETY_PROMPT}
 4. 用户提出"再简洁些""继续改这个文件""撤销刚才修改"等针对既有文本的请求，但本轮未新添加目标 tag 时，直接提示其重新添加目标 tag 后再发起修改请求。
 5. 本轮携带 selection 或 file 标签且用户要求修改时，必须调用 replace_current_tab_text 生成确认卡片，禁止只输出修改后的文本或口头说明。
 5.1 如果本轮有多个 selection 或 file 目标，且用户要求修改文本，不得调用 replace_current_tab_text，不得生成确认卡片。必须提示用户本轮只保留一个 selection 或 file 标签后重新发起修改请求。不要在多个目标中自行选择第一个，也不要把多个文件或选区合并到一张卡片。
-6. 调用 replace_current_tab_text 或输出 needsEditConfirmation 时必须传入本轮目标标签的 path；目标文件还必须已在标签页打开。
+6. 调用 replace_current_tab_text 或输出 needsEditConfirmation 时必须优先传入本轮目标标签的 targetId；旧格式 path 仅作兼容兜底。目标文件还必须已在标签页打开。
 6.1 selection 标签包含精确字符范围。修改 selection 时不要回传 oldText，工具会读取授权选区当前完整原文；不得改写文档内其他相同文本。
 7. 如果用户要求改写或覆写整份文件，必须传入 replaceWholeDocument=true，由工具读取已打开目标文件的完整原文；不要把整份原文复制到 oldText。
 8. 如果本轮用户消息里带有 file 标签并要求片段替换，oldText 必须来自目标文件当前内容；如果是 selection 标签，省略 oldText。
 9. get_recent_context_tag 仅可用于查看历史上下文，不得用于生成修改确认卡片；不得在没有本轮目标 tag 时通过 get_current_tab_text 修改当前活动标签。
 10. file 片段替换时 oldText 必须与目标标签页内容完全一致；selection 修改由工具读取 oldText。newText 是修改后的完整替换片段。
-11. replace_current_tab_text 只会生成用户确认卡片，不会直接写入文件。调用该工具后，等待用户在确认卡片中确认或拒绝。
-12. 对携带本轮目标 tag 的修改意图，最终必须输出工具 JSON 或 needsEditConfirmation JSON；未携带时只提示用户重新添加 tag。
-13. 调用 replace_current_tab_text 或输出 needsEditConfirmation 时只输出 JSON，不要同时输出解释文本。
+11. 生成确认卡片时必须提供简短 changeSummary，概括本次修改方式，例如“调整语气、压缩重复、优化标题层级、保留原意”。没有把握时至少说明“保留原意并润色表达”。
+12. replace_current_tab_text 只会生成用户确认卡片，不会直接写入文件。调用该工具后，等待用户在确认卡片中确认或拒绝。
+13. 对携带本轮目标 tag 的修改意图，最终必须输出工具 JSON 或 needsEditConfirmation JSON；未携带时只提示用户重新添加 tag。
+14. 调用 replace_current_tab_text 或输出 needsEditConfirmation 时只输出 JSON，不要同时输出解释文本。
 
 保存记忆的规则：
 1. 当用户要求记住、保存记忆、记下来时，调用 save_memory 工具保存。
@@ -135,12 +148,61 @@ function truncate(text: string, maxLen: number): string {
   return text.slice(0, maxLen) + `\n... (已截断，共 ${text.length} 字符)`
 }
 
-function buildFinalAnswerMessages(messages: ChatMessage[]): ChatMessage[] {
+const LOCAL_RESEARCH_ANSWER_PROMPT = `本轮是本地阅读研究问题。必须基于已调用的本地资料工具结果回答，不能接 Web 搜索，不能编造未检索到的资料。
+
+回答结构必须包含：
+1. 结论摘要
+2. 主要依据
+3. 来源列表
+4. 推断部分
+5. 信息不足 / 需要补充的资料
+
+要求：
+- 每条关键结论都要能回到本地来源；来源至少写出文件名、标题路径或 heading、行号范围。
+- 多个来源冲突、片段不足或覆盖不完整时，必须明确说明冲突或缺口，不能强行下结论。
+- “推断部分”只能写从来源合理推出的内容，并标明它不是原文直接结论。
+- 如果 search_knowledge 返回空结果或只有弱相关片段，回答重点应是信息缺口，不要套用确定性结论。`
+
+const WEB_COMPARISON_ANSWER_PROMPT = `本轮是“Web + 本地资料对照”问题。必须区分本地知识库结果与 Web 搜索结果，不得把 Web 结果写成本地资料事实，也不得把本地片段当作最新外部事实。
+回答结构优先包含：
+1. 本地资料结论
+2. Web 资料结论
+3. 一致点
+4. 冲突点
+5. 补充点
+6. 无法确认 / 仍需人工判断
+
+要求：
+- 本地来源写出文件名、标题路径或 heading、行号范围。
+- Web 来源写出标题、URL、站点名或发布日期（如有）。
+- 如果本地资料为空但 Web 有结果，明确说明“未找到本地依据，仅基于外部资料”。
+- 如果 Web 搜索关闭、未配置、失败或为空，降级为本地研究回答，并明确说明未完成外部对照。
+- 多个来源冲突或覆盖不完整时，只能说明冲突、缺口和可推断范围，不能强行下结论。`
+
+const FILE_SUMMARY_ANSWER_PROMPT = `本轮是单文件总结。必须优先基于 read_context_file 返回的已授权文件内容回答；只有文件读取失败或内容不足时，才可用 search_knowledge 片段补充，并明确标注范围。
+
+回答必须是结构化文件总结，不能只输出泛泛一段话。先判断文档类型，并采用对应结构：
+- 学习笔记：核心概念、重点、易错点、复习问题
+- 会议/记录：结论、待办、负责人、风险
+- 项目文档：目标、方案、接口/约束、未决问题
+- 普通文章：摘要、主要观点、关键细节、可追问方向
+
+所有类型都必须补充：
+1. 来源依据：写出文件名、heading 或标题路径、行号范围；不得伪造来源。
+2. 信息缺口：内容不足、读取失败、截断、缺少负责人/接口/结论等都要明确说明。
+3. 后续操作建议：只给可追问或可继续阅读的建议，不要自动写回文档、保存记忆或更新知识库。
+
+如果 read_context_file 返回内容被截断，不得声称已覆盖全文；必须说明“当前总结基于已读取范围”。`
+
+function buildFinalAnswerMessages(messages: ChatMessage[], finalInstruction?: string): ChatMessage[] {
   return [
     ...messages,
     {
       role: 'user',
-      content: '现在请直接输出给用户的最终答案。若已有工具结果，请基于结果回答；不要再调用工具，不要输出 JSON，不要复述内部处理过程。',
+      content: [
+        '现在请直接输出给用户的最终答案。若已有工具结果，请基于结果回答；不要再调用工具，不要输出 JSON，不要复述内部处理过程。',
+        finalInstruction,
+      ].filter(Boolean).join('\n\n'),
     },
   ]
 }
@@ -189,10 +251,99 @@ function extractKnowledgeSourcesFromResult(result: string): ChatMessageSource[] 
   }
 }
 
+function extractSelectionContextSourcesFromResult(result: string): ChatMessageSource[] {
+  try {
+    const parsed = JSON.parse(result)
+    if (!isPlainObject(parsed) || !Array.isArray(parsed.chunks) || !isPlainObject(parsed.source)) return []
+    const source = parsed.source
+    if (typeof source.filePath !== 'string') return []
+    const filePath = source.filePath
+
+    return parsed.chunks.flatMap((chunk): ChatMessageSource[] => {
+      if (!isPlainObject(chunk)) return []
+      if (typeof chunk.startLine !== 'number' || typeof chunk.endLine !== 'number') return []
+      const titlePath = Array.isArray(chunk.headingPath)
+        ? chunk.headingPath.filter((part): part is string => typeof part === 'string')
+        : undefined
+      return [{
+        filePath,
+        fileName: typeof source.fileName === 'string'
+          ? source.fileName
+          : sourceFileName(filePath, typeof source.title === 'string' ? source.title : undefined),
+        titlePath,
+        heading: titlePath?.length ? titlePath[titlePath.length - 1] : undefined,
+        startLine: chunk.startLine,
+        endLine: chunk.endLine,
+      }]
+    })
+  } catch {
+    return []
+  }
+}
+
+function extractContextFileSourcesFromResult(result: string): ChatMessageSource[] {
+  try {
+    const parsed = JSON.parse(result)
+    if (!isPlainObject(parsed) || !isPlainObject(parsed.source)) return []
+    const source = parsed.source
+    if (
+      typeof source.filePath !== 'string'
+      || typeof source.startLine !== 'number'
+      || typeof source.endLine !== 'number'
+    ) {
+      return []
+    }
+
+    return [{
+      filePath: source.filePath,
+      fileName: typeof source.fileName === 'string'
+        ? source.fileName
+        : sourceFileName(source.filePath, typeof source.title === 'string' ? source.title : undefined),
+      heading: typeof source.title === 'string' ? source.title : undefined,
+      startLine: source.startLine,
+      endLine: source.endLine,
+    }]
+  } catch {
+    return []
+  }
+}
+
+function extractWebSourcesFromResult(result: string): ChatMessageSource[] {
+  try {
+    const parsed = JSON.parse(result)
+    if (!isPlainObject(parsed) || !Array.isArray(parsed.results)) return []
+
+    return parsed.results.flatMap((item): ChatMessageSource[] => {
+      if (!isPlainObject(item) || typeof item.url !== 'string') return []
+      return [{
+        kind: 'web',
+        title: typeof item.title === 'string' && item.title.trim() ? item.title : item.url,
+        url: item.url,
+        siteName: typeof item.siteName === 'string' ? item.siteName : undefined,
+        publishedAt: typeof item.publishedAt === 'string' ? item.publishedAt : undefined,
+        snippet: typeof item.snippet === 'string' ? item.snippet : undefined,
+      }]
+    })
+  } catch {
+    return []
+  }
+}
+
+function extractSourcesFromToolResult(toolName: string, result: string): ChatMessageSource[] {
+  if (toolName === 'search_knowledge') return extractKnowledgeSourcesFromResult(result)
+  if (toolName === 'read_selection_context') return extractSelectionContextSourcesFromResult(result)
+  if (toolName === 'read_context_file') return extractContextFileSourcesFromResult(result)
+  if (toolName === 'web_search') return extractWebSourcesFromResult(result)
+  return []
+}
+
 function addUniqueSources(target: ChatMessageSource[], sources: ChatMessageSource[]) {
-  const seen = new Set(target.map((source) => `${source.filePath}:${source.startLine}:${source.endLine}`))
+  const sourceKey = (source: ChatMessageSource) => source.kind === 'web'
+    ? `web:${source.url}`
+    : `local:${source.filePath}:${source.startLine}:${source.endLine}`
+  const seen = new Set(target.map(sourceKey))
   for (const source of sources) {
-    const key = `${source.filePath}:${source.startLine}:${source.endLine}`
+    const key = sourceKey(source)
     if (seen.has(key)) continue
     seen.add(key)
     target.push(source)
@@ -257,7 +408,10 @@ async function executeTool(
       ),
     ])
     if (isPendingEditResult(result)) return { result, rawResult: result }
-    return { result: truncate(result, getToolTokenBudget(name)), rawResult: result }
+    return {
+      result: name === 'read_selection_context' ? result : truncate(result, getToolTokenBudget(name)),
+      rawResult: result,
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     const result = `工具执行出错: ${msg}`
@@ -275,7 +429,8 @@ async function executeToolCalls(
   toolCalls: Array<{ name: string; args: Record<string, unknown> }>,
   timeout: number,
   userIntent: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  selectionContextReadLevels?: Map<string, 1 | 2>,
 ): Promise<Array<{ name: string; result: string; rawResult?: string; executed?: boolean }>> {
   // 分离读取类和写入类工具
   const readCalls = toolCalls.filter(tc => isReadTool(tc.name))
@@ -283,10 +438,13 @@ async function executeToolCalls(
 
   const results: Array<{ name: string; result: string; rawResult?: string; executed?: boolean }> = []
 
-  // 读取类工具并行执行
-  if (readCalls.length > 0) {
+  const regularReadCalls = readCalls.filter((call) => call.name !== 'read_selection_context')
+  const selectionContextCalls = readCalls.filter((call) => call.name === 'read_selection_context')
+
+  // 普通读类工具并行执行；selectionContext 需要按层级串行执行。
+  if (regularReadCalls.length > 0) {
     const readResults = await Promise.allSettled(
-      readCalls.map(async tc => {
+      regularReadCalls.map(async tc => {
         const executed = await executeTool(tc.name, tc.args, timeout, userIntent, signal)
         return {
           name: tc.name,
@@ -308,6 +466,38 @@ async function executeToolCalls(
     }
   }
 
+  for (const call of selectionContextCalls) {
+    const level: 1 | 2 = call.args.level === 2 ? 2 : 1
+    const selectionTargets = getAgentScopeContext()?.editTargets?.filter((target) => target.type === 'selection') || []
+    const targetId = typeof call.args.targetId === 'string'
+      ? call.args.targetId
+      : selectionTargets.length === 1 ? selectionTargets[0].id : '__unresolved_selection__'
+    const completedLevel = selectionContextReadLevels?.get(targetId) || 0
+    const rejected = validateSelectionContextReadLevel(completedLevel, level)
+    if (rejected) {
+      results.push({ name: call.name, result: rejected, rawResult: rejected, executed: false })
+      continue
+    }
+
+    const executed = await executeTool(call.name, call.args, timeout, userIntent, signal)
+    let succeeded = false
+    try {
+      const parsed = JSON.parse(executed.rawResult || executed.result)
+      const roles = new Set(
+        Array.isArray(parsed?.chunks)
+          ? parsed.chunks.map((chunk: { role?: unknown }) => chunk.role)
+          : [],
+      )
+      succeeded = level === 1
+        ? roles.has('before') && roles.has('current') && roles.has('after')
+        : Array.isArray(parsed?.chunks) && parsed.chunks.length > 0
+    } catch {
+      succeeded = false
+    }
+    if (succeeded) selectionContextReadLevels?.set(targetId, level)
+    results.push({ name: call.name, result: executed.result, rawResult: executed.rawResult })
+  }
+
   // 写入类工具本轮只允许执行第一个，避免多个确认卡片之间出现授权范围错配。
   const firstWriteCall = writeCalls[0]
   if (firstWriteCall) {
@@ -325,32 +515,43 @@ async function executeToolCalls(
   return results
 }
 
+export function validateSelectionContextReadLevel(completedLevel: 0 | 1 | 2, requestedLevel: 1 | 2): string | null {
+  if (requestedLevel === 2 && completedLevel === 0) {
+    return '系统拒绝跳级读取：请先调用 read_selection_context level=1，再根据结果判断是否需要 level=2。'
+  }
+  if (requestedLevel <= completedLevel) {
+    return `系统拒绝重复读取：read_selection_context level=${requestedLevel} 已在本轮读取。`
+  }
+  return null
+}
+
 /**
  * Run the agent with a user query.
  * Uses structured JSON tool calling with intent-based tool selection.
  */
-export async function runAgent(
-  query: string,
-  chatHistory: ChatMessage[] = [],
-  config: Partial<AgentConfig> = {},
-  rawQuery?: string,
+export async function runAgent({
+  query,
+  chatHistory = [],
+  config = {},
+  rawQuery,
   hasRecentEditContext = false,
   hasCurrentEditTarget = false,
   currentEditTargetCount = 0,
-  candidateToolNames?: readonly string[],
+  candidateToolNames,
   hasPrefetchedMemoryLookup = false,
-  signal?: AbortSignal,
-  temperature?: number,
-  onStep?: (step: AgentStep) => void,
-  requiredCapabilities?: readonly Capability[],
-  untrustedContext?: string,
-  customPreferencePrompt?: string
-): Promise<AgentResult> {
+  signal,
+  temperature,
+  onStep,
+  requiredCapabilities,
+  untrustedContext,
+  customPreferencePrompt,
+  streamEnabled = true,
+}: AgentRunRequest): Promise<AgentResult> {
   initAgent()
 
   if (!isAiReady()) {
     return {
-      answer: 'AI 未配置，请先在设置中配置 API Key。',
+      answer: 'AI 未配置，请先在设置中配置 API Key 或选择本地模型（如 Ollama）。',
       steps: [],
       toolCalls: 0,
       reason: 'completed',
@@ -365,11 +566,20 @@ export async function runAgent(
   const appContext: AppContext = {
     hasRecentEdit: hasRecentEditContext,
     hasOpenFile: hasCurrentEditTarget,
+    hasSelection: Boolean(getAgentScopeContext()?.contextTags.some((tag) => tag.type === 'selection')),
     hasContextTags: currentEditTargetCount > 0,
   }
 
   // 意图检测
   const intentResult = detectIntentScores(userIntent, appContext)
+  const isDocumentRewrite = isDocumentRewriteIntent(userIntent)
+  const isWebComparison = isWebComparisonIntent(userIntent)
+  const isLocalResearch = !isWebComparison && isLocalResearchIntent(userIntent)
+  const isFileSummary = !isWebComparison && isFileSummaryIntent(userIntent, appContext)
+  const answerInstruction = isWebComparison
+    ? WEB_COMPARISON_ANSWER_PROMPT
+    : isFileSummary ? FILE_SUMMARY_ANSWER_PROMPT
+    : isLocalResearch ? LOCAL_RESEARCH_ANSWER_PROMPT : undefined
 
   // 合并外部传入的 requiredCapabilities
   const mergedRequired = requiredCapabilities && requiredCapabilities.length > 0
@@ -380,6 +590,25 @@ export async function runAgent(
   const candidateTools = candidateToolNames && candidateToolNames.length > 0
     ? [...candidateToolNames] as AgentToolName[]
     : buildCandidateTools(intentResult.candidates)
+  if (
+    isDocumentRewrite
+    && appContext.hasSelection
+    && intentResult.candidates.includes('selection_context')
+    && !candidateTools.includes('read_selection_context')
+  ) {
+    candidateTools.unshift('read_selection_context')
+  }
+  if (isFileSummary && !candidateTools.includes('read_context_file')) {
+    candidateTools.unshift('read_context_file')
+  }
+  if (isDocumentRewrite && currentEditTargetCount === 0) {
+    return {
+      answer: '本轮没有可修改的 selection 或 file 标签。请重新框选要改写的文本，或把要整体改写的文件添加为 tag 后再发起请求。',
+      steps: [],
+      toolCalls: 0,
+      reason: 'completed',
+    }
+  }
 
   // 判断是否需要编辑确认
   const requiresEditConfirmation = hasCurrentEditTarget && (
@@ -406,6 +635,7 @@ export async function runAgent(
     { role: 'system', content: systemPrompt },
     ...chatHistory.slice(-4), // Keep last 4 messages for context
     ...(contextMessage ? [contextMessage] : []),
+    ...(answerInstruction ? [{ role: 'user' as const, content: answerInstruction }] : []),
     { role: 'user', content: query },
   ]
 
@@ -414,6 +644,7 @@ export async function runAgent(
   let editToolCalls = 0
   const knowledgeSources: ChatMessageSource[] = []
   const calledToolNames: string[] = []
+  const selectionContextReadLevels = new Map<string, 1 | 2>()
   if (hasPrefetchedMemoryLookup) {
     calledToolNames.push('search_memory')
   }
@@ -423,15 +654,81 @@ export async function runAgent(
     onStep?.(step)
   }
 
+  const requestAgentCompletion = async () => {
+    if (!streamEnabled) {
+      return client.chat({
+        messages,
+        signal,
+        temperature,
+        tools: llmTools,
+        toolChoice: 'auto',
+      })
+    }
+
+    let content = ''
+    const toolCallBuffers = new Map<number, { id?: string; name: string; arguments: string }>()
+
+    for await (const chunk of client.streamChat({
+      messages,
+      signal,
+      temperature,
+      tools: llmTools,
+      toolChoice: 'auto',
+    })) {
+      if (chunk.toolCallDeltas?.length) {
+        for (const delta of chunk.toolCallDeltas) {
+          const current = toolCallBuffers.get(delta.index) || { name: '', arguments: '' }
+          toolCallBuffers.set(delta.index, {
+            id: delta.id || current.id,
+            name: current.name + (delta.name || ''),
+            arguments: current.arguments + (delta.arguments || ''),
+          })
+        }
+      }
+      if (chunk.content) {
+        content += chunk.content
+      }
+      if (chunk.done) break
+    }
+
+    return {
+      id: '',
+      content,
+      role: 'assistant' as const,
+      toolCalls: Array.from(toolCallBuffers.values())
+        .filter((call) => call.name)
+        .map((call) => {
+          let args: Record<string, unknown> = {}
+          try {
+            args = call.arguments ? JSON.parse(call.arguments) : {}
+          } catch {
+            args = {}
+          }
+          return { id: call.id, name: call.name, args }
+        }),
+    }
+  }
+
   const repairUnmetReadCapabilities = async (): Promise<boolean> => {
     const unmetCapabilities = checkRequiredCapabilities(mergedRequired, calledToolNames)
     const repairTools = getRepairTools(unmetCapabilities)
       .filter((name) => candidateTools.includes(name))
+    const prioritizedRepairTools = isFileSummary && repairTools.includes('read_context_file')
+      ? ['read_context_file' as AgentToolName]
+      : repairTools.includes('read_selection_context')
+      ? ['read_selection_context' as AgentToolName]
+      : repairTools
 
-    const scopeFilePath = getAgentScopeContext()?.contextTags.find(
-      (tag) => tag.type === 'file' && typeof tag.filePath === 'string'
+    const scopeContext = getAgentScopeContext()
+    const scopeFilePath = scopeContext?.contextTags.find(
+      (tag) => (tag.type === 'file' || tag.type === 'selection') && typeof tag.filePath === 'string'
     )?.filePath
-    const runnableRepairTools = repairTools.filter((name) => name !== 'read_context_file' || Boolean(scopeFilePath))
+    const selectionTargets = scopeContext?.editTargets?.filter((target) => target.type === 'selection') || []
+    const scopeSelectionTargetId = selectionTargets.length === 1 ? selectionTargets[0].id : undefined
+    const runnableRepairTools = prioritizedRepairTools.filter((name) => (
+      (name !== 'read_context_file' || Boolean(scopeFilePath))
+      && (name !== 'read_selection_context' || Boolean(scopeSelectionTargetId))
+    ))
 
     if (runnableRepairTools.length === 0) return false
 
@@ -447,20 +744,20 @@ export async function runAgent(
       runnableRepairTools.map(name => ({
         name,
         args: name === 'search_memory' ? { query: userIntent, topK: 5 }
-          : name === 'search_knowledge' ? { query: userIntent, topK: 8 }
+          : name === 'search_knowledge' ? { query: userIntent, topK: (isLocalResearch || isWebComparison) ? 12 : 8 }
+          : name === 'read_selection_context' ? { targetId: scopeSelectionTargetId }
           : name === 'read_context_file' ? { path: scopeFilePath, maxLength: 12000 }
           : name === 'get_current_time' ? {}
           : { query: userIntent },
       })),
       mergedConfig.stepTimeout,
       userIntent,
-      signal
+      signal,
+      selectionContextReadLevels,
     )
 
     for (const { name, result, rawResult } of repairResults) {
-      if (name === 'search_knowledge') {
-        addUniqueSources(knowledgeSources, extractKnowledgeSourcesFromResult(rawResult || result))
-      }
+      addUniqueSources(knowledgeSources, extractSourcesFromToolResult(name, rawResult || result))
       calledToolNames.push(name)
       toolCalls++
       pushStep({
@@ -522,13 +819,7 @@ export async function runAgent(
     let nativeToolCalls: Array<{ name: string; args: Record<string, unknown> }> = []
 
     try {
-      const response = await client.chat({
-        messages,
-        signal,
-        temperature,
-        tools: llmTools,
-        toolChoice: 'auto',
-      })
+      const response = await requestAgentCompletion()
       content = response.content
 
       // 收集所有原生工具调用
@@ -595,11 +886,11 @@ export async function runAgent(
             '系统校验失败：本轮用户表达了文本修改或撤销意图，但你的回复没有生成修改确认卡片。',
             '请不要只回复"已修改""已撤销"或修改后的文本。',
             '你必须重新输出以下两种 JSON 之一：',
-            '{"needsEditConfirmation": true, "path": "本轮已授权且已打开的文件绝对路径", "oldText": "当前编辑器中要替换的原文", "newText": "替换后的新文本"}',
-            '修改已添加的 selection 或 file 标签时必须在上述 JSON 中增加 "path": "已授权且已打开的文件绝对路径"。',
+            '{"needsEditConfirmation": true, "targetId": "本轮可编辑目标 ID", "oldText": "当前编辑器中要替换的原文", "newText": "替换后的新文本", "changeSummary": "简短变更摘要"}',
+            '修改已添加的 selection 或 file 标签时必须优先使用【本轮可编辑目标】里的 targetId。',
             '修改 selection 标签时省略 oldText，由工具读取授权选区当前完整原文，不得选择文档内其他相同文本。',
             '修改整份已授权文件时增加 "replaceWholeDocument": true，并省略 oldText。',
-            '或 {"tool": "replace_current_tab_text", "args": {"path": "本轮已授权且已打开的文件绝对路径", "newText": "替换后的新文本", "replaceWholeDocument": false}}',
+            '或 {"tool": "replace_current_tab_text", "args": {"targetId": "本轮可编辑目标 ID", "newText": "替换后的新文本", "replaceWholeDocument": false, "changeSummary": "简短变更摘要"}}',
           ].join('\n'),
         })
         continue
@@ -613,7 +904,7 @@ export async function runAgent(
           steps,
           toolCalls,
           reason: 'completed',
-          finalMessages: buildFinalAnswerMessages(messages),
+          finalMessages: buildFinalAnswerMessages(messages, answerInstruction),
           sources: knowledgeSources,
         }
       }
@@ -645,16 +936,16 @@ export async function runAgent(
       parsedToolCalls.map(tc => ({ name: tc.name, args: tc.args })),
       mergedConfig.stepTimeout,
       userIntent,
-      signal
+      signal,
+      selectionContextReadLevels,
     )
 
     // 记录调用的工具
     for (const toolResult of toolResults) {
       const { name } = toolResult
       const executed = toolResult.executed !== false
-      const executed = toolResult.executed !== false
-      if (executed && name === 'search_knowledge') {
-        addUniqueSources(knowledgeSources, extractKnowledgeSourcesFromResult(toolResult.rawResult || toolResult.result))
+      if (executed) {
+        addUniqueSources(knowledgeSources, extractSourcesFromToolResult(name, toolResult.rawResult || toolResult.result))
       }
       if (executed) {
         calledToolNames.push(name)
@@ -673,10 +964,12 @@ export async function runAgent(
         timestamp: Date.now(),
       })
 
-      messages.push({ role: 'assistant', content: executed === false ? `未执行写入工具: ${name}` : `调用工具: ${name}` })
+      messages.push({ role: 'assistant', content: executed === false ? `未执行工具: ${name}` : `调用工具: ${name}` })
       messages.push({
         role: 'user',
-        content: truncate(`工具返回结果：\n${result}\n\n请根据以上信息继续思考或给出最终答案。`, getToolTokenBudget(name)),
+        content: name === 'read_selection_context'
+          ? `工具返回结果：\n${result}\n\n请根据以上信息继续思考或给出最终答案。`
+          : truncate(`工具返回结果：\n${result}\n\n请根据以上信息继续思考或给出最终答案。`, getToolTokenBudget(name)),
       })
     }
 
@@ -744,39 +1037,14 @@ export async function runAgent(
 
   // 达到最大步数，检查强依赖
   if (await repairUnmetReadCapabilities()) {
-      // 二次生成最终答案
-      try {
-        const finalResponse = await client.chat({
-          messages: [
-            ...messages,
-            {
-              role: 'user',
-              content: '现在请直接输出给用户的最终答案。若已有工具结果，请基于结果回答；不要再调用工具，不要输出 JSON，不要复述内部处理过程。',
-            },
-          ],
-          signal,
-          temperature,
-          tools: [],
-          toolChoice: 'none',
-        })
-
-        return {
-          answer: finalResponse.content,
-          steps,
-          toolCalls,
-          reason: 'completed',
-          sources: knowledgeSources,
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        return {
-          answer: `最终答案生成失败: ${msg}`,
-          steps,
-          toolCalls,
-          reason: 'error',
-          sources: knowledgeSources,
-        }
-      }
+    return {
+      answer: '',
+      steps,
+      toolCalls,
+      reason: 'completed',
+      finalMessages: buildFinalAnswerMessages(messages, answerInstruction),
+      sources: knowledgeSources,
+    }
   }
 
   // 正常结束
@@ -786,7 +1054,7 @@ export async function runAgent(
       steps,
       toolCalls,
       reason: 'max_steps',
-      finalMessages: buildFinalAnswerMessages(messages),
+      finalMessages: buildFinalAnswerMessages(messages, answerInstruction),
       sources: knowledgeSources,
     }
   }

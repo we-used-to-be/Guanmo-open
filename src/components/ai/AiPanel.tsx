@@ -1,33 +1,54 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { memo, useState, useRef, useEffect, useCallback, useMemo, type PointerEventHandler } from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { useChatStore } from '@/stores/chatStore'
+import { useSettingsStore } from '@/stores/settingsStore'
 import type { RagSource, RagStatus, TimelineItem, PendingEdit } from '@/stores/chatStore'
 import { useAiChat } from '@/hooks/useAiChat'
-import { Button, Divider, Icon } from 'animal-island-ui'
-import ReactMarkdown from 'react-markdown'
+import { Button, Icon } from 'animal-island-ui'
+import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import mascotIdle from '@/assets/ai-mascot/mascot-idle.png'
+import mascotStreaming from '@/assets/ai-mascot/mascot-streaming.gif'
 import { PromptComposer } from '@/components/ai/PromptComposer'
 import type { ManualCapability } from '@/components/ai/ManualToolToggle'
-import { readFile } from '@/hooks/useTauri'
+import { readRememberedFile } from '@/services/persistedFileAccess'
 import { useEditorStore } from '@/stores/editorStore'
 import { deleteChatSession } from '@/services/database/persistence'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { toast } from '@/services/toast'
-import type { ChatMessageSource } from '@/services/ai/types'
+import type { ChatMessageSource, LocalChatMessageSource } from '@/services/ai/types'
+import { AI_SHORTCUT_SUBMIT_EVENT } from '@/services/aiContext'
 
-export function AiPanel() {
-  const { toggleAiPanel } = useAppStore()
+type AiPanelProps = {
+  fullscreenDragHandleProps?: {
+    onPointerDown: PointerEventHandler<HTMLDivElement>
+    onPointerMove: PointerEventHandler<HTMLDivElement>
+    onPointerUp: PointerEventHandler<HTMLDivElement>
+    onPointerCancel: PointerEventHandler<HTMLDivElement>
+  }
+}
+
+const STREAM_START_FOLLOW_PX = 180
+const STREAM_GROWTH_FOLLOW_PX = 120
+const STREAM_BOTTOM_GAP_PX = 96
+
+export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
+  const toggleAiPanel = useAppStore((s) => s.toggleAiPanel)
   const { messages, streaming, error, ragStatus, ragSources, timeline, sendMessage, cancelStream } = useAiChat()
-  const draftInput = useChatStore((s) => s.draftInput)
   const setDraftInput = useChatStore((s) => s.setDraftInput)
   const clearMessages = useChatStore((s) => s.clearMessages)
-  const contextTags = useChatStore((s) => s.contextTags)
   const hasMoreHistory = useChatStore((s) => s.hasMoreHistory)
   const loadMoreHistory = useChatStore((s) => s.loadMoreHistory)
   const [loadingHistory, setLoadingHistory] = useState(false)
-  const chatEndRef = useRef<HTMLDivElement>(null)
   const chatContainerRef = useRef<HTMLDivElement>(null)
   const autoFollowRef = useRef(true)
+  const scrollFrameRef = useRef<number | null>(null)
+  const streamingMessageIdRef = useRef<string | null>(null)
+  const streamingStartScrollTopRef = useRef(0)
+  const programmaticScrollUntilRef = useRef(0)
+  const streamingRef = useRef(streaming)
+  const streamScrollInterruptedRef = useRef(false)
+  const pendingOutgoingMessageCountRef = useRef<number | null>(null)
   const visibleMessages = useMemo(() => messages.filter((msg) => !msg.hidden), [messages])
   const [manualCapabilities, setManualCapabilities] = useState<ManualCapability[]>([])
   const [resetManualToggle, setResetManualToggle] = useState(0)
@@ -39,34 +60,140 @@ export function AiPanel() {
     return el.scrollHeight - el.scrollTop - el.clientHeight < 50
   }, [])
 
+  useEffect(() => {
+    streamingRef.current = streaming
+    if (!streaming) {
+      streamScrollInterruptedRef.current = false
+    }
+  }, [streaming])
+
   // 监听用户手动滚动：滚到底部恢复跟随，滚离底部关闭跟随
   useEffect(() => {
     const el = chatContainerRef.current
     if (!el) return
+    const stopStreamingFollow = () => {
+      if (!streamingRef.current) return
+      autoFollowRef.current = false
+      streamScrollInterruptedRef.current = true
+      if (scrollFrameRef.current !== null) {
+        cancelAnimationFrame(scrollFrameRef.current)
+        scrollFrameRef.current = null
+      }
+    }
     const handleScroll = () => {
+      if (streamingRef.current && streamScrollInterruptedRef.current) return
+      if (Date.now() < programmaticScrollUntilRef.current) return
       autoFollowRef.current = isAtBottom()
     }
+    el.addEventListener('wheel', stopStreamingFollow, { passive: true })
+    el.addEventListener('touchstart', stopStreamingFollow, { passive: true })
+    el.addEventListener('pointerdown', stopStreamingFollow, { passive: true })
     el.addEventListener('scroll', handleScroll, { passive: true })
-    return () => el.removeEventListener('scroll', handleScroll)
+    return () => {
+      el.removeEventListener('wheel', stopStreamingFollow)
+      el.removeEventListener('touchstart', stopStreamingFollow)
+      el.removeEventListener('pointerdown', stopStreamingFollow)
+      el.removeEventListener('scroll', handleScroll)
+    }
   }, [isAtBottom])
 
-  // 流式输出时用 instant 滚动，避免 smooth 动画叠加抖动
+  // 合并同一帧内的滚动，避免长文本流式更新时反复触发布局。
   useEffect(() => {
+    if (streaming && streamScrollInterruptedRef.current) return
     if (!autoFollowRef.current) return
-    const behavior = streaming ? 'instant' as const : 'smooth' as const
-    chatEndRef.current?.scrollIntoView({ behavior })
+    const container = chatContainerRef.current
+    if (!container) return
+    if (streaming && pendingOutgoingMessageCountRef.current !== null) {
+      if (visibleMessages.length <= pendingOutgoingMessageCountRef.current) return
+      pendingOutgoingMessageCountRef.current = null
+      streamingMessageIdRef.current = null
+      // 用户刚发送消息，直接跳转到底部，后续流式更新按现有规则跟随
+      programmaticScrollUntilRef.current = Date.now() + 120
+      container.scrollTo({ top: container.scrollHeight })
+      return
+    }
+    const lastMessage = visibleMessages[visibleMessages.length - 1]
+    const lastMessageKey = lastMessage
+      ? lastMessage.id || `${lastMessage.role}-${lastMessage.sessionId || 'live'}-${lastMessage.timestamp || visibleMessages.length - 1}`
+      : null
+    const isAssistantStreaming = Boolean(streaming && lastMessage?.role === 'assistant' && lastMessageKey)
+
+    if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current)
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      scrollFrameRef.current = null
+      if (isAssistantStreaming && lastMessageKey) {
+        const streamingEl = container.querySelector<HTMLElement>('[data-chat-streaming="true"]')
+        if (!streamingEl) return
+
+        const isNewStreamingMessage = streamingMessageIdRef.current !== lastMessageKey
+        if (isNewStreamingMessage) {
+          streamingMessageIdRef.current = lastMessageKey
+          streamingStartScrollTopRef.current = container.scrollTop
+        }
+
+        const containerRect = container.getBoundingClientRect()
+        const messageRect = streamingEl.getBoundingClientRect()
+        const desiredTop = container.scrollTop + messageRect.top - containerRect.top - 12
+        const followLimit = streamingStartScrollTopRef.current + STREAM_START_FOLLOW_PX + (isNewStreamingMessage ? 0 : STREAM_GROWTH_FOLLOW_PX)
+        const bottomGap = container.scrollHeight - container.scrollTop - container.clientHeight
+        const growthTarget = bottomGap > STREAM_BOTTOM_GAP_PX
+          ? container.scrollTop + Math.min(bottomGap - STREAM_BOTTOM_GAP_PX, STREAM_GROWTH_FOLLOW_PX)
+          : container.scrollTop
+        const nextTop = Math.min(Math.max(desiredTop, growthTarget), followLimit)
+
+        programmaticScrollUntilRef.current = Date.now() + 120
+        container.scrollTo({ top: nextTop })
+        return
+      }
+
+      if (streamingMessageIdRef.current !== null) {
+        streamingMessageIdRef.current = null
+        return
+      }
+      programmaticScrollUntilRef.current = Date.now() + 120
+      container.scrollTo({ top: container.scrollHeight })
+    })
+    return () => {
+      if (scrollFrameRef.current !== null) {
+        cancelAnimationFrame(scrollFrameRef.current)
+        scrollFrameRef.current = null
+      }
+    }
   }, [visibleMessages, streaming])
 
-  const handleSend = () => {
-    if ((!draftInput.trim() && contextTags.length === 0) || streaming) return
+  const handleSend = useCallback(() => {
+    const chatState = useChatStore.getState()
+    const currentDraft = chatState.draftInput
+    const currentContextTags = chatState.contextTags
+    if ((!currentDraft.trim() && currentContextTags.length === 0) || chatState.streaming) return
     autoFollowRef.current = true
-    sendMessage(draftInput, undefined, contextTags.length > 0 ? contextTags : undefined, manualCapabilities)
+    streamScrollInterruptedRef.current = false
+    pendingOutgoingMessageCountRef.current = chatState.messages.filter((msg) => !msg.hidden).length
+    streamingMessageIdRef.current = null
+    streamingStartScrollTopRef.current = 0
+    sendMessage(currentDraft, undefined, currentContextTags.length > 0 ? currentContextTags : undefined, manualCapabilities)
     setDraftInput('')
-    useChatStore.getState().clearContextTags()
+    chatState.clearContextTags()
     // 重置手动工具开关
     setManualCapabilities([])
     setResetManualToggle((prev) => prev + 1)
-  }
+  }, [manualCapabilities, sendMessage, setDraftInput])
+
+  useEffect(() => {
+    window.addEventListener(AI_SHORTCUT_SUBMIT_EVENT, handleSend)
+    return () => window.removeEventListener(AI_SHORTCUT_SUBMIT_EVENT, handleSend)
+  }, [handleSend])
+
+  // 挂载时检查是否有待发送的快捷提问（解决首次使用时事件监听器未注册的问题）
+  useEffect(() => {
+    const chatState = useChatStore.getState()
+    if (chatState.draftInput.trim() && useSettingsStore.getState().editor.autoSendAiShortcut) {
+      // 延迟发送，确保事件监听器已注册
+      window.setTimeout(() => {
+        window.dispatchEvent(new Event(AI_SHORTCUT_SUBMIT_EVENT))
+      }, 100)
+    }
+  }, [])
 
   const handleRetry = () => {
     // Find the last user message and resend it
@@ -96,7 +223,7 @@ export function AiPanel() {
       const existing = editorState.tabs.find((tab) => isSameFilePath(tab.filePath, source.filePath))
       let tabId = existing?.id
       if (!tabId) {
-        const content = await readFile(source.filePath)
+        const content = await readRememberedFile(source.filePath)
         const name = source.filePath.split(/[/\\]/).pop() || source.filePath
         editorState.addTab(source.filePath, name, content)
         tabId = useEditorStore.getState().activeTabId || undefined
@@ -126,13 +253,16 @@ export function AiPanel() {
   }, [])
 
   return (
-    <div className="h-full flex flex-col relative">
+    <div className="gm-instant-color h-full min-h-0 flex flex-col relative">
       {/* Header */}
-      <div className="h-11 flex items-center px-4 border-b border-gm-border-subtle bg-gm-surface relative z-10">
+      <div
+        className={`flex items-center border-b border-gm-border-subtle bg-gm-surface relative z-10 ${
+          fullscreenDragHandleProps ? 'h-9 cursor-grab touch-none px-3 active:cursor-grabbing' : 'h-11 px-4'
+        }`}
+        aria-label={fullscreenDragHandleProps ? '拖动 AI 助手' : undefined}
+        {...fullscreenDragHandleProps}
+      >
         <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-lg flex items-center justify-center">
-            <Icon name="icon-chat" size={18} bounce={streaming} />
-          </div>
           <span className="text-body font-bold text-gm-text">
             AI 助手
           </span>
@@ -141,62 +271,55 @@ export function AiPanel() {
           )}
         </div>
         <div className="flex-1" />
-        {messages.length > 0 && (
+        <div className="flex items-center" onPointerDown={(e) => e.stopPropagation()}>
+          {messages.length > 0 && (
+            <Button
+              type="text"
+              size="small"
+              onClick={clearMessages}
+              title="清空对话"
+              icon={
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                </svg>
+              }
+            />
+          )}
           <Button
             type="text"
             size="small"
-            onClick={clearMessages}
-            title="清空对话"
+            onClick={toggleAiPanel}
+            title="关闭面板"
             icon={
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                <path d="M18 6L6 18M6 6l12 12" />
               </svg>
             }
           />
-        )}
-        <Button
-          type="text"
-          size="small"
-          onClick={toggleAiPanel}
-          title="关闭面板"
-          icon={
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M18 6L6 18M6 6l12 12" />
-            </svg>
-          }
-        />
+        </div>
       </div>
 
       <AgentTimeline timeline={timeline} />
       <RagTrace status={ragStatus} sources={ragSources} onOpenSource={handleOpenRagSource} />
 
       {/* Chat Content - 可以滚动到控制栏下面 */}
-      <div ref={chatContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 pb-24 bg-gm-surface">
+      <div ref={chatContainerRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden min-w-0 pb-32 bg-gm-surface">
         {visibleMessages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full p-6 animate-fadeIn">
             {hasMoreHistory && (
               <button
                 onClick={handleLoadHistory}
                 disabled={loadingHistory}
-                className="mb-4 px-4 py-1.5 rounded-full border border-gm-border text-caption text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover transition-colors disabled:opacity-50"
+                className="mb-4 px-4 py-1.5 rounded-full border border-gm-border text-caption text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover disabled:opacity-50"
               >
                 {loadingHistory ? '加载中...' : '加载历史记录'}
               </button>
             )}
-            <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4 animate-float">
-              <Icon name="icon-chat" size={38} bounce />
-            </div>
+            <AiAvatar size="empty" />
             <p className="text-body font-bold text-gm-text mb-1">开始对话</p>
             <p className="text-caption text-gm-text-secondary text-center leading-relaxed">
               选择文档中的文字，或直接提问
             </p>
-            <Divider type="line-brown" className="my-4 w-16 opacity-40" />
-            <div className="flex flex-wrap gap-2 justify-center">
-              <SuggestionChip label="总结这篇文档" onClick={(l) => setDraftInput(l)} />
-              <SuggestionChip label="搜索知识库" onClick={(l) => setDraftInput(l)} />
-              <SuggestionChip label="解释这段代码" onClick={(l) => setDraftInput(l)} />
-              <SuggestionChip label="网上搜索最新资讯" onClick={(l) => setDraftInput(l)} />
-            </div>
           </div>
         ) : (
           <div className="p-4 space-y-4">
@@ -205,7 +328,7 @@ export function AiPanel() {
                 <button
                   onClick={handleLoadHistory}
                   disabled={loadingHistory}
-                  className="px-4 py-1.5 rounded-full border border-gm-border text-caption text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover transition-colors disabled:opacity-50"
+                  className="px-4 py-1.5 rounded-full border border-gm-border text-caption text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover disabled:opacity-50"
                 >
                   {loadingHistory ? '加载中...' : '加载更早的记录'}
                 </button>
@@ -213,12 +336,17 @@ export function AiPanel() {
             )}
             {visibleMessages.map((msg, i) => {
               const prevMsg = i > 0 ? visibleMessages[i - 1] : null
+              const messageKey = msg.id || `${msg.role}-${msg.sessionId || 'live'}-${msg.timestamp || i}`
               // 历史会话之间的分隔线
               const showSessionDivider = Boolean(msg.sessionId && msg.sessionId !== prevMsg?.sessionId)
               // 历史消息 → 当前消息的分隔线
               const showHistoryBoundary = !msg.sessionId && prevMsg?.sessionId
               return (
-              <div key={msg.id || `${msg.role}-${msg.sessionId || 'live'}-${msg.timestamp || i}`}>
+              <div
+                key={messageKey}
+                data-chat-message-id={messageKey}
+                data-chat-streaming={msg.role === 'assistant' && i === visibleMessages.length - 1 && streaming ? 'true' : undefined}
+              >
                 {showSessionDivider && (
                   <SessionDivider title={msg.sessionTitle} timestamp={msg.timestamp} sessionId={msg.sessionId} onDelete={handleDeleteSession} />
                 )}
@@ -265,7 +393,7 @@ export function AiPanel() {
                 </div>
                 <button
                   onClick={handleRetry}
-                  className="flex-shrink-0 px-2 py-1 rounded-lg text-micro text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover transition-colors border border-gm-border"
+                  className="flex-shrink-0 px-2 py-1 rounded-lg text-micro text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover border border-gm-border"
                   title="重试"
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -275,7 +403,6 @@ export function AiPanel() {
                 </button>
               </div>
             )}
-            <div ref={chatEndRef} />
           </div>
         )}
       </div>
@@ -320,7 +447,7 @@ function RagTrace({ status, sources, onOpenSource }: { status: RagStatus; source
               key={`${source.filePath}-${source.startLine}-${index}`}
               type="button"
               onClick={() => onOpenSource(source)}
-              className="max-w-full truncate rounded-md border border-gm-border bg-gm-surface px-2 py-0.5 text-micro text-gm-text-tertiary transition-colors hover:border-gm-primary/40 hover:text-gm-primary"
+              className="max-w-full truncate rounded-md border border-gm-border bg-gm-surface px-2 py-0.5 text-micro text-gm-text-tertiary hover:border-gm-primary/40 hover:text-gm-primary"
               title={`打开原文 ${source.filePath}:${source.startLine}-${source.endLine}（已按授权范围检索）`}
             >
               {index + 1}. {source.title}:{source.startLine}-{source.endLine} · scope
@@ -399,20 +526,7 @@ function AgentTimeline({ timeline }: { timeline: TimelineItem[] }) {
   )
 }
 
-function SuggestionChip({ label, onClick }: { label: string; onClick?: (label: string) => void }) {
-  return (
-    <Button
-      type="default"
-      size="small"
-      onClick={() => onClick?.(label)}
-      className="rounded-full"
-    >
-      {label}
-    </Button>
-  )
-}
-
-function ChatBubble({
+const ChatBubble = memo(function ChatBubble({
   role,
   content,
   isLast,
@@ -425,33 +539,36 @@ function ChatBubble({
   isLast: boolean
   streaming: boolean
   sources?: ChatMessageSource[]
-  onOpenSource?: (source: ChatMessageSource) => void
+  onOpenSource?: (source: LocalChatMessageSource) => void
 }) {
   const isUser = role === 'user'
   const isEmpty = !content && isLast && streaming
+  const isAssistantStreaming = !isUser && isLast && streaming
 
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} animate-slideInUp`}>
+    <div className={`flex min-w-0 ${isUser ? 'justify-end' : 'justify-start'} animate-slideInUp`}>
       {!isUser && (
-        <div className="w-8 h-8 rounded-xl bg-gm-primary-subtle flex items-center justify-center mr-2 flex-shrink-0 mt-1">
-          <Icon name="icon-chat" size={20} bounce={isEmpty} />
-        </div>
+        <AiAvatar size="message" streaming={isAssistantStreaming} bounce={isEmpty} />
       )}
       <div
         className={`max-w-[80%] min-w-0 rounded-2xl px-4 py-2.5 text-body ${
           isUser
-            ? 'bg-gm-primary text-white rounded-br-md'
+            ? 'rounded-br-md'
             : 'bg-gm-surface-elevated text-gm-text border border-gm-border rounded-bl-md'
-        }`}
+        } ${isAssistantStreaming ? 'gm-streaming-bubble' : ''}`}
+        style={isUser ? { backgroundColor: 'var(--gm-user-bubble-bg)', color: 'var(--gm-user-bubble-text)' } : undefined}
       >
         {isEmpty ? (
-          <div className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-gm-primary animate-pulse" style={{ animationDelay: '0ms' }} />
-            <span className="w-2 h-2 rounded-full bg-gm-primary animate-pulse" style={{ animationDelay: '150ms' }} />
-            <span className="w-2 h-2 rounded-full bg-gm-primary animate-pulse" style={{ animationDelay: '300ms' }} />
+          <div className="gm-typing-loader" aria-label="正在生成">
+            <span style={{ animationDelay: '0ms' }} />
+            <span style={{ animationDelay: '140ms' }} />
+            <span style={{ animationDelay: '280ms' }} />
           </div>
-        ) : isUser ? (
-          <div className="whitespace-pre-wrap break-words">{content}</div>
+        ) : isUser || (isLast && streaming) ? (
+          <div className={`whitespace-pre-wrap overflow-wrap-anywhere ${isAssistantStreaming ? 'gm-streaming-text' : ''}`} style={{ wordBreak: 'normal' }}>
+            <span>{content}</span>
+            {isAssistantStreaming && <span className="gm-streaming-caret" aria-hidden="true" />}
+          </div>
         ) : (
           <AssistantMarkdown content={content} />
         )}
@@ -461,9 +578,42 @@ function ChatBubble({
       </div>
     </div>
   )
+})
+
+function AiAvatar({
+  size,
+  streaming = false,
+  bounce = false,
+}: {
+  size: 'empty' | 'message'
+  streaming?: boolean
+  bounce?: boolean
+}) {
+  const mascotEnabled = useSettingsStore((s) => s.appearance.aiMascotAvatarEnabled)
+  const className = size === 'empty'
+    ? 'gm-ai-empty-icon-shell w-16 h-16 rounded-2xl flex items-center justify-center mb-4'
+    : 'gm-ai-avatar w-9 h-9 rounded-xl flex items-center justify-center mr-2 flex-shrink-0 mt-1'
+
+  if (!mascotEnabled) {
+    return (
+      <div className={className}>
+        <Icon name="icon-chat" size={size === 'empty' ? 38 : 20} bounce={bounce} className="gm-ai-chat-icon" />
+      </div>
+    )
+  }
+
+  return (
+    <div className={`${className} gm-ai-avatar--mascot`} data-streaming={streaming || undefined}>
+      {streaming ? (
+        <img src={mascotStreaming} alt="AI 正在生成" className="gm-ai-mascot-image gm-ai-mascot-image--streaming" />
+      ) : (
+        <img src={mascotIdle} alt="AI 吉祥物" className="gm-ai-mascot-image" />
+      )}
+    </div>
+  )
 }
 
-function MessageSources({ sources, onOpenSource }: { sources: ChatMessageSource[]; onOpenSource: (source: ChatMessageSource) => void }) {
+function MessageSources({ sources, onOpenSource }: { sources: ChatMessageSource[]; onOpenSource: (source: LocalChatMessageSource) => void }) {
   const [expanded, setExpanded] = useState(false)
 
   return (
@@ -471,29 +621,49 @@ function MessageSources({ sources, onOpenSource }: { sources: ChatMessageSource[
       <button
         type="button"
         onClick={() => setExpanded((value) => !value)}
-        className="flex w-full items-center gap-1.5 text-left text-micro font-bold text-gm-text-tertiary transition-colors hover:text-gm-primary"
+        className="flex w-full items-center gap-1.5 text-left text-micro font-bold text-gm-text-tertiary hover:text-gm-primary"
       >
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`flex-shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}>
           <path d="M9 18l6-6-6-6" />
         </svg>
-        <span>参考来源 {sources.length} 个</span>
+        <span>Sources {sources.length}</span>
       </button>
       {expanded && (
         <div className="mt-2 space-y-1">
           {sources.map((source, index) => (
-            <button
-              key={`${source.filePath}-${source.startLine}-${source.endLine}-${index}`}
-              type="button"
-              onClick={() => onOpenSource(source)}
-              className="block w-full rounded-lg px-2 py-1 text-left text-micro leading-relaxed text-gm-text-secondary transition-colors hover:bg-gm-surface hover:text-gm-primary"
-              title={`打开 ${source.filePath}:${source.startLine}-${source.endLine}`}
-            >
-              <span className="font-bold">{source.fileName}</span>
-              {formatSourceHeading(source) && (
-                <span> · {formatSourceHeading(source)}</span>
-              )}
-              <span> · 第 {source.startLine}-{source.endLine} 行</span>
-            </button>
+            source.kind === 'web' ? (
+              <a
+                key={`${source.url}-${index}`}
+                href={source.url}
+                target="_blank"
+                rel="noreferrer"
+                className="block w-full rounded-lg px-2 py-1 text-left text-micro leading-relaxed text-gm-text-secondary hover:bg-gm-surface hover:text-gm-primary"
+                title={source.url}
+              >
+                <span className="mr-1 rounded border border-gm-border px-1 text-[10px] font-bold text-gm-text-tertiary">Web</span>
+                <span className="font-bold">{source.title}</span>
+                {(source.siteName || source.publishedAt) && (
+                  <span> / {[source.siteName, source.publishedAt].filter(Boolean).join(' / ')}</span>
+                )}
+                <span className="mt-0.5 block truncate text-gm-text-tertiary">{source.url}</span>
+              </a>
+            ) : (
+              <button
+                key={`${source.filePath}-${source.startLine}-${source.endLine}-${index}`}
+                type="button"
+                onClick={() => onOpenSource(source)}
+                className="block w-full rounded-lg px-2 py-1 text-left text-micro leading-relaxed text-gm-text-secondary hover:bg-gm-surface hover:text-gm-primary"
+                title={`Open ${source.filePath}:${source.startLine}-${source.endLine}`}
+              >
+                <span className="mr-1 rounded border border-gm-border px-1 text-[10px] font-bold text-gm-text-tertiary">Local</span>
+                <span className="font-bold">{source.fileName}</span>
+                {formatSourceHeading(source) && (
+                  <span> / {formatSourceHeading(source)}</span>
+                )}
+                <span> / L{source.startLine}-{source.endLine}</span>
+                <span className="mt-0.5 block truncate text-gm-text-tertiary">{source.filePath}</span>
+              </button>
+            )
           ))}
         </div>
       )}
@@ -501,75 +671,79 @@ function MessageSources({ sources, onOpenSource }: { sources: ChatMessageSource[
   )
 }
 
-function formatSourceHeading(source: ChatMessageSource): string {
+function formatSourceHeading(source: LocalChatMessageSource): string {
   if (source.titlePath?.length) return source.titlePath.join(' / ')
   return source.heading || ''
 }
 
-function AssistantMarkdown({ content }: { content: string }) {
-  return (
-    <div className="prose-sm max-w-none min-w-0 break-words [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          p: ({ children }) => <p className="my-1.5 leading-relaxed">{children}</p>,
-          strong: ({ children }) => <strong className="font-bold">{children}</strong>,
-          em: ({ children }) => <em className="italic">{children}</em>,
-          code: ({ children, className }) => {
-            const isBlock = className?.includes('language-')
-            if (isBlock) {
-              return (
-                <div className="my-2 rounded-xl bg-gm-canvas border border-gm-border overflow-hidden">
-                  {className && (
-                    <div className="px-3 py-1 border-b border-gm-border text-micro text-gm-text-secondary font-mono">
-                      {className.replace('language-', '')}
-                    </div>
-                  )}
-                  <pre className="p-3 overflow-x-auto m-0">
-                    <code className="text-[12px] font-mono leading-5">{children}</code>
-                  </pre>
-                </div>
-              )
-            }
-            return (
-              <code className="px-1.5 py-0.5 rounded bg-gm-canvas text-gm-accent text-[12px] font-mono break-words">
-                {children}
-              </code>
-            )
-          },
-          blockquote: ({ children }) => (
-            <blockquote className="pl-3 border-l-3 border-gm-primary my-2 text-gm-text-secondary italic">
-              {children}
-            </blockquote>
-          ),
-          ul: ({ children }) => <ul className="my-1.5 pl-4 space-y-0.5 list-disc">{children}</ul>,
-          ol: ({ children }) => <ol className="my-1.5 pl-4 space-y-0.5 list-decimal">{children}</ol>,
-          li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-          a: ({ href, children }) => (
-            <a href={href} className="text-gm-primary hover:underline" target="_blank" rel="noopener noreferrer">
-              {children}
-            </a>
-          ),
-          hr: () => <hr className="my-3 border-gm-border" />,
-          table: ({ children }) => (
-            <div className="my-2 overflow-x-auto rounded-lg border border-gm-border">
-              <table className="w-full border-collapse text-caption">{children}</table>
+const ASSISTANT_MARKDOWN_REMARK_PLUGINS = [remarkGfm]
+
+const ASSISTANT_MARKDOWN_COMPONENTS: Components = {
+  p: ({ children }) => <p className="my-1.5 leading-relaxed">{children}</p>,
+  strong: ({ children }) => <strong className="font-bold">{children}</strong>,
+  em: ({ children }) => <em className="italic">{children}</em>,
+  code: ({ children, className }) => {
+    const isBlock = className?.includes('language-')
+    if (isBlock) {
+      return (
+        <div className="my-2 rounded-xl bg-gm-canvas border border-gm-border overflow-hidden max-w-full">
+          {className && (
+            <div className="px-3 py-1 border-b border-gm-border text-micro text-gm-text-secondary font-mono">
+              {className.replace('language-', '')}
             </div>
-          ),
-          th: ({ children }) => (
-            <th className="px-2 py-1 text-left font-bold border-b border-gm-border">{children}</th>
-          ),
-          td: ({ children }) => (
-            <td className="px-2 py-1 border-b border-gm-border-subtle">{children}</td>
-          ),
-          del: ({ children }) => <del className="text-gm-text-tertiary">{children}</del>,
-        }}
+          )}
+          <pre className="p-3 m-0 max-w-full overflow-x-auto">
+            <code className="text-[12px] font-mono leading-5 whitespace-pre-wrap">{children}</code>
+          </pre>
+        </div>
+      )
+    }
+    return (
+      <code className="px-1.5 py-0.5 rounded bg-gm-canvas text-gm-accent text-[12px] font-mono whitespace-pre-wrap">
+        {children}
+      </code>
+    )
+  },
+  blockquote: ({ children }) => (
+    <blockquote className="pl-3 border-l-3 border-gm-primary my-2 text-gm-text-secondary italic">
+      {children}
+    </blockquote>
+  ),
+  ul: ({ children }) => <ul className="my-1.5 pl-4 space-y-0.5 list-disc">{children}</ul>,
+  ol: ({ children }) => <ol className="my-1.5 pl-4 space-y-0.5 list-decimal">{children}</ol>,
+  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+  a: ({ href, children }) => (
+    <a href={href} className="text-gm-primary hover:underline" target="_blank" rel="noopener noreferrer">
+      {children}
+    </a>
+  ),
+  hr: () => <hr className="my-3 border-gm-border" />,
+  table: ({ children }) => (
+    <div className="my-2 overflow-x-auto rounded-lg border border-gm-border">
+      <table className="w-full border-collapse text-caption">{children}</table>
+    </div>
+  ),
+  th: ({ children }) => (
+    <th className="px-2 py-1 text-left font-bold border-b border-gm-border">{children}</th>
+  ),
+  td: ({ children }) => (
+    <td className="px-2 py-1 border-b border-gm-border-subtle">{children}</td>
+  ),
+  del: ({ children }) => <del className="text-gm-text-tertiary">{children}</del>,
+}
+
+const AssistantMarkdown = memo(function AssistantMarkdown({ content }: { content: string }) {
+  return (
+    <div className="ai-message-content max-w-none min-w-0 overflow-wrap-anywhere [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+      <ReactMarkdown
+        remarkPlugins={ASSISTANT_MARKDOWN_REMARK_PLUGINS}
+        components={ASSISTANT_MARKDOWN_COMPONENTS}
       >
         {content}
       </ReactMarkdown>
     </div>
   )
-}
+})
 
 function PendingEditCard({ edit, actionable }: { edit: PendingEdit; actionable: boolean }) {
   const applyPendingEdit = useChatStore((s) => s.applyPendingEdit)
@@ -611,7 +785,7 @@ function PendingEditCard({ edit, actionable }: { edit: PendingEdit; actionable: 
             </div>
             <button
               onClick={() => createUndoPendingEdit(edit.id)}
-              className="w-full rounded-lg border border-gm-border px-3 py-1.5 text-caption text-gm-text-secondary transition-colors hover:bg-gm-surface-hover"
+              className="w-full rounded-lg border border-gm-border px-3 py-1.5 text-caption text-gm-text-secondary hover:bg-gm-surface-hover"
             >
               生成撤销确认卡片
             </button>
@@ -627,7 +801,7 @@ function PendingEditCard({ edit, actionable }: { edit: PendingEdit; actionable: 
             确认应用
           </button>
           <button onClick={() => rejectPendingEdit(edit.id)}
-            className="flex-1 px-3 py-1.5 rounded-lg border border-gm-border text-caption text-gm-text-secondary hover:bg-gm-surface-hover transition-colors">
+            className="flex-1 px-3 py-1.5 rounded-lg border border-gm-border text-caption text-gm-text-secondary hover:bg-gm-surface-hover">
             拒绝
           </button>
           </div>
@@ -666,7 +840,7 @@ function SessionDivider({
           <button
             type="button"
             onClick={() => onDelete(sessionId)}
-            className="rounded-full border border-gm-border px-2 py-0.5 text-micro text-gm-text-tertiary transition-colors hover:border-gm-error/40 hover:text-gm-error"
+            className="rounded-full border border-gm-border px-2 py-0.5 text-micro text-gm-text-tertiary hover:border-gm-error/40 hover:text-gm-error"
             title="删除这组历史会话"
           >
             删除

@@ -2,12 +2,13 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   base: './',
   plugins: [react()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      '@app-entry': path.resolve(__dirname, './src/App.tsx'),
       'animal-island-ui': path.resolve(__dirname, './src/vendor/animal-island-ui/index.ts'),
     },
   },
@@ -41,4 +42,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))

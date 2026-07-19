@@ -1,24 +1,28 @@
 import { useCallback, useRef } from 'react'
 import { useChatStore } from '@/stores/chatStore'
 import { useSettingsStore } from '@/stores/settingsStore'
-import { getAiClient, getEmbeddingClient, getEmbeddingConfig, initAiClient, initEmbeddingClient, isAiReady, isEmbeddingReady } from '@/services/ai/aiClient'
+import { useAppStore } from '@/stores/appStore'
+import { getAiClient, getEmbeddingClient, getEmbeddingConfig, initAiClient, initEmbeddingClient, isAiReady, isEmbeddingReady, isLocalApi } from '@/services/ai/aiClient'
 import type { ChatMessage, ChatMessageSource } from '@/services/ai/types'
 import { SYSTEM_TEMPERATURE } from '@/services/ai/types'
 import { initAgent, runAgent, shouldUseAgent } from '@/services/agent'
-import { detectIntentScores, shouldIncludeFullDocumentContext, shouldAllowMemoryWrite } from '@/services/agent/intentDetector'
+import { classifySelectionRequest, detectIntentScores, shouldIncludeFullDocumentContext, shouldAllowMemoryWrite } from '@/services/agent/intentDetector'
 import { buildCandidateTools } from '@/services/agent/toolSelector'
 import type { AgentStep } from '@/services/agent/types'
+import { decodeAgentStepEvent } from '@/services/agent/session'
 import type { ContextTag } from '@/types/contextTag'
 import { buildContextFromTags } from '@/services/contextBuilder'
 import { readFile as readTauriFile } from '@/hooks/useTauri'
-import { setAgentScopeContext } from '@/services/aiScope'
+import { setAgentScopeContext, type AgentEditTarget } from '@/services/aiScope'
 import { searchScopedKnowledge, shouldTriggerScopedRag, streamFinalAnswer } from '@/services/aiChatFlow'
-import { buildChatMessageTags, buildMessagesForModel, buildSupplementalAiContext, countRagSourcesInContext, createContextMeta, createUserChatMessage, prepareChatHistoryForModel } from '@/services/aiChatMessages'
+import { buildChatMessageTags, buildMessagesForModel, buildSupplementalAiContext, countRagSourcesInContext, createContextMeta, createUserChatMessage, prepareChatHistoryForModel, resolveAiAnswerMode } from '@/services/aiChatMessages'
 import { stripToolCallJson } from '@/services/agent/toolCallParser'
-import { buildMemoryContext, classifyMemoryRetrievalIntent, processMemoryCandidateExtraction, searchMemories } from '@/services/memory/memoryService'
+import { buildMemoryContext, classifyMemoryRetrievalIntent, isPersonalizedRewriteMemoryIntent, processMemoryCandidateExtraction, searchMemories } from '@/services/memory/memoryService'
 import type { Memory } from '@/services/database/persistence'
 import type { ManualCapability } from '@/components/ai/ManualToolToggle'
 import { hydrateSettingsSecrets } from '@/services/settingsSecrets'
+import { singletonManager, SINGLETON_IDS } from '@/services/singletonPromise'
+import { promoteTask } from '@/services/idleScheduler'
 
 function isCancelLastAppliedEdit(content: string, history: ChatMessage[]): boolean {
   const text = content.trim()
@@ -51,6 +55,8 @@ function getAgentProgressText(step: AgentStep): string {
       return '正在写入长期记忆...'
     case 'read_context_file':
       return '正在读取已授权文件内容...'
+    case 'read_selection_context':
+      return '正在阅读上下文...'
     case 'replace_current_tab_text':
       return '正在生成文本修改确认卡片...'
     case 'get_current_time':
@@ -93,6 +99,7 @@ function extractKnowledgeSourcesFromSteps(steps: AgentStep[]): ChatMessageSource
         seen.add(key)
 
         sources.push({
+          kind: 'local',
           filePath: item.filePath,
           fileName: sourceFileName(item.filePath, typeof item.title === 'string' ? item.title : undefined),
           titlePath: Array.isArray(item.titlePath)
@@ -111,59 +118,70 @@ function extractKnowledgeSourcesFromSteps(steps: AgentStep[]): ChatMessageSource
   return sources
 }
 
-function sourceNeedles(source: ChatMessageSource): string[] {
-  const fileStem = source.fileName.replace(/\.[^.]+$/, '')
-  return [
-    source.fileName,
-    fileStem,
-    source.heading,
-    ...(source.titlePath || []),
-  ].filter((item): item is string => Boolean(item && item.trim().length >= 2))
+function buildEditTargets(tags: ContextTag[] = []): AgentEditTarget[] {
+  return tags
+    .filter((tag) =>
+      (tag.type === 'selection' || tag.type === 'file')
+      && typeof tag.filePath === 'string'
+      && tag.filePath.trim().length > 0
+    )
+    .map((tag, index) => ({
+      id: `edit-target-${index + 1}`,
+      type: tag.type as 'selection' | 'file',
+      title: tag.title,
+      filePath: tag.filePath as string,
+      selectionFrom: tag.selectionFrom,
+      selectionTo: tag.selectionTo,
+    }))
 }
 
-function filterSourcesForAnswer(answer: string, sources: ChatMessageSource[]): ChatMessageSource[] {
-  if (sources.length <= 1) return sources
-  const normalizedAnswer = answer.toLowerCase()
-  const matchedPaths = new Set<string>()
-
-  for (const source of sources) {
-    if (sourceNeedles(source).some((needle) => normalizedAnswer.includes(needle.toLowerCase()))) {
-      matchedPaths.add(source.filePath)
-    }
+function buildEditTargetsContext(editTargets: AgentEditTarget[]): string {
+  if (editTargets.length === 0) {
+    return [
+      '【本轮可编辑目标】',
+      '无。本轮没有新的 selection 或 file 标签；如用户要求修改文本，只能提示重新添加目标标签。',
+    ].join('\n')
   }
 
-  if (matchedPaths.size > 0) {
-    return sources.filter((source) => matchedPaths.has(source.filePath))
-  }
-
-  return sources.filter((source) => source.filePath === sources[0].filePath)
+  return [
+    '【本轮可编辑目标】',
+    '以下 targetId 由系统根据本轮新增标签生成，是本轮唯一可用于文本修改确认卡的写授权。需要修改时调用 replace_current_tab_text，并优先传 targetId。',
+    ...editTargets.map((target) => [
+      `- targetId: ${target.id}`,
+      `  type: ${target.type}`,
+      `  path: ${target.filePath}`,
+      `  title: ${target.title}`,
+      typeof target.selectionFrom === 'number' && typeof target.selectionTo === 'number'
+        ? `  selectionRange: ${target.selectionFrom}-${target.selectionTo}`
+        : '',
+    ].filter(Boolean).join('\n')),
+  ].join('\n')
 }
 
 export function useAiChat() {
-  const {
-    messages,
-    streaming,
-    error,
-    agentMode,
-    ragStatus,
-    ragSources,
-    timeline,
-    addMessage,
-    setStreaming,
-    setError,
-    addAgentStep,
-    clearAgentSteps,
-    setAgentMode,
-    updateMessageContent,
-    updateMessageContextMeta,
-    updateMessageSources,
-    removeMessageById,
-    setRagStatus,
-    setRagSources,
-    addTimelineItem,
-    clearTimeline,
-  } = useChatStore()
-  const { ai } = useSettingsStore()
+  const messages = useChatStore((s) => s.messages)
+  const streaming = useChatStore((s) => s.streaming)
+  const error = useChatStore((s) => s.error)
+  const agentMode = useChatStore((s) => s.agentMode)
+  const ragStatus = useChatStore((s) => s.ragStatus)
+  const ragSources = useChatStore((s) => s.ragSources)
+  const timeline = useChatStore((s) => s.timeline)
+  const addMessage = useChatStore((s) => s.addMessage)
+  const setStreaming = useChatStore((s) => s.setStreaming)
+  const setError = useChatStore((s) => s.setError)
+  const addAgentStep = useChatStore((s) => s.addAgentStep)
+  const clearAgentSteps = useChatStore((s) => s.clearAgentSteps)
+  const setAgentMode = useChatStore((s) => s.setAgentMode)
+  const updateMessageContent = useChatStore((s) => s.updateMessageContent)
+  const updateMessageContextMeta = useChatStore((s) => s.updateMessageContextMeta)
+  const updateMessageSources = useChatStore((s) => s.updateMessageSources)
+  const removeMessageById = useChatStore((s) => s.removeMessageById)
+  const setRagStatus = useChatStore((s) => s.setRagStatus)
+  const setRagSources = useChatStore((s) => s.setRagSources)
+  const addTimelineItem = useChatStore((s) => s.addTimelineItem)
+  const clearTimeline = useChatStore((s) => s.clearTimeline)
+  const ai = useSettingsStore((s) => s.ai)
+  const workspacePath = useAppStore((s) => s.workspacePath)
   const lastConfigRef = useRef('')
   const cancelRef = useRef<() => void>(() => {})
   const activeRequestRef = useRef<{ id: string; assistantMessageId: string; cancelled: boolean } | null>(null)
@@ -179,13 +197,23 @@ export function useAiChat() {
       }
     }
 
-    // 初始化对话客户端
-    if (currentAi.apiKey && currentAi.baseUrl && currentAi.chatModel) {
+    // 初始化对话客户端（本地 API 无需 apiKey）
+    const chatReady = (currentAi.apiKey || isLocalApi(currentAi.baseUrl)) && currentAi.baseUrl && currentAi.chatModel
+    if (chatReady) {
       const configKey = `${currentAi.baseUrl}|${currentAi.apiKey}|${currentAi.chatModel}`
       if (configKey !== lastConfigRef.current || !isAiReady()) {
+        // 提升 AI 客户端初始化优先级（如果正在闲时加载）
+        promoteTask(SINGLETON_IDS.CHAT_AI)
         try {
-          initAiClient(currentAi)
-          lastConfigRef.current = configKey
+          // 如果闲时初始化已完成，直接使用
+          if (!isAiReady()) {
+            // 等待闲时初始化完成
+            await singletonManager.init(SINGLETON_IDS.CHAT_AI, async () => {
+              const provider = initAiClient(currentAi)
+              lastConfigRef.current = configKey
+              return provider
+            })
+          }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
           setError(`AI 初始化失败：${msg}`)
@@ -193,17 +221,24 @@ export function useAiChat() {
       }
     }
 
-    // 初始化 embedding 客户端（独立配置，不依赖对话 Key）
+    // 初始化 embedding 客户端（独立配置，本地 API 无需 apiKey）
     const emb = currentAi.embedding
-    if (emb?.apiKey && emb?.baseUrl && emb?.embeddingModel) {
+    const embReady = (emb?.apiKey || isLocalApi(emb?.baseUrl || '')) && emb?.baseUrl && emb?.embeddingModel
+    if (embReady) {
       const currentEmbeddingConfig = getEmbeddingConfig()
       const embeddingConfigChanged = !currentEmbeddingConfig
         || currentEmbeddingConfig.apiKey !== emb.apiKey
         || currentEmbeddingConfig.baseUrl !== emb.baseUrl
         || currentEmbeddingConfig.embeddingModel !== emb.embeddingModel
       if (embeddingConfigChanged || !isEmbeddingReady()) {
+        // 提升 Embedding 客户端初始化优先级
+        promoteTask(SINGLETON_IDS.EMBEDDING_AI)
         try {
-          initEmbeddingClient(emb)
+          if (!isEmbeddingReady()) {
+            await singletonManager.init(SINGLETON_IDS.EMBEDDING_AI, async () => {
+              return initEmbeddingClient(emb)
+            })
+          }
         } catch (err) {
           console.warn('[AI] Embedding client init failed:', err)
         }
@@ -211,7 +246,7 @@ export function useAiChat() {
     }
 
     if (!isAiReady()) {
-      setError('请先在设置中配置 API Key')
+      setError('请先在设置中配置 API Key 或选择本地模型（如 Ollama）')
       return false
     }
 
@@ -264,6 +299,7 @@ export function useAiChat() {
       addMessage(userMsg)
       addMessage({
         id: assistantMessageId,
+        parentId: userMsg.id,
         role: 'assistant',
         content: '正在准备 AI 请求...',
         timestamp: Date.now(),
@@ -292,11 +328,13 @@ export function useAiChat() {
       const appContext = {
         hasRecentEdit: hasRecentEditContext,
         hasOpenFile: Boolean(contextTags?.some((tag) => tag.type === 'file')),
+        hasSelection: Boolean(contextTags?.some((tag) => tag.type === 'selection')),
         hasContextTags: tagCount > 0,
       }
 
       // 意图检测
       const intentResult = detectIntentScores(content.trim(), appContext)
+      const selectionRequestKind = classifySelectionRequest(content.trim(), appContext)
 
       // 合并手动选择的 capabilities
       const manualCapabilitiesSet = new Set(manualCapabilities || [])
@@ -311,6 +349,16 @@ export function useAiChat() {
 
       // 构建候选工具
       let candidateToolNames = buildCandidateTools(mergedCandidates)
+      const currentEditTargets = buildEditTargets(contextTags || [])
+      if (currentEditTargets.length > 0 && candidateToolNames.includes('replace_current_tab_text')) {
+        candidateToolNames.unshift('list_current_edit_targets')
+      }
+      if (candidateToolNames.includes('read_selection_context')) {
+        candidateToolNames = [
+          'read_selection_context',
+          ...candidateToolNames.filter((name) => name !== 'read_selection_context'),
+        ]
+      }
 
       // 检查是否需要记忆写入
       const explicitMemoryWriteIntent = shouldAllowMemoryWrite(content.trim())
@@ -327,6 +375,7 @@ export function useAiChat() {
       let memoryContext = ''
       let memoryLookupAttempted = false
       const memoryIntent = classifyMemoryRetrievalIntent(content.trim())
+      const personalizedRewriteMemory = isPersonalizedRewriteMemoryIntent(content.trim())
       const shouldLookupMemory = memoryIntent !== 'none'
       const shouldLookupKnowledge = intentResult.candidates.includes('knowledge')
 
@@ -360,6 +409,10 @@ export function useAiChat() {
                 mode: memoryIntent === 'strong' ? 'strong' : 'light',
                 embedding,
                 batchEmbedding,
+                scopeType: workspacePath ? 'project' : 'global',
+                scopeKey: workspacePath,
+                embeddingModel: getEmbeddingConfig()?.embeddingModel,
+                categories: personalizedRewriteMemory ? ['preference', 'instruction'] : undefined,
                 signal: requestController.signal,
               })
               return { type: 'memory', result: memories }
@@ -428,145 +481,84 @@ export function useAiChat() {
         addTimelineItem({ type: 'local_search_start', label: 'Agent 开始规划工具链路' })
         let pendingEditCount = 0
         let liveAgentStepCount = 0
-        const handleLiveAgentStep = (step: AgentStep) => {
+        const handleAgentStep = (step: AgentStep) => {
           if (!isCurrentRequest()) return
           liveAgentStepCount++
           addAgentStep(step)
           updateRequestMessage(getAgentProgressText(step))
-          if (step.type === 'action' && step.toolName === 'search_knowledge') {
+          const event = decodeAgentStepEvent(step)
+          if (event.type === 'action' && event.toolName === 'search_knowledge') {
             addTimelineItem({ type: 'local_search_start', label: '检索本地知识库索引' })
-          } else if (step.type === 'action' && step.toolName === 'web_search') {
+          } else if (event.type === 'action' && event.toolName === 'read_selection_context') {
+            addTimelineItem({ type: 'local_search_start', label: '正在阅读上下文' })
+          } else if (event.type === 'action' && event.toolName === 'web_search') {
             addTimelineItem({ type: 'web_search_start', label: '执行联网搜索' })
-          } else if (step.type === 'action' && step.toolName === 'search_memory') {
+          } else if (event.type === 'action' && event.toolName === 'search_memory') {
             addTimelineItem({ type: 'local_search_start', label: '读取长期记忆库' })
-          } else if (step.type === 'action' && step.toolName === 'save_memory') {
+          } else if (event.type === 'action' && event.toolName === 'save_memory') {
             addTimelineItem({ type: 'local_search_start', label: '写入长期记忆库' })
-          } else if (step.type === 'action' && step.toolName === 'list_database_contents') {
+          } else if (event.type === 'action' && event.toolName === 'list_database_contents') {
             addTimelineItem({ type: 'local_search_start', label: '查看知识库索引概览' })
-          } else if (step.type === 'action' && step.toolName === 'list_memories') {
+          } else if (event.type === 'action' && event.toolName === 'list_memories') {
             addTimelineItem({ type: 'local_search_start', label: '查看记忆库概览' })
-          } else if (step.type === 'observation') {
+          } else if (event.type === 'observation') {
             addTimelineItem({ type: 'web_search_done', label: '工具结果已返回' })
-            try {
-              const parsed = JSON.parse(step.content)
-              if (parsed.__pendingEdit) {
-                const targetMessageId = pendingEditCount === 0
-                  ? assistantMessageId
-                  : `assistant-${requestId}-edit-${pendingEditCount}`
-                if (pendingEditCount > 0) {
-                  addMessage({
-                    id: targetMessageId,
-                    role: 'assistant',
-                    content: '已生成修改确认卡片，请在下方确认。',
-                    timestamp: Date.now(),
-                  })
-                }
-                pendingEditCount++
-                useChatStore.getState().setPendingEdit({
-                  id: `edit-${Date.now()}`,
-                  messageId: targetMessageId,
-                  oldText: parsed.oldText,
-                  newText: parsed.newText,
-                  tabId: parsed.tabId,
-                  tabTitle: parsed.tabTitle,
-                  replaceFrom: parsed.replaceFrom,
-                  replaceTo: parsed.replaceTo,
-                  replaceWholeDocument: parsed.replaceWholeDocument,
-                  changeSummary: parsed.changeSummary,
-                  selectionFrom: parsed.selectionFrom,
-                  selectionTo: parsed.selectionTo,
-                  status: 'pending',
-                })
-              }
-            } catch { /* 不是 pendingEdit JSON，忽略 */ }
+            if (!event.pendingEdit) return
+            const targetMessageId = pendingEditCount === 0
+              ? assistantMessageId
+              : `assistant-${requestId}-edit-${pendingEditCount}`
+            if (pendingEditCount > 0) {
+              addMessage({ id: targetMessageId, parentId: userMsg.id, role: 'assistant', content: '已生成修改确认卡片，请在下方确认。', timestamp: Date.now() })
+            }
+            pendingEditCount++
+            useChatStore.getState().setPendingEdit({
+              id: `edit-${Date.now()}`,
+              messageId: targetMessageId,
+              ...event.pendingEdit,
+              status: 'pending',
+            })
           }
         }
 
         // Agent 查询复用本轮预检索到的只读记忆上下文，避免普通转 Agent 后重复检索。
-        const agentContext = [tagContext, memoryContext].filter(Boolean).join('\n\n')
+        const editTargets = currentEditTargets
+        const editTargetsContext = buildEditTargetsContext(editTargets)
+        const agentContext = [tagContext, editTargetsContext, memoryContext].filter(Boolean).join('\n\n')
         const normalizedUserIntent = explicitMemoryWriteIntent
           ? `记住：${content.trim()}`
           : content.trim()
         const agentUserQuery = content.trim() || '请根据我提供的上下文继续。'
 
         try {
-          setAgentScopeContext({ contextTags: contextTags || [] })
-          const result = await runAgent(
-            agentUserQuery,
-            prepareChatHistoryForModel(messages),
-            {},
-            normalizedUserIntent,
+          setAgentScopeContext({ contextTags: contextTags || [], editTargets })
+          const result = await runAgent({
+            query: agentUserQuery,
+            chatHistory: prepareChatHistoryForModel(messages),
+            rawQuery: normalizedUserIntent,
             hasRecentEditContext,
-            Boolean(contextTags?.some((tag) => tag.type === 'selection' || tag.type === 'file')),
-            contextTags?.filter((tag) => tag.type === 'selection' || tag.type === 'file').length || 0,
+            hasCurrentEditTarget: Boolean(contextTags?.some((tag) => tag.type === 'selection' || tag.type === 'file')),
+            currentEditTargetCount: contextTags?.filter((tag) => tag.type === 'selection' || tag.type === 'file').length || 0,
             candidateToolNames,
-            memoryLookupAttempted,
-            requestController.signal,
-            SYSTEM_TEMPERATURE.agentPlanning,
-            handleLiveAgentStep,
-            mergedRequired,
-            agentContext,
-            ai.customPreferencePrompt
-          )
+            hasPrefetchedMemoryLookup: memoryLookupAttempted,
+            signal: requestController.signal,
+            temperature: SYSTEM_TEMPERATURE.agentPlanning,
+            onStep: handleAgentStep,
+            requiredCapabilities: mergedRequired,
+            untrustedContext: agentContext,
+            customPreferencePrompt: ai.customPreferencePrompt,
+            streamEnabled: ai.streamEnabled,
+          })
           if (!isCurrentRequest()) return
           for (const step of result.steps.slice(liveAgentStepCount)) {
             if (!isCurrentRequest()) return
-            addAgentStep(step)
-            if (step.type === 'action' && step.toolName === 'search_knowledge') {
-              addTimelineItem({ type: 'local_search_start', label: '检索本地知识库' })
-              } else if (step.type === 'action' && step.toolName === 'web_search') {
-                addTimelineItem({ type: 'web_search_start', label: '联网搜索' })
-              } else if (step.type === 'action' && step.toolName === 'search_memory') {
-                addTimelineItem({ type: 'local_search_start', label: '读取长期记忆（敏感）' })
-              } else if (step.type === 'action' && step.toolName === 'save_memory') {
-                addTimelineItem({ type: 'local_search_start', label: '写入长期记忆（敏感）' })
-              } else if (step.type === 'action' && step.toolName === 'list_database_contents') {
-                addTimelineItem({ type: 'local_search_start', label: '查看本地数据库概览（敏感）' })
-              } else if (step.type === 'observation') {
-              addTimelineItem({ type: 'web_search_done', label: '信息检索完成' })
-              // 检测 pendingEdit 工具结果
-              try {
-                const parsed = JSON.parse(step.content)
-                if (parsed.__pendingEdit) {
-                  console.log('[useAiChat] pendingEdit detected:', parsed)
-                  const targetMessageId = pendingEditCount === 0
-                    ? assistantMessageId
-                    : `assistant-${requestId}-edit-${pendingEditCount}`
-                  if (pendingEditCount > 0) {
-                    addMessage({
-                      id: targetMessageId,
-                      role: 'assistant',
-                      content: '已生成修改确认卡片，请在下方确认。',
-                      timestamp: Date.now(),
-                    })
-                  }
-                  pendingEditCount++
-                  useChatStore.getState().setPendingEdit({
-                    id: `edit-${Date.now()}`,
-                    messageId: targetMessageId,
-                    oldText: parsed.oldText,
-                    newText: parsed.newText,
-                    tabId: parsed.tabId,
-                    tabTitle: parsed.tabTitle,
-                    replaceFrom: parsed.replaceFrom,
-                    replaceTo: parsed.replaceTo,
-                    replaceWholeDocument: parsed.replaceWholeDocument,
-                    changeSummary: parsed.changeSummary,
-                    selectionFrom: parsed.selectionFrom,
-                    selectionTo: parsed.selectionTo,
-                    status: 'pending',
-                  })
-                }
-              } catch { /* 不是 pendingEdit JSON，忽略 */ }
-            }
+            handleAgentStep(step)
           }
           const agentSources = result.sources?.length
             ? result.sources
             : extractKnowledgeSourcesFromSteps(result.steps)
           const updateAgentSourceMetadata = () => {
             if (!isCurrentRequest()) return
-            const answer = useChatStore.getState().messages.find((msg) => msg.id === assistantMessageId)?.content || ''
-            const filteredSources = filterSourcesForAnswer(stripToolCallJson(answer), agentSources)
+            const filteredSources = agentSources
             updateMessageContextMeta(assistantMessageId, createContextMeta({
               tagCount: tagMetadata.length,
               ragSourceCount: filteredSources.length,
@@ -614,7 +606,7 @@ export function useAiChat() {
           if (isCurrentRequest()) {
             const allMsgs = useChatStore.getState().messages
             const agentClient = getAiClient()
-            processMemoryCandidateExtraction(allMsgs, agentClient, SYSTEM_TEMPERATURE.memoryExtract, { triggerReason: 'agent_completed' }).catch((err) =>
+            processMemoryCandidateExtraction(allMsgs, agentClient, SYSTEM_TEMPERATURE.memoryExtract, { triggerReason: 'agent_completed', workspacePath }).catch((err) =>
               console.warn('[Memory] extraction failed:', err)
             )
             // 自动保存会话到数据库
@@ -702,6 +694,7 @@ export function useAiChat() {
         userMessage: userMsg,
         supplementalContext: injectedContext,
         customPreferencePrompt: ai.customPreferencePrompt,
+        answerMode: resolveAiAnswerMode(selectionRequestKind, useAgentMode),
       })
 
       const contextMeta = createContextMeta({
@@ -711,6 +704,7 @@ export function useAiChat() {
       })
       if (isCurrentRequest()) updateMessageContextMeta(assistantMessageId, contextMeta)
       const messageSources = useChatStore.getState().ragSources.map((source) => ({
+        kind: 'local' as const,
         filePath: source.filePath,
         fileName: source.fileName,
         titlePath: source.titlePath,
@@ -742,7 +736,7 @@ export function useAiChat() {
         // 异步提取候选记忆（不阻塞用户）
         if (isCurrentRequest()) {
           const allMsgs = useChatStore.getState().messages
-          processMemoryCandidateExtraction(allMsgs, client, SYSTEM_TEMPERATURE.memoryExtract, { triggerReason: 'normal_completed' }).catch((err) =>
+          processMemoryCandidateExtraction(allMsgs, client, SYSTEM_TEMPERATURE.memoryExtract, { triggerReason: 'normal_completed', workspacePath }).catch((err) =>
             console.warn('[Memory] extraction failed:', err)
           )
           // 自动保存会话到数据库
@@ -755,7 +749,12 @@ export function useAiChat() {
         const msg = err instanceof Error ? err.message : String(err)
         setError(`请求失败：${msg}`)
         addTimelineItem({ type: 'error', label: 'AI 请求失败', detail: msg })
-        removeMessageById(assistantMessageId)
+        const partialContent = useChatStore.getState().messages.find(
+          (message) => message.id === assistantMessageId
+        )?.content.trim()
+        if (!partialContent || partialContent.startsWith('正在')) {
+          removeMessageById(assistantMessageId)
+        }
       } finally {
         if (activeRequestRef.current?.id === requestId) {
           activeRequestRef.current = null
@@ -765,7 +764,7 @@ export function useAiChat() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [streaming, agentMode, ai, ensureClient]
+    [streaming, agentMode, ai, ensureClient, workspacePath]
   )
 
   return {

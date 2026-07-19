@@ -17,6 +17,7 @@ src-tauri/gen/
 *.AppImage
 *.deb
 *.rpm
+*.zip
 
 # IDE / OS
 .vscode/
@@ -25,7 +26,8 @@ src-tauri/gen/
 Thumbs.db
 
 # Local app data and generated files
-*.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
 *.log
@@ -33,6 +35,25 @@ Thumbs.db
 *.tsbuildinfo
 history/
 tmp/
+
+# Migration tool artifacts
+tools/guanmo-idb-exporter/*.db
+tools/guanmo-idb-exporter/*.db-shm
+tools/guanmo-idb-exporter/*.db-wal
+tools/guanmo-idb-exporter/*.backup-*
+tools/guanmo-idb-exporter/*-report.json
+tools/guanmo-idb-exporter/*-migration-report.json
+tools/guanmo-idb-exporter/test-*
+guanmo-migrated*
+test-*.db
+test-*.json
+test-*.txt
+
+# Export files
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
 
 # Env / secrets
 .env
@@ -49,3 +70,6 @@ secrets.json
 agentmd.json
 AGENTS.md
 CLAUDE.md
+
+# Playwright
+.playwright-cli/

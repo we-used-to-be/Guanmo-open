@@ -1,7 +1,10 @@
 import type { Document, Chunk, SearchResult, RAGConfig } from './types'
 import { chunkMarkdown } from './chunker'
+import { createExactContentHash } from './contentHash'
+import { createEmbeddingInputHash, EMBEDDING_PREPROCESS_VERSION, getEmbeddingInput } from './embeddingInput'
+import { canSkipDocumentIndex, reconcileDocumentChunks, type IndexUpdateStats } from './reconciler'
 import { vectorStore } from './vectorStore'
-import { getEmbeddingClient, isEmbeddingReady } from '@/services/ai/aiClient'
+import { getEmbeddingClient, getEmbeddingConfig, isEmbeddingReady } from '@/services/ai/aiClient'
 import {
   loadAllDocuments,
   listEmbeddingJobs,
@@ -56,6 +59,32 @@ let ragConfig: RAGConfig = { ...DEFAULT_CONFIG }
 let embeddingQueuePromise: Promise<EmbedResult> | null = null
 let embeddingQueueRerunRequested = false
 let hydratePromise: Promise<void> | null = null
+const documentOperations = new Map<string, Promise<void>>()
+
+export interface IngestDocumentResult {
+  document: Document
+  stats: IndexUpdateStats
+  unchanged: boolean
+}
+
+export async function runSerializedDocumentOperation<T>(
+  filePath: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const key = normalizeFilePath(filePath)
+  const previous = documentOperations.get(key) || Promise.resolve()
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  const queued = previous.catch(() => undefined).then(() => gate)
+  documentOperations.set(key, queued)
+  await previous.catch(() => undefined)
+  try {
+    return await operation()
+  } finally {
+    release()
+    if (documentOperations.get(key) === queued) documentOperations.delete(key)
+  }
+}
 
 export function updateRagConfig(config: Partial<RAGConfig>): void {
   ragConfig = { ...ragConfig, ...config }
@@ -73,48 +102,56 @@ export function getDefaultConfig(): RAGConfig {
  * Ingest a document: chunk it and store in vector store.
  * Atomic: creates new doc first, then replaces old one if exists.
  */
-export function ingestDocument(
+export async function ingestDocument(
   filePath: string,
   title: string,
   content: string
-): Document | null {
-  if (!content.trim()) {
-    console.warn('ingestDocument: empty content, skipping')
-    return null
-  }
+): Promise<IngestDocumentResult | null> {
   if (!filePath) {
     console.warn('ingestDocument: empty filePath, skipping')
     return null
   }
 
+  if (!vectorStore.persistenceEnabled) await hydrateVectorStoreFromDatabase()
   const existing = vectorStore.findByFilePath(filePath)
   const docId = existing?.id || `doc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+  const contentHash = await createExactContentHash(content)
+  const embeddingModel = getEmbeddingConfig()?.embeddingModel || null
+
+  if (existing && canSkipDocumentIndex(existing, contentHash, embeddingModel)) {
+    return {
+      document: existing,
+      stats: {
+        total: existing.chunks.length,
+        reused: existing.chunks.filter((chunk) => Boolean(chunk.embedding)).length,
+        added: 0,
+        deleted: 0,
+        reembedded: 0,
+      },
+      unchanged: true,
+    }
+  }
 
   const chunks = chunkMarkdown(content, docId, {
     chunkSize: ragConfig.chunkSize,
     overlap: ragConfig.chunkOverlap,
   })
 
-  if (chunks.length === 0) {
-    console.warn('ingestDocument: no meaningful chunks, skipping')
-    return null
-  }
-
-  const doc: Document = {
+  const nextDocument = {
     id: docId,
     filePath,
     title,
     content,
+    contentHash,
     lastModified: Date.now(),
+  }
+  const reconciled = await reconcileDocumentChunks(
+    existing,
+    nextDocument,
     chunks,
-  }
-
-  if (existing) {
-    vectorStore.removeDocument(existing.id)
-  }
-  vectorStore.addDocument(doc)
-
-  return doc
+    embeddingModel,
+  )
+  return { ...reconciled, unchanged: false }
 }
 
 export async function enqueueEmbeddingJob(doc: Document): Promise<void> {
@@ -154,12 +191,18 @@ async function getRagDocuments(): Promise<Document[]> {
  */
 async function embedChunks(chunks: Chunk[]): Promise<EmbedResult> {
   const client = getEmbeddingClient()
+  const embeddingModel = getEmbeddingConfig()?.embeddingModel || null
   const result: EmbedResult = { embedded: 0, failed: 0, errors: [] }
   const BATCH_SIZE = 100
 
   for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
     const batch = chunks.slice(i, i + BATCH_SIZE)
-    const texts = batch.map((c) => c.content)
+    await Promise.all(batch.map(async (chunk) => {
+      chunk.embeddingInputHash = await createEmbeddingInputHash(chunk)
+      chunk.embeddingModel = embeddingModel
+      chunk.embeddingPreprocessVersion = EMBEDDING_PREPROCESS_VERSION
+    }))
+    const texts = batch.map(getEmbeddingInput)
 
     try {
       const embeddings = await client.batchEmbedding(texts)
@@ -173,8 +216,12 @@ async function embedChunks(chunks: Chunk[]): Promise<EmbedResult> {
         }
       }
     } catch (err) {
-      // If batch fails, fall back to serial
       const msg = err instanceof Error ? err.message : String(err)
+      // 网络错误（本地服务不可用等）直接抛出，不逐个重试
+      if (msg.includes('连接失败') || msg.includes('Failed to fetch') || msg.includes('ECONNREFUSED') || msg.includes('timeout')) {
+        throw err
+      }
+      // 其他错误（如单条文本过长）fallback 到逐个重试
       console.warn(`Batch embedding failed, falling back to serial: ${msg}`)
       for (const chunk of batch) {
         try {
@@ -183,7 +230,7 @@ async function embedChunks(chunks: Chunk[]): Promise<EmbedResult> {
           result.embedded++
         } catch (serialErr) {
           result.failed++
-          const serialMsg = serialErr instanceof Error ? serialErr.message : String(serialErr)
+          const serialMsg = serialErr instanceof Error ? serialErr.message : String(err)
           result.errors.push(`chunk ${chunk.id}: ${serialMsg}`)
         }
       }
@@ -219,15 +266,16 @@ async function processEmbeddingQueueInternal(): Promise<EmbedResult> {
     if (jobs.length === 0) break
 
     for (const job of jobs) {
-      const doc = await getDocumentForJob(job.documentId, job.filePath)
-      if (!doc) {
-        await removeEmbeddingJobByPath(job.filePath)
-        total.errors.push(`${job.filePath}: removed stale embedding job`)
-        continue
-      }
+      await runSerializedDocumentOperation(job.filePath, async () => {
+        const doc = await getDocumentForJob(job.documentId, job.filePath)
+        if (!doc) {
+          await removeEmbeddingJobByPath(job.filePath)
+          total.errors.push(`${job.filePath}: removed stale embedding job`)
+          return
+        }
 
-      await updateEmbeddingJobStatus(job.id, 'running')
-      try {
+        await updateEmbeddingJobStatus(job.id, 'running')
+        try {
         const pending = doc.chunks.filter((chunk) => !chunk.embedding)
         const result = pending.length > 0 ? await embedChunks(pending) : { embedded: 0, failed: 0, errors: [] }
         total.embedded += result.embedded
@@ -240,12 +288,13 @@ async function processEmbeddingQueueInternal(): Promise<EmbedResult> {
           result.failed > 0 ? 'failed' : 'done',
           result.errors.join('\n') || null
         )
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        await updateEmbeddingJobStatus(job.id, 'failed', message)
-        total.failed++
-        total.errors.push(`${job.filePath}: ${message}`)
-      }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          await updateEmbeddingJobStatus(job.id, 'failed', message)
+          total.failed++
+          total.errors.push(`${job.filePath}: ${message}`)
+        }
+      })
     }
   }
 

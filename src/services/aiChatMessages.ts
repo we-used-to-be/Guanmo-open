@@ -1,7 +1,11 @@
 import type { ChatMessage, ChatMessageContextMeta, ChatMessageTag } from '@/services/ai/types'
 import type { ContextTag } from '@/types/contextTag'
 import { CONTEXT_BLOCK_PREFIX } from '@/services/contextBuilder'
-import { buildSystemMessages, buildUntrustedContextMessage } from '@/services/ai/systemPrompts'
+import { buildSystemMessages, buildUntrustedContextMessage, type AiAnswerMode } from '@/services/ai/systemPrompts'
+
+export function resolveAiAnswerMode(selectionRequestKind: 'none' | 'fast' | 'context' | 'explicit_lookup', useAgentMode: boolean): AiAnswerMode | undefined {
+  return selectionRequestKind === 'fast' && !useAgentMode ? 'selection_direct' : undefined
+}
 
 export function buildChatMessageTags(contextTags: ContextTag[] = []): ChatMessageTag[] {
   return contextTags.map((tag) => ({
@@ -78,6 +82,7 @@ export function buildMessagesForModel(options: {
   userMessage: ChatMessage
   supplementalContext?: string
   customPreferencePrompt?: string
+  answerMode?: AiAnswerMode
 }): ChatMessage[] {
   const strippedUserContent = stripInjectedTagContext(options.userMessage.content)
   const latestUserMessage: ChatMessage = {
@@ -95,7 +100,7 @@ export function buildMessagesForModel(options: {
   const contextMessage = buildUntrustedContextMessage(contextText)
 
   return [
-    ...buildSystemMessages(options.customPreferencePrompt),
+    ...buildSystemMessages(options.customPreferencePrompt, options.answerMode),
     ...options.history,
     ...(contextMessage ? [contextMessage] : []),
     latestUserMessage,

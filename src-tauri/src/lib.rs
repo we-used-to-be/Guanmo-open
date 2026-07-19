@@ -1,16 +1,23 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::{
     collections::{HashMap, HashSet},
     ffi::OsString,
     fs,
     path::{Component, Path, PathBuf},
+    process::Command,
     sync::Mutex,
 };
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_fs::FsExt;
 
+mod api_http;
+use api_http::ApiOriginState;
+
 const SECRET_FILE: &str = "secrets.json";
+const FILE_ACCESS_GRANTS_FILE: &str = "file-access-grants.json";
+const MAX_LEGACY_WORKSPACES: usize = 16;
+const MAX_LEGACY_FILES: usize = 10_000;
 const ALLOWED_TEXT_FILE_EXTENSIONS: [&str; 11] = [
     "md", "markdown", "mdx", "txt", "json", "html", "css", "js", "ts", "jsx", "tsx",
 ];
@@ -22,6 +29,65 @@ const OPEN_FILES_EVENT: &str = "guanmo:open-files";
 struct FsAccessState {
     workspaces: Mutex<HashSet<PathBuf>>,
     selected_files: Mutex<HashSet<PathBuf>>,
+    markdown_asset_dirs: Mutex<HashSet<PathBuf>>,
+    persistence: Mutex<()>,
+    legacy_migration_completed: Mutex<bool>,
+    legacy_migration: Mutex<()>,
+    pending_legacy_workspaces: Mutex<HashSet<PathBuf>>,
+    pending_legacy_files: Mutex<HashSet<PathBuf>>,
+}
+
+#[derive(Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+struct PersistedFileAccess {
+    #[serde(default)]
+    workspaces: Vec<PathBuf>,
+    #[serde(default)]
+    selected_files: Vec<PathBuf>,
+    #[serde(default)]
+    legacy_migration_completed: bool,
+    #[serde(default)]
+    pending_legacy_workspaces: Vec<PathBuf>,
+    #[serde(default)]
+    pending_legacy_files: Vec<PathBuf>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyFileAccessMigrationResult {
+    status: &'static str,
+    workspace_count: usize,
+    file_count: usize,
+    ignored_count: usize,
+    pending_count: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum FileAction {
+    ReadText,
+    WriteText,
+    ReadBinary,
+    WriteBinary,
+    CreateFile,
+    CreateDir,
+    ReadDir,
+    Exists,
+    Remove,
+    Reveal,
+    RenameSource,
+    RenameTarget,
+}
+
+impl FileAction {
+    fn allows_selected_file(self) -> bool {
+        !matches!(self, Self::CreateDir | Self::ReadDir)
+    }
+
+    fn allows_markdown_asset(self) -> bool {
+        matches!(
+            self,
+            Self::ReadBinary | Self::WriteBinary | Self::Exists | Self::Remove | Self::Reveal
+        )
+    }
 }
 
 #[derive(Default)]
@@ -189,64 +255,213 @@ fn is_allowed_selected_file(state: &FsAccessState, path: &Path) -> Result<bool, 
     Ok(selected_files.contains(path))
 }
 
-fn ensure_allowed_read_file(state: &FsAccessState, path: &Path) -> Result<PathBuf, String> {
+fn is_allowed_markdown_asset(state: &FsAccessState, path: &Path) -> Result<bool, String> {
+    let asset_dirs = state
+        .markdown_asset_dirs
+        .lock()
+        .map_err(|_| "Markdown asset access state is poisoned".to_string())?;
+    Ok(asset_dirs.iter().any(|dir| is_inside(dir, path)))
+}
+
+fn is_authorized_for_action(
+    state: &FsAccessState,
+    path: &Path,
+    action: FileAction,
+) -> Result<bool, String> {
+    if is_allowed_workspace_path(state, path)? {
+        return Ok(true);
+    }
+    let selected_file_allowed = action
+        .allows_selected_file()
+        .then(|| is_allowed_selected_file(state, path))
+        .transpose()
+        .map(|allowed| allowed.unwrap_or(false))?;
+    if selected_file_allowed {
+        return Ok(true);
+    }
+    (action.allows_markdown_asset() && ensure_allowed_image_file_path(path).is_ok())
+        .then(|| is_allowed_markdown_asset(state, path))
+        .transpose()
+        .map(|allowed| allowed.unwrap_or(false))
+}
+
+fn ensure_allowed_existing_text_file(
+    state: &FsAccessState,
+    path: &Path,
+    action: FileAction,
+) -> Result<PathBuf, String> {
     ensure_allowed_text_file_path(path)?;
     let canonical = canonical_existing_file(path)?;
-    if is_allowed_workspace_path(state, &canonical)? || is_allowed_selected_file(state, &canonical)?
-    {
+    if is_authorized_for_action(state, &canonical, action)? {
         Ok(canonical)
     } else {
         Err("file is outside the selected workspace".into())
     }
 }
 
-fn ensure_allowed_write_file(state: &FsAccessState, path: &Path) -> Result<PathBuf, String> {
+fn ensure_allowed_target_text_file(
+    state: &FsAccessState,
+    path: &Path,
+    action: FileAction,
+) -> Result<PathBuf, String> {
     ensure_allowed_text_file_path(path)?;
     let normalized = normalized_target_path(path)?;
-    if is_allowed_workspace_path(state, &normalized)?
-        || is_allowed_selected_file(state, &normalized)?
-    {
+    if is_authorized_for_action(state, &normalized, action)? {
         Ok(normalized)
     } else {
         Err("file is outside the selected workspace".into())
     }
 }
 
-fn ensure_allowed_read_image_file(state: &FsAccessState, path: &Path) -> Result<PathBuf, String> {
+fn ensure_allowed_existing_image_file(
+    state: &FsAccessState,
+    path: &Path,
+    action: FileAction,
+) -> Result<PathBuf, String> {
     ensure_allowed_image_file_path(path)?;
     let canonical = canonical_existing_file(path)?;
-    if is_allowed_workspace_path(state, &canonical)? || is_allowed_selected_file(state, &canonical)?
-    {
+    if is_authorized_for_action(state, &canonical, action)? {
         Ok(canonical)
     } else {
         Err("file is outside the selected workspace".into())
     }
 }
 
-fn ensure_allowed_write_image_file(state: &FsAccessState, path: &Path) -> Result<PathBuf, String> {
+fn ensure_allowed_target_image_file(
+    state: &FsAccessState,
+    path: &Path,
+    action: FileAction,
+) -> Result<PathBuf, String> {
     ensure_allowed_image_file_path(path)?;
     let normalized = normalized_target_path(path)?;
-    if is_allowed_workspace_path(state, &normalized)?
-        || is_allowed_selected_file(state, &normalized)?
-    {
+    if is_authorized_for_action(state, &normalized, action)? {
         Ok(normalized)
     } else {
         Err("file is outside the selected workspace".into())
     }
 }
 
-fn ensure_allowed_dir(state: &FsAccessState, path: &Path) -> Result<PathBuf, String> {
+fn ensure_allowed_existing_supported_file(
+    state: &FsAccessState,
+    path: &Path,
+    action: FileAction,
+) -> Result<PathBuf, String> {
+    ensure_allowed_text_or_image_file_path(path)?;
+    let canonical = canonical_existing_file(path)?;
+    if is_authorized_for_action(state, &canonical, action)? {
+        Ok(canonical)
+    } else {
+        Err("file is outside the selected workspace".into())
+    }
+}
+
+fn ensure_allowed_target_path(
+    state: &FsAccessState,
+    path: &Path,
+    action: FileAction,
+) -> Result<PathBuf, String> {
+    let normalized = normalized_target_path(path)?;
+    if is_authorized_for_action(state, &normalized, action)? {
+        Ok(normalized)
+    } else {
+        Err("path is outside the selected workspace".into())
+    }
+}
+
+fn ensure_allowed_dir(
+    state: &FsAccessState,
+    path: &Path,
+    action: FileAction,
+) -> Result<PathBuf, String> {
     let canonical = canonical_dir(path)?;
-    if is_allowed_workspace_path(state, &canonical)? {
+    if is_authorized_for_action(state, &canonical, action)? {
         Ok(canonical)
     } else {
         Err("directory is outside the selected workspace".into())
     }
 }
 
-fn register_workspace(app: &tauri::AppHandle, path: PathBuf) -> Result<PathBuf, String> {
+fn snapshot_persisted_file_access(state: &FsAccessState) -> Result<PersistedFileAccess, String> {
+    let mut workspaces = state
+        .workspaces
+        .lock()
+        .map_err(|_| "workspace access state is poisoned".to_string())?
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut selected_files = state
+        .selected_files
+        .lock()
+        .map_err(|_| "selected file access state is poisoned".to_string())?
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    workspaces.sort();
+    selected_files.sort();
+    let legacy_migration_completed = *state
+        .legacy_migration_completed
+        .lock()
+        .map_err(|_| "legacy migration state is poisoned".to_string())?;
+    let mut pending_legacy_workspaces = state
+        .pending_legacy_workspaces
+        .lock()
+        .map_err(|_| "pending legacy workspace state is poisoned".to_string())?
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut pending_legacy_files = state
+        .pending_legacy_files
+        .lock()
+        .map_err(|_| "pending legacy file state is poisoned".to_string())?
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    pending_legacy_workspaces.sort();
+    pending_legacy_files.sort();
+    Ok(PersistedFileAccess {
+        workspaces,
+        selected_files,
+        legacy_migration_completed,
+        pending_legacy_workspaces,
+        pending_legacy_files,
+    })
+}
+
+fn file_access_grants_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_config_dir().map_err(|err| err.to_string())?;
+    fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+    Ok(dir.join(FILE_ACCESS_GRANTS_FILE))
+}
+
+fn read_persisted_file_access(path: &Path) -> Result<PersistedFileAccess, String> {
+    if !path.exists() {
+        return Ok(PersistedFileAccess::default());
+    }
+    let text = fs::read_to_string(path).map_err(|err| err.to_string())?;
+    serde_json::from_str(&text).map_err(|err| err.to_string())
+}
+
+fn persist_file_access(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<FsAccessState>();
+    let _guard = state
+        .persistence
+        .lock()
+        .map_err(|_| "file access persistence state is poisoned".to_string())?;
+    let grants = snapshot_persisted_file_access(state.inner())?;
+    let text = serde_json::to_string(&grants).map_err(|err| err.to_string())?;
+    fs::write(file_access_grants_path(app)?, text).map_err(|err| err.to_string())
+}
+
+fn register_workspace_internal(
+    app: &tauri::AppHandle,
+    path: PathBuf,
+    persist: bool,
+) -> Result<PathBuf, String> {
     let canonical = canonical_dir(&path)?;
     app.fs_scope()
+        .allow_directory(&canonical, true)
+        .map_err(|err| err.to_string())?;
+    app.asset_protocol_scope()
         .allow_directory(&canonical, true)
         .map_err(|err| err.to_string())?;
     let state = app.state::<FsAccessState>();
@@ -255,13 +470,41 @@ fn register_workspace(app: &tauri::AppHandle, path: PathBuf) -> Result<PathBuf, 
         .lock()
         .map_err(|_| "workspace access state is poisoned".to_string())?
         .insert(canonical.clone());
+    if persist {
+        persist_file_access(app)?;
+    }
     Ok(canonical)
 }
 
-fn register_selected_file(app: &tauri::AppHandle, path: PathBuf) -> Result<PathBuf, String> {
+fn register_workspace(app: &tauri::AppHandle, path: PathBuf) -> Result<PathBuf, String> {
+    register_workspace_internal(app, path, true)
+}
+
+fn register_markdown_assets_dir(app: &tauri::AppHandle, path: PathBuf) -> Result<PathBuf, String> {
+    let canonical = canonical_dir(&path)?;
+    app.asset_protocol_scope()
+        .allow_directory(&canonical, true)
+        .map_err(|err| err.to_string())?;
+    let state = app.state::<FsAccessState>();
+    state
+        .markdown_asset_dirs
+        .lock()
+        .map_err(|_| "Markdown asset access state is poisoned".to_string())?
+        .insert(canonical.clone());
+    Ok(canonical)
+}
+
+fn register_selected_file_internal(
+    app: &tauri::AppHandle,
+    path: PathBuf,
+    persist: bool,
+) -> Result<PathBuf, String> {
     ensure_allowed_text_or_image_file_path(&path)?;
     let normalized = normalized_target_path(&path)?;
     app.fs_scope()
+        .allow_file(&normalized)
+        .map_err(|err| err.to_string())?;
+    app.asset_protocol_scope()
         .allow_file(&normalized)
         .map_err(|err| err.to_string())?;
     let state = app.state::<FsAccessState>();
@@ -270,7 +513,277 @@ fn register_selected_file(app: &tauri::AppHandle, path: PathBuf) -> Result<PathB
         .lock()
         .map_err(|_| "selected file access state is poisoned".to_string())?
         .insert(normalized.clone());
+    if is_markdown_file_path(&normalized) {
+        let assets_dir = normalized
+            .parent()
+            .ok_or_else(|| "path parent is missing".to_string())?
+            .join("assets");
+        if assets_dir.is_dir() {
+            register_markdown_assets_dir(app, assets_dir)?;
+        }
+    }
+    if persist {
+        persist_file_access(app)?;
+    }
     Ok(normalized)
+}
+
+fn register_selected_file(app: &tauri::AppHandle, path: PathBuf) -> Result<PathBuf, String> {
+    register_selected_file_internal(app, path, true)
+}
+
+fn restore_persisted_file_access(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<FsAccessState>();
+    let _migration_guard = state
+        .legacy_migration
+        .lock()
+        .map_err(|_| "legacy migration lock is poisoned".to_string())?;
+    let grants = read_persisted_file_access(&file_access_grants_path(app)?)?;
+    let PersistedFileAccess {
+        workspaces,
+        selected_files,
+        legacy_migration_completed,
+        pending_legacy_workspaces,
+        pending_legacy_files,
+    } = grants;
+    *state
+        .legacy_migration_completed
+        .lock()
+        .map_err(|_| "legacy migration state is poisoned".to_string())? =
+        legacy_migration_completed;
+    state
+        .pending_legacy_workspaces
+        .lock()
+        .map_err(|_| "pending legacy workspace state is poisoned".to_string())?
+        .extend(pending_legacy_workspaces);
+    state
+        .pending_legacy_files
+        .lock()
+        .map_err(|_| "pending legacy file state is poisoned".to_string())?
+        .extend(pending_legacy_files);
+    for workspace in workspaces {
+        if workspace.exists() {
+            let _ = register_workspace_internal(app, workspace, false);
+        } else if ensure_safe_path(&workspace).is_ok() {
+            state
+                .pending_legacy_workspaces
+                .lock()
+                .map_err(|_| "pending legacy workspace state is poisoned".to_string())?
+                .insert(workspace);
+        }
+    }
+    for file in selected_files {
+        if file.is_file() {
+            let _ = register_selected_file_internal(app, file, false);
+        } else if !file.exists()
+            && ensure_safe_path(&file).is_ok()
+            && ensure_allowed_text_or_image_file_path(&file).is_ok()
+        {
+            state
+                .pending_legacy_files
+                .lock()
+                .map_err(|_| "pending legacy file state is poisoned".to_string())?
+                .insert(file);
+        }
+    }
+    persist_file_access(app)
+}
+
+fn retry_pending_legacy_file_access(
+    app: &tauri::AppHandle,
+) -> Result<(usize, usize, usize), String> {
+    let state = app.state::<FsAccessState>();
+    let pending_workspaces = state
+        .pending_legacy_workspaces
+        .lock()
+        .map_err(|_| "pending legacy workspace state is poisoned".to_string())?
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let pending_files = state
+        .pending_legacy_files
+        .lock()
+        .map_err(|_| "pending legacy file state is poisoned".to_string())?
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut workspace_count = 0;
+    let mut file_count = 0;
+    let mut ignored_count = 0;
+
+    for path in pending_workspaces {
+        if ensure_safe_path(&path).is_err() {
+            ignored_count += 1;
+            state
+                .pending_legacy_workspaces
+                .lock()
+                .map_err(|_| "pending legacy workspace state is poisoned".to_string())?
+                .remove(&path);
+            continue;
+        }
+        if !path.exists() {
+            continue;
+        }
+        let remove_from_pending = match canonical_dir(&path) {
+            Ok(path) => {
+                register_workspace_internal(app, path, false)?;
+                workspace_count += 1;
+                true
+            }
+            Err(_) => {
+                ignored_count += 1;
+                true
+            }
+        };
+        if remove_from_pending {
+            state
+                .pending_legacy_workspaces
+                .lock()
+                .map_err(|_| "pending legacy workspace state is poisoned".to_string())?
+                .remove(&path);
+        }
+    }
+    for path in pending_files {
+        if ensure_safe_path(&path).is_err()
+            || ensure_allowed_text_or_image_file_path(&path).is_err()
+        {
+            ignored_count += 1;
+            state
+                .pending_legacy_files
+                .lock()
+                .map_err(|_| "pending legacy file state is poisoned".to_string())?
+                .remove(&path);
+            continue;
+        }
+        if !path.exists() {
+            continue;
+        }
+        let remove_from_pending = match canonical_existing_file(&path) {
+            Ok(path) => {
+                register_selected_file_internal(app, path, false)?;
+                file_count += 1;
+                true
+            }
+            Err(_) => {
+                ignored_count += 1;
+                true
+            }
+        };
+        if remove_from_pending {
+            state
+                .pending_legacy_files
+                .lock()
+                .map_err(|_| "pending legacy file state is poisoned".to_string())?
+                .remove(&path);
+        }
+    }
+    Ok((workspace_count, file_count, ignored_count))
+}
+
+fn pending_legacy_path_count(state: &FsAccessState) -> Result<usize, String> {
+    let workspace_count = state
+        .pending_legacy_workspaces
+        .lock()
+        .map_err(|_| "pending legacy workspace state is poisoned".to_string())?
+        .len();
+    let file_count = state
+        .pending_legacy_files
+        .lock()
+        .map_err(|_| "pending legacy file state is poisoned".to_string())?
+        .len();
+    Ok(workspace_count + file_count)
+}
+
+fn migrate_legacy_file_access_blocking(
+    app: tauri::AppHandle,
+    workspace_paths: Vec<String>,
+    file_paths: Vec<String>,
+) -> Result<LegacyFileAccessMigrationResult, String> {
+    let state = app.state::<FsAccessState>();
+    let _migration_guard = state
+        .legacy_migration
+        .lock()
+        .map_err(|_| "legacy migration lock is poisoned".to_string())?;
+    let already_migrated = *state
+        .legacy_migration_completed
+        .lock()
+        .map_err(|_| "legacy migration state is poisoned".to_string())?;
+
+    let mut ignored_count = if already_migrated {
+        0
+    } else {
+        workspace_paths.len().saturating_sub(MAX_LEGACY_WORKSPACES)
+            + file_paths.len().saturating_sub(MAX_LEGACY_FILES)
+    };
+    if !already_migrated {
+        for path in workspace_paths.into_iter().take(MAX_LEGACY_WORKSPACES) {
+            let path = PathBuf::from(path);
+            if ensure_safe_path(&path).is_ok() {
+                state
+                    .pending_legacy_workspaces
+                    .lock()
+                    .map_err(|_| "pending legacy workspace state is poisoned".to_string())?
+                    .insert(path);
+            } else {
+                ignored_count += 1;
+            }
+        }
+        for path in file_paths.into_iter().take(MAX_LEGACY_FILES) {
+            let path = PathBuf::from(path);
+            if ensure_safe_path(&path).is_ok()
+                && ensure_allowed_text_or_image_file_path(&path).is_ok()
+            {
+                state
+                    .pending_legacy_files
+                    .lock()
+                    .map_err(|_| "pending legacy file state is poisoned".to_string())?
+                    .insert(path);
+            } else {
+                ignored_count += 1;
+            }
+        }
+        *state
+            .legacy_migration_completed
+            .lock()
+            .map_err(|_| "legacy migration state is poisoned".to_string())? = true;
+    }
+    let (workspace_count, file_count, retry_ignored_count) =
+        retry_pending_legacy_file_access(&app)?;
+    ignored_count += retry_ignored_count;
+    if let Err(err) = persist_file_access(&app) {
+        if !already_migrated {
+            *state
+                .legacy_migration_completed
+                .lock()
+                .map_err(|_| "legacy migration state is poisoned".to_string())? = false;
+        }
+        return Err(err);
+    }
+
+    Ok(LegacyFileAccessMigrationResult {
+        status: if already_migrated {
+            "already_migrated"
+        } else {
+            "migrated"
+        },
+        workspace_count,
+        file_count,
+        ignored_count,
+        pending_count: pending_legacy_path_count(state.inner())?,
+    })
+}
+
+#[tauri::command]
+async fn migrate_legacy_file_access(
+    app: tauri::AppHandle,
+    workspace_paths: Vec<String>,
+    file_paths: Vec<String>,
+) -> Result<LegacyFileAccessMigrationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        migrate_legacy_file_access_blocking(app, workspace_paths, file_paths)
+    })
+    .await
+    .map_err(|err| format!("file access migration task failed: {err}"))?
 }
 
 fn secret_file_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -395,23 +908,29 @@ fn delete_secret(app: tauri::AppHandle, key: String) -> Result<(), String> {
 
 #[tauri::command]
 fn authorize_workspace_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
-    register_workspace(&app, PathBuf::from(path)).map(|_| ())
+    let path = canonical_dir(&PathBuf::from(path))?;
+    if !app.fs_scope().is_allowed(&path) {
+        return Err("workspace was not selected by the user".into());
+    }
+    register_workspace(&app, path).map(|_| ())
 }
 
 #[tauri::command]
 fn authorize_selected_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let path = PathBuf::from(path);
-    if path.exists() && path.is_dir() {
-        register_workspace(&app, path).map(|_| ())
-    } else {
-        register_selected_file(&app, path).map(|_| ())
+    ensure_allowed_text_or_image_file_path(&path)?;
+    let normalized = normalized_target_path(&path)?;
+    if !app.fs_scope().is_allowed(&normalized) {
+        return Err("file was not selected by the user".into());
     }
+    register_selected_file(&app, normalized).map(|_| ())
 }
 
 #[tauri::command]
 fn read_text_file_by_path(app: tauri::AppHandle, path: String) -> Result<String, String> {
     let state = app.state::<FsAccessState>();
-    let path = ensure_allowed_read_file(&state, &PathBuf::from(path))?;
+    let path =
+        ensure_allowed_existing_text_file(&state, &PathBuf::from(path), FileAction::ReadText)?;
     fs::read_to_string(path).map_err(|err| err.to_string())
 }
 
@@ -422,14 +941,16 @@ fn write_text_file_by_path(
     content: String,
 ) -> Result<(), String> {
     let state = app.state::<FsAccessState>();
-    let path = ensure_allowed_write_file(&state, &PathBuf::from(path))?;
+    let path =
+        ensure_allowed_target_text_file(&state, &PathBuf::from(path), FileAction::WriteText)?;
     fs::write(path, content).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
 fn read_binary_file_by_path(app: tauri::AppHandle, path: String) -> Result<Vec<u8>, String> {
     let state = app.state::<FsAccessState>();
-    let path = ensure_allowed_read_image_file(&state, &PathBuf::from(path))?;
+    let path =
+        ensure_allowed_existing_image_file(&state, &PathBuf::from(path), FileAction::ReadBinary)?;
     fs::read(path).map_err(|err| err.to_string())
 }
 
@@ -440,14 +961,16 @@ fn write_binary_file_by_path(
     content: Vec<u8>,
 ) -> Result<(), String> {
     let state = app.state::<FsAccessState>();
-    let path = ensure_allowed_write_image_file(&state, &PathBuf::from(path))?;
+    let path =
+        ensure_allowed_target_image_file(&state, &PathBuf::from(path), FileAction::WriteBinary)?;
     fs::write(path, content).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
 fn create_text_file_by_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let state = app.state::<FsAccessState>();
-    let path = ensure_allowed_write_file(&state, &PathBuf::from(path))?;
+    let path =
+        ensure_allowed_target_text_file(&state, &PathBuf::from(path), FileAction::CreateFile)?;
     OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -457,18 +980,223 @@ fn create_text_file_by_path(app: tauri::AppHandle, path: String) -> Result<(), S
 }
 
 #[tauri::command]
+fn path_exists(app: tauri::AppHandle, path: String) -> Result<bool, String> {
+    let state = app.state::<FsAccessState>();
+    let path = ensure_allowed_target_path(&state, &PathBuf::from(path), FileAction::Exists)?;
+    Ok(path.exists())
+}
+
+#[tauri::command]
+fn remove_file_by_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let state = app.state::<FsAccessState>();
+    let path =
+        ensure_allowed_existing_supported_file(&state, &PathBuf::from(path), FileAction::Remove)?;
+    fs::remove_file(&path).map_err(|err| err.to_string())?;
+    let removed_selected_grant = state
+        .selected_files
+        .lock()
+        .map_err(|_| "selected file access state is poisoned".to_string())?
+        .remove(&path);
+    if removed_selected_grant {
+        persist_file_access(&app)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn create_dir_by_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let state = app.state::<FsAccessState>();
     let path = PathBuf::from(path);
     let parent = path
         .parent()
         .ok_or_else(|| "path parent is missing".to_string())?;
-    let parent = ensure_allowed_dir(&state, parent)?;
     let dir_name = path
         .file_name()
         .ok_or_else(|| "directory name is missing".to_string())?;
-    let path = parent.join(dir_name);
-    fs::create_dir(path).map_err(|err| err.to_string())
+    let path = ensure_allowed_dir(&state, parent, FileAction::CreateDir)?.join(dir_name);
+    fs::create_dir(&path).map_err(|err| err.to_string())?;
+    register_workspace(&app, path).map(|_| ())
+}
+
+#[tauri::command]
+fn prepare_markdown_assets_dir(app: tauri::AppHandle, markdown_path: String) -> Result<(), String> {
+    let state = app.state::<FsAccessState>();
+    let markdown_path = ensure_allowed_existing_text_file(
+        &state,
+        &PathBuf::from(markdown_path),
+        FileAction::ReadText,
+    )?;
+    if !is_markdown_file_path(&markdown_path) {
+        return Err("path is not a Markdown file".into());
+    }
+    let assets_dir = markdown_path
+        .parent()
+        .ok_or_else(|| "path parent is missing".to_string())?
+        .join("assets");
+    if !assets_dir.exists() {
+        fs::create_dir(&assets_dir).map_err(|err| err.to_string())?;
+    }
+    register_markdown_assets_dir(&app, assets_dir).map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        is_authorized_for_action, snapshot_persisted_file_access, FileAction, FsAccessState,
+        PersistedFileAccess,
+    };
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn rejects_every_file_action_for_unauthorized_paths() {
+        let state = FsAccessState::default();
+        let path = Path::new("outside/secret.md");
+        let actions = [
+            FileAction::ReadText,
+            FileAction::WriteText,
+            FileAction::ReadBinary,
+            FileAction::WriteBinary,
+            FileAction::CreateFile,
+            FileAction::CreateDir,
+            FileAction::ReadDir,
+            FileAction::Exists,
+            FileAction::Remove,
+            FileAction::Reveal,
+            FileAction::RenameSource,
+            FileAction::RenameTarget,
+        ];
+
+        for action in actions {
+            assert!(!is_authorized_for_action(&state, path, action).unwrap());
+        }
+    }
+
+    #[test]
+    fn workspace_authorizes_all_file_actions_for_descendants() {
+        let state = FsAccessState::default();
+        state
+            .workspaces
+            .lock()
+            .unwrap()
+            .insert(PathBuf::from("workspace"));
+        let path = Path::new("workspace/notes/draft.md");
+        let actions = [
+            FileAction::ReadText,
+            FileAction::WriteText,
+            FileAction::ReadBinary,
+            FileAction::WriteBinary,
+            FileAction::CreateFile,
+            FileAction::CreateDir,
+            FileAction::ReadDir,
+            FileAction::Exists,
+            FileAction::Remove,
+            FileAction::Reveal,
+            FileAction::RenameSource,
+            FileAction::RenameTarget,
+        ];
+
+        for action in actions {
+            assert!(is_authorized_for_action(&state, path, action).unwrap());
+        }
+    }
+
+    #[test]
+    fn selected_file_authorizes_only_exact_file_actions() {
+        let state = FsAccessState::default();
+        state
+            .selected_files
+            .lock()
+            .unwrap()
+            .insert(PathBuf::from("selected/draft.md"));
+
+        assert!(is_authorized_for_action(
+            &state,
+            Path::new("selected/draft.md"),
+            FileAction::ReadText,
+        )
+        .unwrap());
+        assert!(!is_authorized_for_action(
+            &state,
+            Path::new("selected/sibling.md"),
+            FileAction::ReadText,
+        )
+        .unwrap());
+        assert!(!is_authorized_for_action(
+            &state,
+            Path::new("selected/draft.md"),
+            FileAction::ReadDir,
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn markdown_assets_allow_only_asset_actions() {
+        let state = FsAccessState::default();
+        state
+            .markdown_asset_dirs
+            .lock()
+            .unwrap()
+            .insert(PathBuf::from("notes/assets"));
+        let image = Path::new("notes/assets/figure.png");
+
+        assert!(is_authorized_for_action(&state, image, FileAction::ReadBinary).unwrap());
+        assert!(is_authorized_for_action(&state, image, FileAction::WriteBinary).unwrap());
+        assert!(!is_authorized_for_action(&state, image, FileAction::ReadText).unwrap());
+        assert!(!is_authorized_for_action(&state, image, FileAction::ReadDir).unwrap());
+        assert!(!is_authorized_for_action(
+            &state,
+            Path::new("notes/assets/secret.txt"),
+            FileAction::Remove,
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn persisted_access_snapshot_round_trips_workspaces_and_selected_files() {
+        let state = FsAccessState::default();
+        state
+            .workspaces
+            .lock()
+            .unwrap()
+            .insert(PathBuf::from("workspace"));
+        state
+            .selected_files
+            .lock()
+            .unwrap()
+            .insert(PathBuf::from("selected/draft.md"));
+        *state.legacy_migration_completed.lock().unwrap() = true;
+        state
+            .pending_legacy_files
+            .lock()
+            .unwrap()
+            .insert(PathBuf::from(r"D:\offline\draft.md"));
+
+        let snapshot = snapshot_persisted_file_access(&state).unwrap();
+        let encoded = serde_json::to_string(&snapshot).unwrap();
+        let decoded: PersistedFileAccess = serde_json::from_str(&encoded).unwrap();
+
+        assert_eq!(decoded, snapshot);
+        assert_eq!(decoded.workspaces, vec![PathBuf::from("workspace")]);
+        assert_eq!(
+            decoded.selected_files,
+            vec![PathBuf::from("selected/draft.md")]
+        );
+        assert!(decoded.legacy_migration_completed);
+        assert_eq!(
+            decoded.pending_legacy_files,
+            vec![PathBuf::from(r"D:\offline\draft.md")]
+        );
+    }
+
+    #[test]
+    fn persisted_access_without_migration_marker_defaults_to_false() {
+        let decoded: PersistedFileAccess =
+            serde_json::from_str(r#"{"workspaces":[],"selected_files":[]}"#).unwrap();
+
+        assert!(!decoded.legacy_migration_completed);
+        assert!(decoded.pending_legacy_workspaces.is_empty());
+        assert!(decoded.pending_legacy_files.is_empty());
+    }
 }
 
 #[tauri::command]
@@ -478,28 +1206,39 @@ fn rename_text_file_by_path(
     new_path: String,
 ) -> Result<(), String> {
     let state = app.state::<FsAccessState>();
-    let old_path = ensure_allowed_read_file(&state, &PathBuf::from(old_path))?;
-    let new_path = ensure_allowed_write_file(&state, &PathBuf::from(new_path))?;
+    let old_path = ensure_allowed_existing_text_file(
+        &state,
+        &PathBuf::from(old_path),
+        FileAction::RenameSource,
+    )?;
+    let new_path = ensure_allowed_target_text_file(
+        &state,
+        &PathBuf::from(new_path),
+        FileAction::RenameTarget,
+    )?;
     if new_path.exists() {
         return Err("file already exists".into());
     }
-    fs::rename(old_path, new_path).map_err(|err| err.to_string())
+    fs::rename(&old_path, &new_path).map_err(|err| err.to_string())?;
+    let mut selected_files = state
+        .selected_files
+        .lock()
+        .map_err(|_| "selected file access state is poisoned".to_string())?;
+    let moved_selected_grant = selected_files.remove(&old_path);
+    if moved_selected_grant {
+        selected_files.insert(new_path);
+    }
+    drop(selected_files);
+    if moved_selected_grant {
+        persist_file_access(&app)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
 fn read_dir_by_path(app: tauri::AppHandle, path: String) -> Result<Vec<DirectoryEntry>, String> {
     let state = app.state::<FsAccessState>();
-    let path = PathBuf::from(path);
-    let canonical = if state
-        .workspaces
-        .lock()
-        .map_err(|_| "workspace access state is poisoned".to_string())?
-        .is_empty()
-    {
-        register_workspace(&app, path)?
-    } else {
-        ensure_allowed_dir(&state, &path)?
-    };
+    let canonical = ensure_allowed_dir(&state, &PathBuf::from(path), FileAction::ReadDir)?;
     let entries = fs::read_dir(canonical).map_err(|err| err.to_string())?;
     entries
         .map(|entry| {
@@ -515,9 +1254,48 @@ fn read_dir_by_path(app: tauri::AppHandle, path: String) -> Result<Vec<Directory
 }
 
 #[tauri::command]
-fn take_pending_open_files(state: State<'_, PendingOpenFiles>) -> Vec<String> {
+fn reveal_file_in_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let state = app.state::<FsAccessState>();
+    let path =
+        ensure_allowed_existing_supported_file(&state, &PathBuf::from(path), FileAction::Reveal)?;
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer.exe")
+            .arg("/select,")
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = path;
+        Err("当前平台暂不支持打开文件位置".into())
+    }
+}
+
+#[tauri::command]
+fn take_pending_open_files(
+    app: tauri::AppHandle,
+    state: State<'_, PendingOpenFiles>,
+) -> Vec<String> {
     let mut pending = state.0.lock().expect("pending open files lock poisoned");
     std::mem::take(&mut *pending)
+        .into_iter()
+        .filter_map(|path| {
+            register_selected_file(&app, PathBuf::from(&path))
+                .ok()
+                .map(|_| path)
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn has_pending_open_files(state: State<'_, PendingOpenFiles>) -> bool {
+    let pending = state.0.lock().expect("pending open files lock poisoned");
+    !pending.is_empty()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -529,7 +1307,15 @@ pub fn run() {
 
     let mut builder = tauri::Builder::default()
         .manage(FsAccessState::default())
-        .manage(pending_open_files);
+        .manage(ApiOriginState::default())
+        .manage(pending_open_files)
+        .on_webview_event(|webview, event| {
+            if let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                for path in paths {
+                    let _ = register_selected_file(webview.app_handle(), path.clone());
+                }
+            }
+        });
 
     #[cfg(desktop)]
     {
@@ -544,6 +1330,7 @@ pub fn run() {
             }
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
+                let _ = window.unminimize();
                 let _ = window.set_focus();
             }
         }));
@@ -554,21 +1341,41 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .setup(|app| {
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                if let Err(err) = restore_persisted_file_access(&app_handle) {
+                    eprintln!("failed to restore persisted file access: {err}");
+                }
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             save_secret,
             load_secret,
             delete_secret,
             authorize_workspace_path,
             authorize_selected_path,
+            migrate_legacy_file_access,
+            prepare_markdown_assets_dir,
             read_text_file_by_path,
             write_text_file_by_path,
             read_binary_file_by_path,
             write_binary_file_by_path,
             create_text_file_by_path,
+            path_exists,
+            remove_file_by_path,
             create_dir_by_path,
             rename_text_file_by_path,
             read_dir_by_path,
+            reveal_file_in_folder,
             take_pending_open_files,
+            has_pending_open_files,
+            api_http::authorize_api_origin,
+            api_http::list_authorized_api_origins,
+            api_http::revoke_api_origin,
+            api_http::external_http_request,
+            api_http::external_http_stream,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

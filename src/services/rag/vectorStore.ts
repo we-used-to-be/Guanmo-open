@@ -2,7 +2,7 @@ import type { Chunk, Document, SearchResult } from './types'
 import {
   persistDocument,
   removePersistedDocument,
-  loadAllDocuments,
+  loadAllDocumentsBulk,
   persistEmbedding,
 } from '@/services/database/persistence'
 import { normalizeFilePath } from '@/services/pathIdentity'
@@ -14,6 +14,11 @@ interface SearchRankingOptions {
   currentFilePath?: string
   preferCurrentFile?: boolean
   preferRecentDocuments?: boolean
+}
+
+interface PreparedKeywordQuery {
+  normalizedQuery: string
+  terms: string[]
 }
 
 /**
@@ -49,7 +54,7 @@ class VectorStore {
   async loadFromDatabase(): Promise<void> {
     try {
       const inMemoryDocs = this.getAllDocuments()
-      const docs = await loadAllDocuments()
+      const docs = await loadAllDocumentsBulk()
       this.documents.clear()
       this.chunks.clear()
       for (const doc of docs) {
@@ -70,6 +75,25 @@ class VectorStore {
   }
 
   addDocument(doc: Document): void {
+    this.storeDocument(doc)
+    // Persist in background (non-blocking)
+    if (this._persistenceEnabled) {
+      this.trackPersistence(
+        persistDocument(doc).catch((err) =>
+          console.warn('[VectorStore] persist failed:', err)
+        )
+      )
+    }
+  }
+
+  async replaceDocument(doc: Document, enqueueEmbeddingJob: boolean): Promise<void> {
+    if (this._persistenceEnabled) {
+      await persistDocument(doc, { enqueueEmbeddingJob })
+    }
+    this.storeDocument(doc)
+  }
+
+  private storeDocument(doc: Document): void {
     const existing = this.findByFilePath(doc.filePath)
     if (existing && existing.id !== doc.id) {
       for (const chunk of existing.chunks) {
@@ -81,14 +105,6 @@ class VectorStore {
     for (const chunk of doc.chunks) {
       chunk.contentHash = chunk.contentHash || createContentHash(chunk.content)
       this.chunks.set(chunk.id, chunk)
-    }
-    // Persist in background (non-blocking)
-    if (this._persistenceEnabled) {
-      this.trackPersistence(
-        persistDocument(doc).catch((err) =>
-          console.warn('[VectorStore] persist failed:', err)
-        )
-      )
     }
   }
 
@@ -128,9 +144,12 @@ class VectorStore {
     return undefined
   }
 
-  private isInScope(docFilePath: string, filePaths: string[]): boolean {
-    const normalizedDoc = normalizeFilePath(docFilePath)
-    return filePaths.some((p) => normalizeFilePath(p) === normalizedDoc)
+  private createFileScope(filePaths?: string[]): Set<string> | undefined {
+    return filePaths?.length ? new Set(filePaths.map(normalizeFilePath)) : undefined
+  }
+
+  private isInScope(docFilePath: string, scope?: Set<string>): boolean {
+    return !scope || scope.has(normalizeFilePath(docFilePath))
   }
 
   getAllDocuments(): Document[] {
@@ -206,6 +225,7 @@ class VectorStore {
     filePaths?: string[]
   ): SearchResult[] {
     const results: SearchResult[] = []
+    const fileScope = this.createFileScope(filePaths)
 
     for (const chunk of this.chunks.values()) {
       if (!chunk.embedding) continue
@@ -213,7 +233,7 @@ class VectorStore {
       const doc = this.documents.get(chunk.documentId)
       if (!doc) continue
       // Scope 过滤：只搜索指定文件路径
-      if (filePaths && filePaths.length > 0 && !this.isInScope(doc.filePath, filePaths)) continue
+      if (!this.isInScope(doc.filePath, fileScope)) continue
 
       const score = this.cosineSimilarity(queryEmbedding, chunk.embedding)
       if (score >= threshold) {
@@ -241,8 +261,12 @@ class VectorStore {
     return Array.from(terms)
   }
 
-  private getKeywordScore(query: string, chunk: Chunk, doc: Document): number {
-    const terms = this.tokenize(query)
+  private prepareKeywordQuery(query: string): PreparedKeywordQuery {
+    return { terms: this.tokenize(query), normalizedQuery: query.trim().toLowerCase() }
+  }
+
+  private getKeywordScore(query: PreparedKeywordQuery, chunk: Chunk, doc: Document): number {
+    const { terms, normalizedQuery } = query
     if (terms.length === 0) return 0
 
     const content = chunk.content.toLowerCase()
@@ -260,7 +284,6 @@ class VectorStore {
       if (docTitle.includes(term)) score += 1.2
     }
 
-    const normalizedQuery = query.trim().toLowerCase()
     if (normalizedQuery.length >= 3) {
       if (content.includes(normalizedQuery)) score += 1.2
       if (titlePath.includes(normalizedQuery) || fileName.includes(normalizedQuery)) score += 1.6
@@ -299,17 +322,19 @@ class VectorStore {
     filePaths?: string[],
     options?: SearchRankingOptions
   ): SearchResult[] {
-    if (this.tokenize(query).length === 0) return []
+    const preparedQuery = this.prepareKeywordQuery(query)
+    if (preparedQuery.terms.length === 0) return []
 
     const results: SearchResult[] = []
+    const fileScope = this.createFileScope(filePaths)
 
     for (const chunk of this.chunks.values()) {
       const doc = this.documents.get(chunk.documentId)
       if (!doc) continue
       // Scope 过滤
-      if (filePaths && filePaths.length > 0 && !this.isInScope(doc.filePath, filePaths)) continue
+      if (!this.isInScope(doc.filePath, fileScope)) continue
 
-      const keywordScore = this.getKeywordScore(query, chunk, doc)
+      const keywordScore = this.getKeywordScore(preparedQuery, chunk, doc)
       if (keywordScore > 0) {
         results.push(this.applyRankingBoosts({
           chunk,
@@ -375,9 +400,9 @@ class VectorStore {
     if (chunk) {
       chunk.embedding = embedding
     }
-    if (this._persistenceEnabled) {
+    if (chunk && this._persistenceEnabled) {
       this.trackPersistence(
-        persistEmbedding(chunkId, embedding).catch((err) =>
+        persistEmbedding(chunk).catch((err) =>
           console.warn('[VectorStore] persist embedding failed:', err)
         )
       )

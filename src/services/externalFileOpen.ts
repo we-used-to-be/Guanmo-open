@@ -1,7 +1,7 @@
 import { readFile } from '@/hooks/useTauri'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { isSameFilePath } from '@/services/pathIdentity'
-import { indexMarkdownDocument } from '@/services/rag/indexer'
+import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { useEditorStore } from '@/stores/editorStore'
 
 export type ExternalFileOpenSource = 'startup' | 'file-association' | 'drag-drop'
@@ -24,6 +24,10 @@ function getFileName(path: string): string {
   return path.split(/[/\\]/).pop() || 'untitled.md'
 }
 
+function logDuration(label: string, startedAt: number) {
+  console.info(`[Perf] ${label}: ${Math.round(performance.now() - startedAt)}ms`)
+}
+
 export async function openExternalFilePaths(
   paths: string[],
   _source: ExternalFileOpenSource
@@ -41,19 +45,22 @@ export async function openExternalFilePaths(
     }
 
     try {
+      const startedAt = performance.now()
       const editorState = useEditorStore.getState()
       const existing = editorState.tabs.find((tab) => isSameFilePath(tab.filePath, path))
       if (existing) {
         editorState.setActiveTab(existing.id)
         result.opened.push(path)
+        logDuration(`activate existing file ${getFileName(path)}`, startedAt)
         continue
       }
 
       const content = await readFile(path)
       const name = getFileName(path)
       useEditorStore.getState().addTab(path, name, content)
-      indexMarkdownDocument(path, name, content)
+      scheduleMarkdownDocumentIndex(path, name, content)
       result.opened.push(path)
+      logDuration(`read and open file ${name}`, startedAt)
     } catch (err) {
       result.failed.push({
         path,

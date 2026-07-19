@@ -1,21 +1,23 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
-import { joinPath } from '@/hooks/useTauri'
+import { isTauri } from '@/hooks/useTauri'
 import { openFile } from '@/services/fileSystem'
-import { pickDirectory, listDirectory } from '@/services/fileSystem'
-import { isWorkspaceDisplayFile, shouldSkipWorkspaceDirectory, getFileIcon, type FileNode } from '@/services/fileTree'
-import { indexMarkdownDocument, indexWorkspaceMarkdown } from '@/services/rag/indexer'
+import { pickDirectory } from '@/services/fileSystem'
+import { isWorkspaceDisplayFile } from '@/services/fileTree'
+import { indexMarkdownDocument, indexWorkspaceMarkdown, scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { toast } from '@/services/toast'
 import { Button, Collapse, Divider } from 'animal-island-ui'
-import { FileTree, RecentFiles, FileIconSVG } from '@/components/file-tree/FileTree'
+import { FileTree, RecentFiles } from '@/components/file-tree/FileTree'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
-import { addFileContextTag } from '@/services/aiContext'
-import { useChatStore } from '@/stores/chatStore'
+import { addFileContextTag, summarizeFileWithAi } from '@/services/aiContext'
 import { renameFileEntry, saveExistingFileAs, validateFileName } from '@/services/fileEntryActions'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
+import { readRememberedFile } from '@/services/persistedFileAccess'
 import { cleanupMissingWorkspaceDocuments, rebuildWorkspaceDocuments } from '@/services/workspaceIndex'
+import { TruncatedText } from '@/components/common/Tooltip'
+import { useWorkspaceFileTree } from '@/hooks/useWorkspaceFileTree'
 
 interface SidebarProps {
   collapsed: boolean
@@ -25,75 +27,24 @@ interface SidebarProps {
 }
 
 export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: SidebarProps) {
-  const { toggleSidebar, workspacePath, setWorkspacePath } = useAppStore()
-  const { recentFiles, favorites, tabs } = useEditorStore()
+  const toggleSidebar = useAppStore((s) => s.toggleSidebar)
+  const setWorkspacePath = useAppStore((s) => s.setWorkspacePath)
+  const recentFiles = useEditorStore((s) => s.recentFiles)
+  const favorites = useEditorStore((s) => s.favorites)
+  const tabs = useEditorStore((s) => s.tabs)
   const activeTabId = useEditorStore((s) => s.activeTabId)
-  const [workspaceFiles, setWorkspaceFiles] = useState<FileNode[]>([])
-  const [workspaceHiddenCount, setWorkspaceHiddenCount] = useState(0)
+  const {
+    workspacePath,
+    workspaceFiles,
+    workspaceHiddenCount,
+    loadWorkspace,
+    refreshWorkspace,
+    closeWorkspace,
+  } = useWorkspaceFileTree()
   const [indexingWorkspace, setIndexingWorkspace] = useState(false)
   const [workspaceCleanupSummary, setWorkspaceCleanupSummary] = useState<string | null>(null)
   const [indexMenuOpen, setIndexMenuOpen] = useState(false)
   const indexMenuRef = useRef<HTMLDivElement>(null)
-
-  // 递归读取目录并构建文件树
-  const readDirRecursive = useCallback(async (dirPath: string, depth: number): Promise<{ nodes: FileNode[]; hidden: number }> => {
-    if (depth > 5) return { nodes: [], hidden: 0 }
-    const entries = await listDirectory(dirPath)
-    const nodes: FileNode[] = []
-    let hidden = 0
-    for (const entry of entries) {
-      const fullPath = await joinPath(dirPath, entry.name)
-      if (entry.isDirectory) {
-        if (shouldSkipWorkspaceDirectory(entry.name)) {
-          hidden++
-          continue
-        }
-        const { nodes: children, hidden: childHidden } = await readDirRecursive(fullPath, depth + 1)
-        nodes.push({ name: entry.name, path: fullPath, type: 'directory', children })
-        hidden += childHidden
-      } else if (isWorkspaceDisplayFile(entry.name)) {
-        const ext = entry.name.includes('.') ? entry.name.split('.').pop()?.toLowerCase() : undefined
-        nodes.push({ name: entry.name, path: fullPath, type: 'file', extension: ext })
-      } else {
-        hidden++
-      }
-    }
-    nodes.sort((a, b) => {
-      if (a.type === 'directory' && b.type !== 'directory') return -1
-      if (a.type !== 'directory' && b.type === 'directory') return 1
-      return a.name.localeCompare(b.name)
-    })
-    return { nodes, hidden }
-  }, [])
-
-  const loadWorkspace = useCallback(async (dirPath: string) => {
-    try {
-      const { nodes, hidden } = await readDirRecursive(dirPath, 0)
-      setWorkspaceHiddenCount(hidden)
-      setWorkspaceFiles(nodes)
-    } catch (err) {
-      console.error('Load workspace failed:', err)
-      toast.error('加载工作区失败')
-      setWorkspacePath(null)
-      setWorkspaceFiles([])
-    }
-  }, [setWorkspacePath, readDirRecursive])
-
-  // 启动时自动恢复工作区
-  useEffect(() => {
-    if (workspacePath) {
-      loadWorkspace(workspacePath)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!workspacePath) return
-    const handler = () => {
-      void loadWorkspace(workspacePath)
-    }
-    window.addEventListener('guanmo:workspace-refresh', handler)
-    return () => window.removeEventListener('guanmo:workspace-refresh', handler)
-  }, [loadWorkspace, workspacePath])
 
   // 点击外部关闭索引下拉菜单
   useEffect(() => {
@@ -125,7 +76,7 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
         } else {
           state.addTab(file.path, file.name, file.content)
         }
-        indexMarkdownDocument(file.path, file.name, file.content)
+        scheduleMarkdownDocumentIndex(file.path, file.name, file.content)
       }
     } catch (err) {
       console.error('Open file failed:', err)
@@ -134,6 +85,10 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
   }, [])
 
   const handleOpenFolder = useCallback(async () => {
+    if (!isTauri()) {
+      toast.error('浏览器模式下不可用，请下载桌面版')
+      return
+    }
     try {
       const dirPath = await pickDirectory()
       if (!dirPath) return
@@ -159,8 +114,12 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
       } else {
         state.addTab(path, name, content)
       }
-      indexMarkdownDocument(path, name, content)
+      scheduleMarkdownDocumentIndex(path, name, content)
     } catch (err) {
+      if (err instanceof Error && err.message === 'Not running in Tauri') {
+        toast.error('浏览器模式下无法打开本地文件，请下载桌面版')
+        return
+      }
       console.error('Open file from tree failed:', err)
       toast.error(describeFileOperationError(err, '打开文件失败'))
       if (workspacePath) {
@@ -177,26 +136,27 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
         state.setActiveTab(existing.id)
         return
       }
-      const { readFile } = await import('@/hooks/useTauri')
-      const content = await readFile(file.path)
+      const content = await readRememberedFile(file.path)
       state.addTab(file.path, file.name, content)
-      indexMarkdownDocument(file.path, file.name, content)
+      scheduleMarkdownDocumentIndex(file.path, file.name, content)
     } catch (err) {
+      if (err instanceof Error && err.message === 'Not running in Tauri') {
+        toast.error('浏览器模式下无法打开本地文件，请下载桌面版')
+        return
+      }
       console.error('Open recent file failed:', err)
+      toast.error(describeFileOperationError(err, '打开最近文件失败'))
     }
   }, [])
 
   const handleCloseWorkspace = useCallback(() => {
-    setWorkspaceFiles([])
-    setWorkspacePath(null)
-    setWorkspaceHiddenCount(0)
+    closeWorkspace()
     setWorkspaceCleanupSummary(null)
-  }, [setWorkspacePath])
+  }, [closeWorkspace])
 
   const handleRefreshWorkspace = useCallback(async () => {
-    if (!workspacePath) return
-    await loadWorkspace(workspacePath)
-  }, [loadWorkspace, workspacePath])
+    await refreshWorkspace()
+  }, [refreshWorkspace])
 
   const handleIndexWorkspace = useCallback(async () => {
     if (!workspacePath || indexingWorkspace) return
@@ -249,7 +209,7 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
 
   if (collapsed) {
     return (
-      <div className="animal-cursor w-14 flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col items-center py-3 gap-2">
+      <div className="animal-cursor gm-instant-color w-14 flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col items-center py-3 gap-2">
         <SidebarIcon label="展开侧边栏" onClick={toggleSidebar}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
             <path d="M4 6h16M4 12h16M4 18h16" />
@@ -286,13 +246,13 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
 
   return (
     <div
-      className="animal-cursor relative flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col overflow-hidden"
+      className="animal-cursor gm-instant-color relative flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col overflow-hidden"
       style={{ width }}
     >
       {/* Header */}
       <div className="h-11 flex items-center px-4 border-b border-gm-border-subtle">
         <span className="text-body font-bold text-gm-text tracking-wide">
-          观墨
+          文件侧边栏
         </span>
         <div className="flex-1" />
         <Button
@@ -313,12 +273,26 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
         <Collapse
           question="最近文件"
           defaultExpanded
-          answer={<RecentFiles files={recentFiles} onOpen={handleOpenRecentFile} onRefreshWorkspace={workspacePath ? () => loadWorkspace(workspacePath) : undefined} />}
+          answer={
+            !isTauri() ? (
+              <div className="text-caption text-gm-text-tertiary text-center py-4">
+                <p>浏览器模式下最近文件不可用</p>
+                <p className="mt-1 text-gm-text-disabled">请下载桌面版体验完整功能</p>
+              </div>
+            ) : (
+              <RecentFiles files={recentFiles} onOpen={handleOpenRecentFile} onRefreshWorkspace={workspacePath ? () => loadWorkspace(workspacePath) : undefined} />
+            )
+          }
         />
         <Collapse
           question="收藏"
           answer={
-            favoriteFiles.length > 0 ? (
+            !isTauri() ? (
+              <div className="text-caption text-gm-text-tertiary text-center py-4">
+                <p>浏览器模式下收藏不可用</p>
+                <p className="mt-1 text-gm-text-disabled">请下载桌面版体验完整功能</p>
+              </div>
+            ) : favoriteFiles.length > 0 ? (
               <FavoriteFiles files={favoriteFiles} onRefreshWorkspace={workspacePath ? () => loadWorkspace(workspacePath) : undefined} />
             ) : (
               <div className="text-caption text-gm-text-tertiary text-center py-4">
@@ -331,7 +305,12 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
           question="工作区"
           defaultExpanded
           answer={
-            workspacePath ? (
+            !isTauri() ? (
+              <div className="text-caption text-gm-text-tertiary text-center py-4">
+                <p>浏览器模式下工作区不可用</p>
+                <p className="mt-1 text-gm-text-disabled">请下载桌面版体验完整功能</p>
+              </div>
+            ) : workspacePath ? (
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-micro text-gm-text-tertiary truncate flex-1" title={workspacePath}>
@@ -342,14 +321,14 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
                       await handleRefreshWorkspace()
                       toast.success('工作区已刷新')
                     }}
-                    className="text-micro text-gm-text-tertiary hover:text-gm-text transition-colors ml-2"
+                    className="text-micro text-gm-text-tertiary hover:text-gm-text ml-2"
                     title="重新读取工作区文件列表"
                   >
                     刷新
                   </button>
                   <button
                     onClick={handleCloseWorkspace}
-                    className="text-micro text-gm-text-tertiary hover:text-gm-text transition-colors ml-2"
+                    className="text-micro text-gm-text-tertiary hover:text-gm-text ml-2"
                   >
                     关闭
                   </button>
@@ -366,7 +345,7 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
                   </Button>
                   <button
                     onClick={() => setIndexMenuOpen((v) => !v)}
-                    className="inline-flex items-center text-gm-text-tertiary hover:text-gm-text transition-colors"
+                    className="inline-flex items-center text-gm-text-tertiary hover:text-gm-text"
                     title="更多索引操作"
                   >
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -376,13 +355,13 @@ export function Sidebar({ collapsed, width, onOpenSettings, onOpenSearch }: Side
                   {indexMenuOpen && (
                     <div className="absolute left-0 top-full z-20 mt-1 min-w-[120px] rounded-lg border border-gm-border bg-gm-surface-elevated shadow-lg py-1">
                       <button
-                        className="w-full px-3 py-1.5 text-left text-micro text-gm-text-secondary hover:bg-gm-surface-hover hover:text-gm-text transition-colors"
+                        className="w-full px-3 py-1.5 text-left text-micro text-gm-text-secondary hover:bg-gm-surface-hover hover:text-gm-text"
                         onClick={() => { setIndexMenuOpen(false); handleCleanupWorkspace() }}
                       >
                         清理失效索引
                       </button>
                       <button
-                        className="w-full px-3 py-1.5 text-left text-micro text-gm-text-secondary hover:bg-gm-surface-hover hover:text-gm-text transition-colors"
+                        className="w-full px-3 py-1.5 text-left text-micro text-gm-text-secondary hover:bg-gm-surface-hover hover:text-gm-text"
                         onClick={() => { setIndexMenuOpen(false); handleRebuildWorkspace() }}
                       >
                         重建索引
@@ -525,10 +504,9 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
       if (existing) {
         state.setActiveTab(existing.id)
       } else {
-        const { readFile } = await import('@/hooks/useTauri')
-        const content = await readFile(file.path)
+        const content = await readRememberedFile(file.path)
         state.addTab(file.path, file.name, content)
-        indexMarkdownDocument(file.path, file.name, content)
+        scheduleMarkdownDocumentIndex(file.path, file.name, content)
       }
       setMissingPaths((current) => {
         if (!current.has(file.path)) return current
@@ -537,6 +515,10 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
         return next
       })
     } catch (err) {
+      if (err instanceof Error && err.message === 'Not running in Tauri') {
+        toast.error('浏览器模式下无法打开本地文件，请下载桌面版')
+        return
+      }
       const message = err instanceof Error ? err.message : String(err)
       const lower = message.toLowerCase()
       const isMissing =
@@ -568,8 +550,7 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
               e.preventDefault()
               setContextMenu({ x: e.clientX, y: e.clientY, file })
             }}
-            title={isMissing ? `文件已丢失：${file.path}` : file.path}
-            className={`w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-caption text-left transition-all duration-150 truncate ${
+            className={`w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-caption text-left truncate ${
               isActive
                 ? 'bg-gm-primary-subtle text-gm-text font-bold'
                 : isMissing
@@ -577,9 +558,6 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
                   : 'text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover'
             }`}
           >
-            <span className={isMissing ? 'opacity-45 grayscale' : ''}>
-              <FileIconSVG icon={getFileIcon(file.name, 'file')} expanded={false} />
-            </span>
             {renamingPath === file.path ? (
               <input
                 autoFocus
@@ -600,7 +578,7 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
               />
             ) : (
               <>
-                <span className="truncate">{file.name}</span>
+                <TruncatedText text={isMissing ? `文件已丢失：${file.path}` : file.name} className="flex-1" />
                 {isMissing && <span className="ml-auto shrink-0 text-micro">已丢失</span>}
               </>
             )}
@@ -627,8 +605,7 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
             setContextMenu(null)
           }}>添加到 AI 上下文</ContextMenuItem>
           <ContextMenuItem onClick={() => {
-            addFileContextTag({ title: contextMenu.file.name, filePath: contextMenu.file.path })
-            useChatStore.getState().setDraftInput(`请总结文件「${contextMenu.file.name}」的内容`)
+            summarizeFileWithAi({ title: contextMenu.file.name, filePath: contextMenu.file.path })
             setContextMenu(null)
           }}>AI 总结该文件</ContextMenuItem>
           <ContextMenuSeparator />
@@ -640,7 +617,7 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
       {hasMore && !showAll && (
         <button
           onClick={() => setShowAll(true)}
-          className="w-full px-2 py-1 text-micro text-gm-text-tertiary hover:text-gm-text-secondary hover:bg-gm-surface-hover rounded-lg transition-colors text-center"
+          className="w-full px-2 py-1 text-micro text-gm-text-tertiary hover:text-gm-text-secondary hover:bg-gm-surface-hover rounded-lg text-center"
         >
           展开更多 ({files.length - INITIAL_SHOW})
         </button>
@@ -648,7 +625,7 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
       {hasMore && showAll && (
         <button
           onClick={() => setShowAll(false)}
-          className="w-full px-2 py-1 text-micro text-gm-text-tertiary hover:text-gm-text-secondary hover:bg-gm-surface-hover rounded-lg transition-colors text-center"
+          className="w-full px-2 py-1 text-micro text-gm-text-tertiary hover:text-gm-text-secondary hover:bg-gm-surface-hover rounded-lg text-center"
         >
           收起
         </button>
@@ -669,7 +646,7 @@ function SidebarIcon({
   return (
     <button
       onClick={onClick}
-      className="w-10 h-10 flex items-center justify-center rounded-lg text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover transition-all duration-200"
+      className="w-10 h-10 flex items-center justify-center rounded-lg text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover"
       title={label}
     >
       {children}

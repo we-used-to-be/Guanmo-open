@@ -1,7 +1,7 @@
 /**
  * Database service for 观墨.
  * Tauri: uses tauri-plugin-sql (SQLite).
- * Web: falls back to IndexedDB.
+ * Web: no database (read-only document viewing).
  */
 
 import { isTauri } from '@/hooks/useTauri'
@@ -31,6 +31,7 @@ class TauriSQLiteAdapter implements DBAdapter {
       await this.db.execute(stmt)
     }
     await this.runMigrations()
+    await this.db.execute('CREATE INDEX IF NOT EXISTS idx_chat_messages_parent_id ON chat_messages(parent_id)')
   }
 
   private async hasColumn(table: string, column: string): Promise<boolean> {
@@ -43,6 +44,25 @@ class TauriSQLiteAdapter implements DBAdapter {
       if (await this.hasColumn(migration.table, migration.column)) continue
       await this.db.execute(migration.sql)
     }
+    await this.db.execute(`
+      WITH ordered_messages AS (
+        SELECT
+          id,
+          role,
+          LAG(id) OVER (PARTITION BY session_id ORDER BY created_at ASC, rowid ASC) AS previous_id,
+          LAG(role) OVER (PARTITION BY session_id ORDER BY created_at ASC, rowid ASC) AS previous_role
+        FROM chat_messages
+      )
+      UPDATE chat_messages
+      SET parent_id = (
+        SELECT previous_id FROM ordered_messages WHERE ordered_messages.id = chat_messages.id
+      )
+      WHERE role = 'assistant'
+        AND parent_id IS NULL
+        AND id IN (
+          SELECT id FROM ordered_messages WHERE role = 'assistant' AND previous_role = 'user'
+        )
+    `)
   }
 
   async execute(sql: string, params: unknown[] = []): Promise<{ rowsAffected: number }> {
@@ -407,28 +427,87 @@ class IndexedDBAdapter implements DBAdapter {
 // --- Module state ---
 
 let db: DBAdapter | null = null
+let transactionTail: Promise<void> = Promise.resolve()
+
+// --- Runtime state ---
+
+type DatabaseStatus = 'idle' | 'initializing' | 'ready' | 'error'
+
+interface DatabaseRuntimeState {
+  status: DatabaseStatus
+  error?: string
+}
+
+let runtimeState: DatabaseRuntimeState = { status: 'idle' }
+const runtimeListeners = new Set<(state: DatabaseRuntimeState) => void>()
+
+function setRuntimeState(next: DatabaseRuntimeState) {
+  runtimeState = next
+  for (const listener of runtimeListeners) {
+    try { listener(runtimeState) } catch { /* swallow */ }
+  }
+}
+
+export function getDatabaseRuntimeState(): DatabaseRuntimeState {
+  return runtimeState
+}
+
+export function subscribeDatabaseRuntimeState(
+  listener: (state: DatabaseRuntimeState) => void,
+): () => void {
+  runtimeListeners.add(listener)
+  return () => { runtimeListeners.delete(listener) }
+}
+
+/**
+ * Get database adapter for maintenance tasks (legacy detection etc.).
+ * Returns the adapter if initialized, otherwise throws.
+ */
+export function getDatabaseForMaintenance(): DBAdapter {
+  if (!db) throw new Error('Database not initialized. Cannot perform maintenance.')
+  return db
+}
+
+export async function serializeDatabaseTransaction<T>(operation: () => Promise<T>): Promise<T> {
+  const previous = transactionTail
+  let release!: () => void
+  transactionTail = new Promise<void>((resolve) => { release = resolve })
+  await previous.catch(() => undefined)
+  try {
+    return await operation()
+  } finally {
+    release()
+  }
+}
 
 export async function initDatabase(): Promise<void> {
+  setRuntimeState({ status: 'initializing' })
+
   if (isTauri()) {
+    // 桌面端优先使用 SQLite
     try {
       const adapter = new TauriSQLiteAdapter()
       await adapter.init()
       db = adapter
       console.log('[DB] Tauri SQLite initialized')
+      setRuntimeState({ status: 'ready' })
       return
     } catch (err) {
       console.warn('[DB] Tauri SQLite failed, falling back to IndexedDB:', err)
     }
   }
 
-  // Web fallback: IndexedDB
+  // Web端回退到 IndexedDB
   try {
     const adapter = new IndexedDBAdapter()
     await adapter.init()
     db = adapter
     console.log('[DB] IndexedDB initialized')
+    setRuntimeState({ status: 'ready' })
   } catch (err) {
     console.error('[DB] IndexedDB failed:', err)
+    const message = err instanceof Error ? err.message : String(err)
+    setRuntimeState({ status: 'error', error: message })
     throw new Error('无法初始化数据库')
   }
 }

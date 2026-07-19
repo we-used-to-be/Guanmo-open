@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+*.zip
+GuanmoDatabaseMigration-*/
+
+# Runtime files
+node/
+browsers/
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+*.backup-*
+
+# Export and report files
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+
+# Log files
+*.log
+*.txt
+!README.md
+
+# Temporary files
+test-*
+*-report.json
+*-migration-report.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Playwright
+.playwright-cli/

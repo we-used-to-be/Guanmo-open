@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import type { EditorView } from '@codemirror/view'
 import { useEditorStore } from '@/stores/editorStore'
-import { addSelectionContextTag } from '@/services/aiContext'
-import { useChatStore } from '@/stores/chatStore'
+import { addSelectionContextTag, setAiShortcutPrompt } from '@/services/aiContext'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { toast } from '@/services/toast'
 
@@ -43,26 +42,40 @@ export function EditorContextMenu({ viewRef }: EditorContextMenuProps) {
     return { from: sel.from, to: sel.to, text: view.state.sliceDoc(sel.from, sel.to) }
   }, [viewRef])
 
-  const wrapSelection = useCallback((before: string, after: string) => {
+  const replaceSelection = useCallback((insert: string, anchorOffset: number, headOffset = anchorOffset) => {
     const view = viewRef.current
     if (!view) return
     const { from, to, text } = getSelection()
+    const nextText = insert.replace('$selection', text)
     view.dispatch({
-      changes: { from, to, insert: before + text + after },
-      selection: { anchor: from + before.length, head: from + before.length + text.length },
+      changes: { from, to, insert: nextText },
+      selection: { anchor: from + anchorOffset, head: from + headOffset },
     })
     view.focus()
     setMenu(null)
   }, [viewRef, getSelection])
 
-  const insertAtCursor = useCallback((text: string) => {
+  const wrapSelection = useCallback((before: string, after: string, selectAfterOffset?: number, selectAfterLength?: number) => {
+    const { text } = getSelection()
+    const anchorOffset = typeof selectAfterOffset === 'number' ? before.length + text.length + selectAfterOffset : before.length
+    const headOffset = typeof selectAfterLength === 'number' ? anchorOffset + selectAfterLength : before.length + text.length
+    replaceSelection(`${before}$selection${after}`, anchorOffset, headOffset)
+  }, [getSelection, replaceSelection])
+
+  const insertAtCursor = useCallback((text: string, selectionStart?: number, selectionEnd?: number) => {
     const view = viewRef.current
     if (!view) return
     const { from } = view.state.selection.main
     const lineStart = view.state.doc.lineAt(from).from
     const needsNewline = lineStart < from && view.state.sliceDoc(lineStart, from).trim() !== ''
     const insert = needsNewline ? '\n' + text : text
-    view.dispatch({ changes: { from, insert } })
+    const prefixLength = needsNewline ? 1 : 0
+    const anchor = from + (typeof selectionStart === 'number' ? prefixLength + selectionStart : insert.length)
+    const head = from + (typeof selectionEnd === 'number' ? prefixLength + selectionEnd : anchor - from)
+    view.dispatch({
+      changes: { from, insert },
+      selection: { anchor, head },
+    })
     view.focus()
     setMenu(null)
   }, [viewRef])
@@ -134,7 +147,7 @@ export function EditorContextMenu({ viewRef }: EditorContextMenuProps) {
       selectionFrom: sel.from,
       selectionTo: sel.to,
     })
-    useChatStore.getState().setDraftInput(prompt)
+    setAiShortcutPrompt(prompt)
     setMenu(null)
   }, [activeTab, viewRef])
 
@@ -151,9 +164,10 @@ export function EditorContextMenu({ viewRef }: EditorContextMenuProps) {
           <ContextMenuSeparator />
           <ContextMenuGroupTitle>AI 助手</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => handleAiAction('请解释这段内容')}>AI 解释这段</ContextMenuItem>
+          <ContextMenuItem onClick={() => handleAiAction('请结合上下文解释这段内容，优先读取选区附近内容，不要默认阅读全文')}>AI 结合上下文解释</ContextMenuItem>
           <ContextMenuItem onClick={() => handleAiAction('请总结这段内容')}>AI 总结这段</ContextMenuItem>
           <ContextMenuItem onClick={() => handleAiAction('请改写这段内容，使其更清晰')}>AI 改写这段</ContextMenuItem>
-          <ContextMenuItem onClick={() => handleAiAction('请只把选中文本整理为标准 Markdown 格式：可以调整标题、列表、引用、代码块、表格等 Markdown 标记；不得改变原文内容、语义和顺序，不得新增信息。')}>AI 优化格式</ContextMenuItem>
+          <ContextMenuItem onClick={() => handleAiAction('请优化选中文本的 Markdown 格式：可以调整标题、列表、引用、代码块、表格等 Markdown 标记；不得改变原文内容、语义和顺序，不得新增信息。')}>AI 优化格式</ContextMenuItem>
           <ContextMenuItem onClick={() => handleAiAction('请翻译这段内容')}>AI 翻译</ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuGroupTitle>Markdown 格式</ContextMenuGroupTitle>
@@ -162,7 +176,7 @@ export function EditorContextMenu({ viewRef }: EditorContextMenuProps) {
           <ContextMenuItem onClick={() => wrapSelection('`', '`')}>行内代码</ContextMenuItem>
           <ContextMenuItem onClick={() => wrapSelection('\n```\n', '\n```\n')}>代码块</ContextMenuItem>
           <ContextMenuItem onClick={() => wrapSelection('> ', '')}>引用</ContextMenuItem>
-          <ContextMenuItem onClick={() => wrapSelection('[', '](url)')}>链接</ContextMenuItem>
+          <ContextMenuItem onClick={() => wrapSelection('[', '](url)', 2, 3)}>链接</ContextMenuItem>
         </>
       ) : (
         /* 编辑器空白处右键菜单 */
@@ -172,10 +186,10 @@ export function EditorContextMenu({ viewRef }: EditorContextMenuProps) {
           <ContextMenuItem onClick={handleSelectAll}>全选</ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuGroupTitle>插入 Markdown</ContextMenuGroupTitle>
-          <ContextMenuItem onClick={() => insertAtCursor('# 标题\n')}>插入标题</ContextMenuItem>
-          <ContextMenuItem onClick={() => insertAtCursor('> 引用\n')}>插入引用</ContextMenuItem>
-          <ContextMenuItem onClick={() => insertAtCursor('\n```\n\n```\n')}>插入代码块</ContextMenuItem>
-          <ContextMenuItem onClick={() => insertAtCursor('[链接文字](url)')}>插入链接</ContextMenuItem>
+          <ContextMenuItem onClick={() => insertAtCursor('# 标题\n', 2, 4)}>插入标题</ContextMenuItem>
+          <ContextMenuItem onClick={() => insertAtCursor('> 引用\n', 2, 4)}>插入引用</ContextMenuItem>
+          <ContextMenuItem onClick={() => insertAtCursor('\n```\n\n```\n', 5, 5)}>插入代码块</ContextMenuItem>
+          <ContextMenuItem onClick={() => insertAtCursor('[链接文字](url)', 7, 10)}>插入链接</ContextMenuItem>
           <ContextMenuItem onClick={() => insertAtCursor('| 列1 | 列2 | 列3 |\n| --- | --- | --- |\n| | | |\n')}>插入表格</ContextMenuItem>
           <ContextMenuItem onClick={() => insertAtCursor('- [ ] 任务\n')}>插入任务列表</ContextMenuItem>
           <ContextMenuItem onClick={() => insertAtCursor('\n---\n')}>插入分割线</ContextMenuItem>

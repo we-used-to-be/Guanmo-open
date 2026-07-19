@@ -2,8 +2,18 @@ import { vectorStore } from '@/services/rag/vectorStore'
 import type { ContextTag } from '@/types/contextTag'
 import { normalizeFilePath } from '@/services/pathIdentity'
 
+export interface AgentEditTarget {
+  id: string
+  type: 'selection' | 'file'
+  title: string
+  filePath: string
+  selectionFrom?: number
+  selectionTo?: number
+}
+
 interface AgentScopeContext {
   contextTags: ContextTag[]
+  editTargets?: AgentEditTarget[]
 }
 
 let activeAgentScopeContext: AgentScopeContext | null = null

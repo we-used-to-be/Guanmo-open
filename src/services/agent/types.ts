@@ -1,4 +1,5 @@
 import type { ChatMessage, ChatMessageSource } from '@/services/ai/types'
+import type { Capability } from './intentDetector'
 
 export interface ToolParameter {
   name: string
@@ -37,4 +38,23 @@ export interface AgentConfig {
   maxSteps: number
   stepTimeout: number
   systemPrompt: string
+}
+
+export interface AgentRunRequest {
+  query: string
+  chatHistory?: ChatMessage[]
+  config?: Partial<AgentConfig>
+  rawQuery?: string
+  hasRecentEditContext?: boolean
+  hasCurrentEditTarget?: boolean
+  currentEditTargetCount?: number
+  candidateToolNames?: readonly string[]
+  hasPrefetchedMemoryLookup?: boolean
+  signal?: AbortSignal
+  temperature?: number
+  onStep?: (step: AgentStep) => void
+  requiredCapabilities?: readonly Capability[]
+  untrustedContext?: string
+  customPreferencePrompt?: string
+  streamEnabled?: boolean
 }

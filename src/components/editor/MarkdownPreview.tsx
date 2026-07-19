@@ -1,96 +1,147 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
+import rehypeHighlight from 'rehype-highlight'
 import rehypeKatex from 'rehype-katex'
-import { isValidElement, useEffect, useMemo, useState } from 'react'
+import { Fragment, isValidElement, memo, useEffect, useMemo, useRef, useState } from 'react'
+import { jsx, jsxs } from 'react/jsx-runtime'
+import { toJsxRuntime, type Components } from 'hast-util-to-jsx-runtime'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { isTauri } from '@/hooks/useTauri'
-import { createHeadingId, extractToc, type TocItem } from '@/services/markdownToc'
+import { createHeadingId, type TocItem } from '@/services/markdownToc'
+import { normalizeLatexBlockDelimiters, remarkStandaloneDisplayMath } from '@/services/markdownMath'
+import { parseMarkdownPreviewInWorker } from '@/services/markdownPreviewParser'
+import type { MarkdownPreviewBlock, MarkdownPreviewParseResult } from '@/services/markdownPreviewParserCore'
+import { useSettingsStore } from '@/stores/settingsStore'
+
+const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath, remarkStandaloneDisplayMath]
+const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex, rehypeHighlight]
+const NORMALIZED_MARKDOWN_CACHE_LIMIT = 4
+const LARGE_MARKDOWN_THRESHOLD = 50_000
+const EAGER_PREVIEW_BLOCK_COUNT = 12
+const PREVIEW_BLOCK_OVERSCAN = '1200px 0px'
+const PREVIEW_HEIGHT_CACHE_LIMIT = 400
+const normalizedMarkdownCache = new Map<string, string>()
+const previewBlockHeightCache = new Map<string, number>()
 
 interface MarkdownPreviewProps {
   content: string
   filePath?: string | null
   fontSize?: number
   lineHeight?: number
+  skipHtml?: boolean
   onTaskToggle?: (line: number, checked: boolean) => void
   onHeadingClick?: (line: number) => void
 }
 
-export function MarkdownPreview({
+function getNormalizedMarkdown(content: string): string {
+  const cached = normalizedMarkdownCache.get(content)
+  if (cached !== undefined) return cached
+
+  const normalized = normalizeLatexBlockDelimiters(content)
+  normalizedMarkdownCache.set(content, normalized)
+  if (normalizedMarkdownCache.size > NORMALIZED_MARKDOWN_CACHE_LIMIT) {
+    const oldest = normalizedMarkdownCache.keys().next().value
+    if (oldest !== undefined) normalizedMarkdownCache.delete(oldest)
+  }
+  return normalized
+}
+
+export const MarkdownPreview = memo(function MarkdownPreview({
   content,
   filePath,
   fontSize = 14,
   lineHeight = 1.65,
+  skipHtml = false,
   onTaskToggle,
   onHeadingClick,
 }: MarkdownPreviewProps) {
-  const toc = useMemo(() => extractToc(content), [content])
+  const useWorkerPipeline = content.length >= LARGE_MARKDOWN_THRESHOLD
+  const normalizedContent = useMemo(
+    () => useWorkerPipeline ? '' : getNormalizedMarkdown(content),
+    [content, useWorkerPipeline],
+  )
+  const [workerResult, setWorkerResult] = useState<{
+    content: string
+    result?: MarkdownPreviewParseResult
+    error?: string
+  } | null>(null)
   const [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(null)
-  const headingIds = new Map<string, number>()
-  const handleAnchorClick = (href?: string) => (event: React.MouseEvent<HTMLAnchorElement>) => {
-    if (!href?.startsWith('#')) return
-    event.preventDefault()
-    const id = href.slice(1)
-    const scope = event.currentTarget.closest('.prose')
-    const scopedTarget = scope?.querySelector<HTMLElement>(`#${CSS.escape(id)}`)
-    const target = scopedTarget ?? document.getElementById(id)
-    target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    if (target instanceof HTMLElement) {
-      target.focus({ preventScroll: true })
-    }
-    if (typeof history !== 'undefined' && history.replaceState) {
-      history.replaceState(null, '', href)
-    }
-  }
 
-  return (
-    <div className="flex items-start gap-6">
-      <div
-        className="prose max-w-none min-w-0 flex-1 text-gm-text"
-        style={{ fontSize: `${fontSize}px`, lineHeight }}
-      >
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkMath]}
-          rehypePlugins={[rehypeKatex]}
-          components={{
-          h1: ({ children }) => {
-            const id = createHeadingId(getText(children), headingIds)
-            const line = getHeadingLine(toc, id)
+  useEffect(() => {
+    if (!useWorkerPipeline) return
+    let active = true
+    void parseMarkdownPreviewInWorker(content).then(
+      (result) => {
+        if (active) setWorkerResult({ content, result })
+      },
+      (error) => {
+        if (active) setWorkerResult({
+          content,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      },
+    )
+    return () => { active = false }
+  }, [content, useWorkerPipeline])
+
+  const components = useMemo<Partial<Components>>(() => {
+    const headingIds = new Map<string, number>()
+    const handleAnchorClick = (href?: string) => (event: React.MouseEvent<HTMLAnchorElement>) => {
+      if (!href?.startsWith('#')) return
+      event.preventDefault()
+      const id = href.slice(1)
+      const scope = event.currentTarget.closest('.prose')
+      const scopedTarget = scope?.querySelector<HTMLElement>(`#${CSS.escape(id)}`)
+      const target = scopedTarget ?? document.getElementById(id)
+      target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      if (target instanceof HTMLElement) {
+        target.focus({ preventScroll: true })
+      }
+      if (typeof history !== 'undefined' && history.replaceState) {
+        history.replaceState(null, '', href)
+      }
+    }
+
+    return {
+          h1: ({ children, node }) => {
+            const line = getNodeStartLine(node)
+            const id = line ? `heading-${line}` : createHeadingId(getText(children), headingIds)
             return (
-              <h1 id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className={`scroll-mt-6 font-bold mt-8 mb-4 text-gm-text border-b border-gm-border pb-3 ${onHeadingClick ? 'cursor-pointer hover:text-gm-primary' : ''}`} style={{ fontSize: '2em' }}>
+              <h1 id={id} data-heading-id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className="scroll-mt-6 font-bold mt-8 mb-4 text-gm-text border-b border-gm-border pb-3" style={{ fontSize: '2em' }}>
                 {children}
               </h1>
             )
           },
-          h2: ({ children }) => {
-            const id = createHeadingId(getText(children), headingIds)
-            const line = getHeadingLine(toc, id)
+          h2: ({ children, node }) => {
+            const line = getNodeStartLine(node)
+            const id = line ? `heading-${line}` : createHeadingId(getText(children), headingIds)
             return (
-              <h2 id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className={`scroll-mt-6 font-bold mt-8 mb-4 text-gm-text ${onHeadingClick ? 'cursor-pointer hover:text-gm-primary' : ''}`} style={{ fontSize: '1.5em' }}>
+              <h2 id={id} data-heading-id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className="scroll-mt-6 font-bold mt-8 mb-4 text-gm-text" style={{ fontSize: '1.5em' }}>
                 {children}
               </h2>
             )
           },
-          h3: ({ children }) => {
-            const id = createHeadingId(getText(children), headingIds)
-            const line = getHeadingLine(toc, id)
+          h3: ({ children, node }) => {
+            const line = getNodeStartLine(node)
+            const id = line ? `heading-${line}` : createHeadingId(getText(children), headingIds)
             return (
-              <h3 id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className={`scroll-mt-6 font-bold mt-6 mb-3 text-gm-text ${onHeadingClick ? 'cursor-pointer hover:text-gm-primary' : ''}`} style={{ fontSize: '1.25em' }}>
+              <h3 id={id} data-heading-id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className="scroll-mt-6 font-bold mt-6 mb-3 text-gm-text" style={{ fontSize: '1.25em' }}>
                 {children}
               </h3>
             )
           },
-          h4: ({ children }) => {
-            const id = createHeadingId(getText(children), headingIds)
-            const line = getHeadingLine(toc, id)
+          h4: ({ children, node }) => {
+            const line = getNodeStartLine(node)
+            const id = line ? `heading-${line}` : createHeadingId(getText(children), headingIds)
             return (
-              <h4 id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className={`scroll-mt-6 font-bold mt-4 mb-2 text-gm-text ${onHeadingClick ? 'cursor-pointer hover:text-gm-primary' : ''}`} style={{ fontSize: '1.1em' }}>
+              <h4 id={id} data-heading-id={id} data-md-line={line} onClick={() => handleHeadingClick(line, onHeadingClick)} className="scroll-mt-6 font-bold mt-4 mb-2 text-gm-text" style={{ fontSize: '1.1em' }}>
                 {children}
               </h4>
             )
           },
-          p: ({ children }) => (
-            <p className="my-3">{children}</p>
+          p: ({ children, node }) => (
+            <p className="my-3" data-md-line={getNodeStartLine(node)} data-md-end-line={getNodeEndLine(node)}>{children}</p>
           ),
           strong: ({ children }) => (
             <strong className="font-bold text-gm-text">{children}</strong>
@@ -98,22 +149,22 @@ export function MarkdownPreview({
           em: ({ children }) => (
             <em className="text-gm-text italic">{children}</em>
           ),
-          code: ({ children, className }) => {
-            const isBlock = className?.includes('language-')
-            const language = className?.replace('language-', '')
+          code: ({ children, className, node }) => {
+            const language = className?.match(/language-([\w-]+)/)?.[1]
+            const isBlock = Boolean(language)
             if (isBlock && language === 'mermaid') {
-              return <MermaidBlock code={String(children).replace(/\n$/, '')} />
+              return <MermaidBlock code={String(children).replace(/\n$/, '')} startLine={getNodeStartLine(node)} endLine={getNodeEndLine(node)} />
             }
             if (isBlock) {
               return (
-                <CodeBlock code={String(children).replace(/\n$/, '')} language={language} fontSize={fontSize}>
+                <CodeBlock code={String(children).replace(/\n$/, '')} language={language} fontSize={fontSize} startLine={getNodeStartLine(node)} endLine={getNodeEndLine(node)}>
                   {className && (
                     <div className="px-4 py-1.5 border-b border-gm-border text-micro text-gm-text-secondary font-mono">
                       {language}
                     </div>
                   )}
                   <pre className="p-4 overflow-x-auto m-0">
-                    <code className="font-mono text-gm-text" style={{ fontSize: '0.9em' }}>
+                    <code className={['font-mono', className].filter(Boolean).join(' ')} style={{ fontSize: '0.9em' }}>
                       {children}
                     </code>
                   </pre>
@@ -126,8 +177,8 @@ export function MarkdownPreview({
               </code>
             )
           },
-          blockquote: ({ children }) => (
-            <blockquote className="pl-4 border-l-4 border-gm-primary bg-gm-primary-subtle rounded-r-lg py-3 text-gm-text-secondary italic my-4">
+          blockquote: ({ children, node }) => (
+            <blockquote className="pl-4 border-l-4 border-gm-primary rounded-r-lg py-3 text-gm-text-secondary italic my-4" data-md-line={getNodeStartLine(node)} data-md-end-line={getNodeEndLine(node)}>
               {children}
             </blockquote>
           ),
@@ -161,9 +212,9 @@ export function MarkdownPreview({
               </li>
             )
           },
-          hr: () => <hr className="my-6 border-gm-border" />,
-          table: ({ children }) => (
-            <div className="my-4 overflow-x-auto rounded-xl border border-gm-border">
+          hr: ({ node }) => <hr className="my-6 border-gm-border" data-md-line={getNodeStartLine(node)} />,
+          table: ({ children, node }) => (
+            <div className="my-4 overflow-x-auto rounded-xl border border-gm-border" data-md-line={getNodeStartLine(node)}>
               <table className="w-full border-collapse">
                 {children}
               </table>
@@ -182,7 +233,7 @@ export function MarkdownPreview({
               {children}
             </td>
           ),
-          img: ({ src, alt }) => {
+          img: ({ src, alt, node }) => {
             const resolvedSrc = resolveImageSrc(src, filePath)
             const altText = alt || ''
             return (
@@ -191,6 +242,7 @@ export function MarkdownPreview({
                 className="my-4 block max-w-full cursor-zoom-in rounded-xl border border-gm-border bg-transparent p-0 text-left"
                 onClick={() => setZoomImage({ src: resolvedSrc, alt: altText })}
                 title="点击放大图片"
+                data-md-line={getNodeStartLine(node)}
               >
                 <img
                   src={resolvedSrc}
@@ -231,11 +283,47 @@ export function MarkdownPreview({
               />
             )
           },
-        }}
+        }
+  }, [filePath, fontSize, onHeadingClick, onTaskToggle])
+
+  const currentWorkerResult = workerResult?.content === content ? workerResult : null
+  const fallbackContent = currentWorkerResult?.error ? getNormalizedMarkdown(content) : normalizedContent
+
+  return (
+    <div
+      className="prose gm-markdown-preview max-w-none min-w-0 text-gm-text"
+      style={{ fontSize: `${fontSize}px`, lineHeight }}
+    >
+      {useWorkerPipeline ? (
+        currentWorkerResult?.result ? (
+          <IncrementalMarkdownPreview
+            blocks={currentWorkerResult.result.blocks}
+            components={components}
+            fontSize={fontSize}
+            lineHeight={lineHeight}
+          />
+        ) : currentWorkerResult?.error ? (
+          <ReactMarkdown
+            skipHtml={skipHtml}
+            remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+            rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
+            components={components}
+          >
+            {fallbackContent}
+          </ReactMarkdown>
+        ) : (
+          <div className="py-3 text-caption text-gm-text-tertiary">正在解析预览...</div>
+        )
+      ) : (
+        <ReactMarkdown
+          skipHtml={skipHtml}
+          remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+          rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
+          components={components}
         >
-          {content}
+          {normalizedContent}
         </ReactMarkdown>
-      </div>
+      )}
       {zoomImage && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-8"
@@ -261,6 +349,155 @@ export function MarkdownPreview({
       )}
     </div>
   )
+})
+
+function IncrementalMarkdownPreview({
+  blocks,
+  components,
+  fontSize,
+  lineHeight,
+}: {
+  blocks: MarkdownPreviewBlock[]
+  components: Partial<Components>
+  fontSize: number
+  lineHeight: number
+}) {
+  return blocks.map((block, index) => (
+    <VirtualMarkdownBlock
+      key={block.key}
+      block={block}
+      components={components}
+      eager={index < EAGER_PREVIEW_BLOCK_COUNT}
+      fontSize={fontSize}
+      lineHeight={lineHeight}
+    />
+  ))
+}
+
+function VirtualMarkdownBlock({
+  block,
+  components,
+  eager,
+  fontSize,
+  lineHeight,
+}: {
+  block: MarkdownPreviewBlock
+  components: Partial<Components>
+  eager: boolean
+  fontSize: number
+  lineHeight: number
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [mounted, setMounted] = useState(eager)
+  const [placeholderHeight, setPlaceholderHeight] = useState(() => estimateBlockHeight(block, fontSize, lineHeight))
+
+  useEffect(() => {
+    if (eager) setMounted(true)
+  }, [eager])
+
+  useEffect(() => {
+    if (mounted) return
+    const element = containerRef.current
+    if (!element || typeof IntersectionObserver === 'undefined') {
+      setMounted(true)
+      return
+    }
+
+    const cacheKey = getPreviewHeightCacheKey(block.key, element.clientWidth, fontSize, lineHeight)
+    const cachedHeight = previewBlockHeightCache.get(cacheKey)
+    if (cachedHeight) setPlaceholderHeight(cachedHeight)
+
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setMounted(true)
+        observer.disconnect()
+      }
+    }, {
+      root: findPreviewScrollContainer(element),
+      rootMargin: PREVIEW_BLOCK_OVERSCAN,
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [block.key, fontSize, lineHeight, mounted])
+
+  useEffect(() => {
+    if (!mounted) return
+    const element = containerRef.current
+    if (!element || typeof ResizeObserver === 'undefined') return
+
+    const cacheHeight = () => {
+      const height = element.getBoundingClientRect().height
+      if (height <= 0) return
+      const cacheKey = getPreviewHeightCacheKey(block.key, element.clientWidth, fontSize, lineHeight)
+      setPreviewBlockHeight(cacheKey, height)
+    }
+    cacheHeight()
+    const observer = new ResizeObserver(cacheHeight)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [block.key, fontSize, lineHeight, mounted])
+
+  return (
+    <div
+      ref={containerRef}
+      data-md-line={block.startLine}
+      data-md-end-line={block.endLine}
+      data-preview-block-state={mounted ? 'mounted' : 'placeholder'}
+      style={mounted ? undefined : { height: `${placeholderHeight}px` }}
+    >
+      {mounted && <MarkdownAstBlock block={block} components={components} />}
+    </div>
+  )
+}
+
+const MarkdownAstBlock = memo(function MarkdownAstBlock({
+  block,
+  components,
+}: {
+  block: MarkdownPreviewBlock
+  components: Partial<Components>
+}) {
+  return toJsxRuntime(block.tree, {
+    Fragment,
+    jsx,
+    jsxs,
+    components,
+    ignoreInvalidStyle: true,
+    passKeys: true,
+    passNode: true,
+  })
+}, (previous, next) => (
+  previous.block.key === next.block.key
+  && previous.block.startLine === next.block.startLine
+  && previous.block.endLine === next.block.endLine
+  && previous.components === next.components
+))
+
+function estimateBlockHeight(block: MarkdownPreviewBlock, fontSize: number, lineHeight: number): number {
+  const sourceLines = Math.max(1, block.endLine - block.startLine + 1)
+  return Math.max(fontSize * lineHeight * 1.5, sourceLines * fontSize * lineHeight + 16)
+}
+
+function findPreviewScrollContainer(element: HTMLElement): Element | null {
+  let parent = element.parentElement
+  while (parent) {
+    const overflowY = window.getComputedStyle(parent).overflowY
+    if (overflowY === 'auto' || overflowY === 'scroll') return parent
+    parent = parent.parentElement
+  }
+  return null
+}
+
+function getPreviewHeightCacheKey(key: string, width: number, fontSize: number, lineHeight: number): string {
+  return `${key}:${Math.round(width / 50)}:${fontSize}:${lineHeight}`
+}
+
+function setPreviewBlockHeight(key: string, height: number) {
+  previewBlockHeightCache.delete(key)
+  previewBlockHeightCache.set(key, height)
+  if (previewBlockHeightCache.size <= PREVIEW_HEIGHT_CACHE_LIMIT) return
+  const oldest = previewBlockHeightCache.keys().next().value
+  if (oldest !== undefined) previewBlockHeightCache.delete(oldest)
 }
 
 function handleHeadingClick(line: number | undefined, onHeadingClick?: (line: number) => void) {
@@ -272,11 +509,15 @@ function CodeBlock({
   code,
   language,
   fontSize,
+  startLine,
+  endLine,
   children,
 }: {
   code: string
   language?: string
   fontSize: number
+  startLine?: number
+  endLine?: number
   children: React.ReactNode
 }) {
   const [copied, setCopied] = useState(false)
@@ -292,7 +533,7 @@ function CodeBlock({
   }
 
   return (
-    <div className="group relative my-4 rounded-xl bg-gm-surface-elevated border border-gm-border overflow-hidden">
+    <div className="group gm-code-block relative my-4 rounded-xl border border-gm-border overflow-hidden" data-md-line={startLine} data-md-end-line={endLine}>
       <button
         type="button"
         onClick={() => void handleCopy()}
@@ -318,11 +559,19 @@ function resolveImageSrc(src: string | undefined, filePath?: string | null): str
   if (/^(https?:|data:|blob:|asset:|file:)/i.test(src) || src.startsWith('#')) return src
   if (!filePath || !isTauri()) return src
 
-  const normalizedSrc = src.replace(/\\/g, '/')
+  const normalizedSrc = decodeLocalImagePath(src).replace(/\\/g, '/')
   const absolutePath = /^[a-zA-Z]:\//.test(normalizedSrc) || normalizedSrc.startsWith('//')
     ? normalizedSrc
     : joinPreviewPath(dirnamePreviewPath(filePath), normalizedSrc)
   return convertFileSrc(absolutePath)
+}
+
+function decodeLocalImagePath(path: string): string {
+  try {
+    return decodeURI(path)
+  } catch {
+    return path
+  }
 }
 
 function dirnamePreviewPath(path: string): string {
@@ -343,20 +592,52 @@ function getText(node: React.ReactNode): string {
   return ''
 }
 
-function getHeadingLine(toc: TocItem[], id: string): number | undefined {
-  return toc.find((item) => item.id === id)?.line
+function getNodeStartLine(node: unknown): number | undefined {
+  return getNodeLine(node, 'start')
 }
 
-function MermaidBlock({ code }: { code: string }) {
+function getNodeEndLine(node: unknown): number | undefined {
+  return getNodeLine(node, 'end')
+}
+
+function getNodeLine(node: unknown, edge: 'start' | 'end'): number | undefined {
+  if (!node || typeof node !== 'object') return undefined
+  const position = (node as { position?: { start?: { line?: unknown }; end?: { line?: unknown } } }).position
+  const line = position?.[edge]?.line
+  return typeof line === 'number' && Number.isFinite(line) ? line : undefined
+}
+
+function MermaidBlock({ code, startLine, endLine }: { code: string; startLine?: number; endLine?: number }) {
   const [svg, setSvg] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const theme = useSettingsStore((state) => state.appearance.theme)
 
   useEffect(() => {
     let cancelled = false
     async function render() {
       try {
         const mermaid = (await import('mermaid')).default
-        mermaid.initialize({ startOnLoad: false, theme: 'base', securityLevel: 'strict' })
+        const isDark = theme === 'dark'
+        mermaid.initialize({
+          startOnLoad: false,
+          theme: 'base',
+          securityLevel: 'strict',
+          themeVariables: isDark ? {
+            background: '#1d1a15',
+            primaryColor: '#30291e',
+            primaryTextColor: '#eee4d2',
+            primaryBorderColor: '#514532',
+            secondaryColor: '#1a3a35',
+            secondaryTextColor: '#eee4d2',
+            secondaryBorderColor: '#38d1c1',
+            tertiaryColor: '#252017',
+            tertiaryTextColor: '#eee4d2',
+            tertiaryBorderColor: '#3b3327',
+            lineColor: '#b7aa94',
+            textColor: '#eee4d2',
+            edgeLabelBackground: '#1d1a15',
+          } : undefined,
+        })
         const id = `mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}`
         const result = await mermaid.render(id, code)
         if (!cancelled) {
@@ -372,11 +653,11 @@ function MermaidBlock({ code }: { code: string }) {
     }
     render()
     return () => { cancelled = true }
-  }, [code])
+  }, [code, theme])
 
   if (error) {
     return (
-      <div className="my-4 rounded-xl border border-gm-error/30 bg-gm-error/5 p-3">
+      <div className="my-4 rounded-xl border border-gm-error/30 bg-gm-error/5 p-3" data-md-line={startLine} data-md-end-line={endLine}>
         <div className="mb-2 text-caption font-bold text-gm-error">Mermaid 渲染失败</div>
         <pre className="overflow-x-auto text-gm-text-secondary" style={{ fontSize: '0.85em' }}>{code}</pre>
       </div>
@@ -384,7 +665,7 @@ function MermaidBlock({ code }: { code: string }) {
   }
 
   return (
-    <div className="my-4 overflow-x-auto rounded-xl border border-gm-border bg-gm-surface-elevated p-4">
+    <div className="my-4 overflow-x-auto rounded-xl border border-gm-border bg-gm-surface-elevated p-4" data-md-line={startLine} data-md-end-line={endLine}>
       {svg ? (
         <div className="mermaid-diagram" dangerouslySetInnerHTML={{ __html: svg }} />
       ) : (
@@ -394,23 +675,46 @@ function MermaidBlock({ code }: { code: string }) {
   )
 }
 
+interface MarkdownTocSection {
+  key: string
+  title: string
+  toc: TocItem[]
+  onHeadingClick: (item: TocItem) => void
+  emptyText?: string
+  activeHeading?: string | null
+}
+
 export function MarkdownToc({
-  toc,
+  toc = [],
   collapsed,
   onToggle,
   onHeadingClick,
+  sections,
+  activeHeading,
 }: {
-  toc: TocItem[]
+  toc?: TocItem[]
   collapsed: boolean
   onToggle: () => void
-  onHeadingClick: (item: TocItem) => void
+  onHeadingClick?: (item: TocItem) => void
+  sections?: MarkdownTocSection[]
+  activeHeading?: string | null
 }) {
-  if (toc.length <= 1) return null
+  const explicitSections = sections && sections.length > 0
+    ? sections.slice(0, 2)
+    : null
+  const visibleSections = explicitSections
+    ? explicitSections
+    : toc.length > 1
+      ? [{ key: 'toc', title: '目录', toc, onHeadingClick: onHeadingClick ?? (() => {}) }]
+      : []
+  const dualColumn = visibleSections.length > 1
+
+  if (visibleSections.length === 0) return null
 
   return (
     <aside
-      className={`relative h-full flex-shrink-0 ${
-        collapsed ? 'w-0' : 'w-52 border-l border-gm-border-subtle bg-gm-surface'
+      className={`gm-markdown-toc relative h-full flex-shrink-0 ${dualColumn ? 'gm-markdown-toc--dual' : ''} ${
+        collapsed ? 'w-0' : 'gm-markdown-toc--expanded border-l border-gm-border-subtle bg-gm-surface'
       }`}
     >
       <button
@@ -418,7 +722,7 @@ export function MarkdownToc({
         onClick={onToggle}
         aria-label={collapsed ? '展开目录' : '收起目录'}
         aria-expanded={!collapsed}
-className="absolute left-0 top-1/2 z-10 flex h-12 w-5 -translate-x-full -translate-y-1/2 items-center justify-center rounded-l-2xl border border-r-0 border-gm-border bg-gm-surface text-gm-text-tertiary shadow-sm transition-colors hover:border-gm-primary/40 hover:bg-gm-surface-hover hover:text-gm-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gm-primary/40"
+        className="absolute left-0 top-1/2 z-10 flex h-12 w-5 -translate-x-full -translate-y-1/2 items-center justify-center rounded-l-2xl border border-r-0 border-gm-border bg-gm-surface text-gm-text-tertiary shadow-sm hover:border-gm-primary/40 hover:bg-gm-surface-hover hover:text-gm-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gm-primary/40"
         title={collapsed ? '展开目录' : '收起目录'}
       >
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -426,20 +730,48 @@ className="absolute left-0 top-1/2 z-10 flex h-12 w-5 -translate-x-full -transla
         </svg>
       </button>
       {!collapsed && (
-        <nav aria-label="文档目录" className="h-full px-4 py-6 text-micro text-gm-text-tertiary">
-          <div className="mb-3 font-bold text-gm-text-secondary">目录</div>
-          <div className="max-h-full space-y-1 overflow-y-auto pr-1">
-            {toc.map((item) => (
-              <button
-                key={`${item.id}-${item.line}`}
-                type="button"
-                onClick={() => onHeadingClick(item)}
-                className="block w-full truncate rounded-md py-1 text-left transition-colors hover:bg-gm-surface-hover hover:text-gm-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gm-primary/30"
-                style={{ paddingLeft: 6 + Math.max(0, item.level - 1) * 10 }}
-                title={`${item.text}（第 ${item.line} 行）`}
-              >
-                {item.text}
-              </button>
+        <nav aria-label="文档目录" className="h-full pl-4 pr-0 py-3 text-micro text-gm-text-tertiary">
+          <div className={dualColumn ? 'flex h-full gap-3 overflow-hidden' : 'max-h-full space-y-4 overflow-y-auto'}>
+            {visibleSections.map((section) => (
+              <section key={section.key} className={dualColumn ? 'flex min-h-0 min-w-0 flex-1 flex-col' : 'pr-4'}>
+                <div className="mb-2 truncate font-bold text-gm-text-secondary" title={section.title}>
+                  {section.title}
+                </div>
+                <div className={dualColumn ? 'min-h-0 flex-1 space-y-1 overflow-y-auto' : 'space-y-1'}>
+                  {section.toc.length > 1 ? (
+                    section.toc.map((item) => {
+                      const currentActive = section.activeHeading !== undefined ? section.activeHeading : activeHeading
+                      const isActive = currentActive === item.id
+                      return (
+                        <button
+                          key={`${section.key}-${item.id}-${item.line}`}
+                          type="button"
+                          onClick={() => section.onHeadingClick(item)}
+                          className={`block w-full truncate rounded-md py-1 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gm-primary/30 ${
+                            isActive
+                              ? 'font-bold'
+                              : 'hover:bg-gm-surface-hover hover:text-gm-primary'
+                          }`}
+                          style={{
+                            paddingLeft: 6 + Math.max(0, item.level - 1) * 10,
+                            ...(isActive ? {
+                              backgroundColor: 'color-mix(in srgb, var(--gm-active-indicator) 10%, transparent)',
+                              color: 'var(--gm-active-indicator)',
+                            } : {}),
+                          }}
+                          title={`${item.text}（第 ${item.line} 行）`}
+                        >
+                          {item.text}
+                        </button>
+                      )
+                    })
+                  ) : (
+                    <div className="rounded-md border border-dashed border-gm-border-subtle px-3 py-2 text-gm-text-muted">
+                      {section.emptyText ?? '无目录'}
+                    </div>
+                  )}
+                </div>
+              </section>
             ))}
           </div>
         </nav>

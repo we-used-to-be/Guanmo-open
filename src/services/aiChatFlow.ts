@@ -5,49 +5,39 @@ import type { ContextTag } from '@/types/contextTag'
 import { resolveScopeFilePaths } from '@/services/aiScope'
 import { hideLikelyToolJsonPrefix } from '@/services/agent/toolCallParser'
 
-const STREAM_SMOOTH_MIN_CHARS = 4
-const STREAM_SMOOTH_MAX_FRAMES = 40
-const STREAM_SMOOTH_DELAY_MS = 8
-
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-async function emitSmoothContent(
-  content: string,
-  renderedLength: number,
+function createStreamContentFlusher(
   onUpdate: (content: string) => void,
   isCancelled: () => boolean,
   transform: (content: string) => string = (value) => value
-): Promise<number> {
-  if (isCancelled()) return renderedLength
+): { schedule: (content: string) => void; flush: () => void } {
+  let latestContent = ''
+  let committedContent = ''
+  let frame: number | null = null
 
-  const deltaLength = content.length - renderedLength
-  if (deltaLength <= STREAM_SMOOTH_MIN_CHARS * 2) {
-    onUpdate(transform(content))
-    return content.length
+  const commit = () => {
+    frame = null
+    if (isCancelled()) return
+    const nextContent = transform(latestContent)
+    if (nextContent === committedContent) return
+    committedContent = nextContent
+    onUpdate(nextContent)
   }
 
-  const step = Math.max(
-    STREAM_SMOOTH_MIN_CHARS,
-    Math.ceil(deltaLength / STREAM_SMOOTH_MAX_FRAMES)
-  )
-
-  for (let end = renderedLength + step; end < content.length; end += step) {
-    if (isCancelled()) return end
-    onUpdate(transform(content.slice(0, end)))
-    // 使用 requestAnimationFrame 替代 setTimeout，更流畅
-    await new Promise<void>((resolve) => {
-      if (typeof requestAnimationFrame !== 'undefined') {
-        requestAnimationFrame(() => resolve())
-      } else {
-        setTimeout(resolve, STREAM_SMOOTH_DELAY_MS)
+  return {
+    schedule(content) {
+      latestContent = content
+      if (frame === null) {
+        frame = requestAnimationFrame(commit)
       }
-    })
+    },
+    flush() {
+      if (frame !== null) {
+        cancelAnimationFrame(frame)
+        frame = null
+      }
+      commit()
+    },
   }
-
-  if (!isCancelled()) onUpdate(transform(content))
-  return content.length
 }
 
 export function toRagSources(results: SearchResult[]) {
@@ -153,20 +143,18 @@ export async function streamFinalAnswer(options: {
       temperature: options.temperature,
     })
     let accumulated = ''
-    let renderedLength = 0
     const transform = (content: string) => filter ? hideLikelyToolJsonPrefix(content) : content
+    const flusher = createStreamContentFlusher(options.onUpdate, options.isCancelled, transform)
 
-    for await (const chunk of stream) {
-      if (options.isCancelled()) break
-      accumulated += chunk.content
-      renderedLength = await emitSmoothContent(
-        accumulated,
-        renderedLength,
-        options.onUpdate,
-        options.isCancelled,
-        transform
-      )
-      if (chunk.done) break
+    try {
+      for await (const chunk of stream) {
+        if (options.isCancelled()) break
+        accumulated += chunk.content
+        flusher.schedule(accumulated)
+        if (chunk.done) break
+      }
+    } finally {
+      flusher.flush()
     }
     return
   }

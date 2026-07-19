@@ -107,6 +107,14 @@
     opacity: 1;
   }
 }
+@keyframes animal-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
 @keyframes animal-zoom-in {
   from {
     opacity: 0;
@@ -116,4 +124,20 @@
     opacity: 1;
     transform: scale(1);
   }
+}
+@keyframes animal-zoom-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+}
+.mask.closing {
+  animation: animal-fade-out 0.2s ease forwards;
+}
+.modal.closing {
+  animation: animal-zoom-out 0.2s ease forwards;
 }

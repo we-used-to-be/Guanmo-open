@@ -1,9 +1,9 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { useEditorStore, type Tab } from '@/stores/editorStore'
-import { useChatStore } from '@/stores/chatStore'
-import { exportMarkdownAsHtml } from '@/services/markdownExport'
+import { exportMarkdownAsHtml, exportMarkdownAsPdf } from '@/services/markdownExport'
 import { isSameFilePath } from '@/services/pathIdentity'
-import { addFileContextTag } from '@/services/aiContext'
+import { addFileContextTag, summarizeFileWithAi } from '@/services/aiContext'
 import { indexMarkdownDocument } from '@/services/rag/indexer'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { renameFileEntry, saveTabAsFile, validateFileName } from '@/services/fileEntryActions'
@@ -15,36 +15,30 @@ interface TabBarProps {
 }
 
 type ViewMode = 'edit' | 'preview' | 'edit-preview' | 'dual-preview' | 'diff-preview'
-const TOPBAR_COMPACT_WIDTH = 720
 
 export function TabBar({ onOpenSettings }: TabBarProps) {
-  const { tabs, activeTabId, setActiveTab, closeTab, reorderTabs, viewMode, setViewMode, rightPaneTabId, setRightPaneTabId, favorites, toggleFavorite, togglePinTab } = useEditorStore()
+  const tabs = useEditorStore((s) => s.tabs)
+  const activeTabId = useEditorStore((s) => s.activeTabId)
+  const setActiveTab = useEditorStore((s) => s.setActiveTab)
+  const closeTab = useEditorStore((s) => s.closeTab)
+  const reorderTabs = useEditorStore((s) => s.reorderTabs)
+  const viewMode = useEditorStore((s) => s.viewMode)
+  const setViewMode = useEditorStore((s) => s.setViewMode)
+  const rightPaneTabId = useEditorStore((s) => s.rightPaneTabId)
+  const setRightPaneTabId = useEditorStore((s) => s.setRightPaneTabId)
+  const favorites = useEditorStore((s) => s.favorites)
+  const toggleFavorite = useEditorStore((s) => s.toggleFavorite)
+  const togglePinTab = useEditorStore((s) => s.togglePinTab)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null)
-  const [modeMenu, setModeMenu] = useState<{ x: number; y: number } | null>(null)
-  const [compactControls, setCompactControls] = useState(false)
+  const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null)
   const [dragState, setDragState] = useState<{ tabId: string; startX: number } | null>(null)
   const [dragOverTabId, setDragOverTabId] = useState<string | null>(null)
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const renameCancelledRef = useRef(false)
   const renameSubmittingRef = useRef(false)
-  const tabBarRef = useRef<HTMLDivElement>(null)
-  const modeMenuButtonRef = useRef<HTMLButtonElement>(null)
+  const exportButtonRef = useRef<HTMLButtonElement>(null)
   const draggedTabIdRef = useRef<string | null>(null)
-
-  useEffect(() => {
-    const node = tabBarRef.current
-    if (!node || typeof ResizeObserver === 'undefined') return
-
-    const updateCompactControls = (width: number) => {
-      setCompactControls(width < TOPBAR_COMPACT_WIDTH)
-      setModeMenu(null)
-    }
-
-    const observer = new ResizeObserver(([entry]) => updateCompactControls(entry.contentRect.width))
-    observer.observe(node)
-    return () => observer.disconnect()
-  }, [])
 
   const handleContextMenu = useCallback((e: React.MouseEvent, tabId: string) => {
     e.preventDefault()
@@ -133,6 +127,15 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
             navigator.clipboard.writeText(contextTab.filePath)
           }
           break
+        case 'revealFile':
+          if (contextTab?.filePath) {
+            try {
+              await invoke('reveal_file_in_folder', { path: contextTab.filePath })
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : String(err || '打开文件位置失败'))
+            }
+          }
+          break
         case 'copyContent':
           if (contextTab) {
             navigator.clipboard.writeText(contextTab.content)
@@ -157,11 +160,10 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
           break
         case 'aiSummarize':
           if (contextTab) {
-            addFileContextTag({
+            summarizeFileWithAi({
               title: contextTab.title,
               filePath: contextTab.filePath,
             })
-            useChatStore.getState().setDraftInput(`请总结文件「${contextTab.title}」的内容`)
           }
           break
         case 'reindexRag':
@@ -233,37 +235,45 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
     }
   }, [activeTabId, tabs])
 
-  const openModeMenu = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+  const handleExportPdf = useCallback(async () => {
+    const tab = tabs.find((item) => item.id === activeTabId)
+    if (!tab) return
+    try {
+      await exportMarkdownAsPdf(tab.content, tab.title.replace(/\.(md|markdown|mdx)$/i, ''), tab.filePath)
+      toast.success('已打开 PDF 打印对话框')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'PDF export failed')
+    }
+  }, [activeTabId, tabs])
+
+  const openExportMenu = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation()
-    if (modeMenu) {
-      setModeMenu(null)
+    if (exportMenu) {
+      setExportMenu(null)
       return
     }
-    const rect = modeMenuButtonRef.current?.getBoundingClientRect()
+    const rect = exportButtonRef.current?.getBoundingClientRect()
     if (!rect) return
-    setModeMenu({ x: rect.right - 184, y: rect.bottom + 4 })
-  }, [modeMenu])
+    setExportMenu({ x: rect.right - 160, y: rect.bottom + 4 })
+  }, [exportMenu])
 
-  const selectModeFromMenu = useCallback((mode: ViewMode) => {
-    setModeMenu(null)
-    handleModeChange(mode)
-  }, [handleModeChange])
-
-  const exportFromModeMenu = useCallback(() => {
-    setModeMenu(null)
+  const exportHtmlFromMenu = useCallback(() => {
+    setExportMenu(null)
     void handleExportHtml()
   }, [handleExportHtml])
+
+  const exportPdfFromMenu = useCallback(() => {
+    setExportMenu(null)
+    void handleExportPdf()
+  }, [handleExportPdf])
 
   if (tabs.length === 0) return null
 
   return (
     <>
-      <div
-        ref={tabBarRef}
-        className="h-10 flex items-center bg-gm-surface border-b border-gm-border overflow-hidden"
-      >
+      <div className="gm-instant-color h-10 min-w-0 flex items-center bg-gm-surface border-b border-gm-border overflow-hidden">
         {/* Tabs */}
-        <div className="flex-1 flex items-center overflow-x-auto">
+        <div className="min-w-0 flex-1 flex items-center overflow-x-auto">
           {[...tabs].sort((a, b) => {
             if (a.pinned && !b.pinned) return -1
             if (!a.pinned && b.pinned) return 1
@@ -289,17 +299,17 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
                 onDragLeave={handleDragLeave}
                 onDrop={(e) => handleDrop(e, tab.id)}
                 onDragEnd={handleDragEnd}
-                className={`h-full px-3 flex items-center gap-1.5 text-caption border-r border-gm-border-subtle transition-all duration-200 group select-none cursor-pointer ${
+                className={`h-full px-3 flex items-center gap-1.5 text-caption border-r border-gm-border-subtle group select-none cursor-pointer ${
                   activeTabId === tab.id
-                    ? 'bg-gm-canvas text-gm-text font-bold border-b-2 border-b-gm-primary'
+                    ? 'bg-gm-canvas text-gm-text font-bold'
                     : 'text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover'
                 } ${dragState?.tabId === tab.id ? 'opacity-50' : ''} ${
                   dragOverTabId === tab.id && dragState?.tabId !== tab.id
                     ? 'border-l-2 border-l-gm-primary'
                     : ''
                 }`}
+                style={activeTabId === tab.id ? { borderBottom: '2px solid var(--gm-active-indicator)' } : undefined}
               >
-                <FileIconSmall extension={tab.title.split('.').pop() || ''} />
                 {renamingTabId === tab.id ? (
                   <input
                     autoFocus
@@ -369,15 +379,17 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
 
         {/* View mode switcher */}
         <div className="flex items-center gap-0.5 px-2 border-l border-gm-border-subtle flex-shrink-0">
-          {!compactControls && (
-            <button
-              onClick={handleExportHtml}
-              disabled={!activeTabId}
-              className="mr-2 rounded-lg border border-gm-border bg-gm-surface-elevated px-2.5 py-1 text-caption font-bold text-gm-text-secondary transition-colors hover:text-gm-primary disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              导出 HTML
-            </button>
-          )}
+          <button
+            type="button"
+            ref={exportButtonRef}
+            onClick={openExportMenu}
+            disabled={!activeTabId}
+            aria-haspopup="menu"
+            aria-expanded={Boolean(exportMenu)}
+            className="mr-2 rounded-lg border border-gm-border bg-gm-surface-elevated px-2.5 py-1 text-caption font-bold text-gm-text-secondary hover:text-gm-primary disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            导出
+          </button>
           <ModeButton
             active={viewMode === 'edit'}
             onClick={() => handleModeChange('edit')}
@@ -398,87 +410,48 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
               <circle cx="12" cy="12" r="3" />
             </svg>
           </ModeButton>
-          {compactControls ? (
-            <button
-              type="button"
-              ref={modeMenuButtonRef}
-              onClick={openModeMenu}
-              title="更多操作"
-              aria-label="更多视图操作"
-              aria-haspopup="menu"
-              aria-expanded={Boolean(modeMenu)}
-              className={`p-1.5 rounded-lg transition-all duration-200 ${
-                modeMenu || (viewMode !== 'edit' && viewMode !== 'preview')
-                  ? 'bg-gm-primary-subtle text-gm-primary'
-                  : 'text-gm-text-tertiary hover:text-gm-text-secondary hover:bg-gm-surface-hover'
-              }`}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
-                <circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none" />
-                <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
-                <circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none" />
-              </svg>
-            </button>
-          ) : (
-            <>
-              <ModeButton
-                active={viewMode === 'edit-preview'}
-                onClick={() => handleModeChange('edit-preview')}
-                title="编辑+预览"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <rect x="3" y="3" width="7" height="18" rx="1" />
-                  <rect x="14" y="3" width="7" height="18" rx="1" />
-                </svg>
-              </ModeButton>
-              <ModeButton
-                active={viewMode === 'dual-preview'}
-                onClick={() => handleModeChange('dual-preview')}
-                title="对照阅读"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <rect x="3" y="3" width="7" height="18" rx="1" />
-                  <path d="M7 7h-1M7 11h-1M7 15h-1" />
-                  <rect x="14" y="3" width="7" height="18" rx="1" />
-                  <path d="M18 7h-1M18 11h-1M18 15h-1" />
-                </svg>
-              </ModeButton>
-              <ModeButton
-                active={viewMode === 'diff-preview'}
-                onClick={() => handleModeChange('diff-preview')}
-                title="Diff 对比"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M6 3v18M18 3v18M9 8h6M9 16h6" />
-                </svg>
-              </ModeButton>
-            </>
-          )}
+          <ModeButton
+            active={viewMode === 'edit-preview'}
+            onClick={() => handleModeChange('edit-preview')}
+            title="编辑+预览"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <rect x="3" y="3" width="7" height="18" rx="1" />
+              <rect x="14" y="3" width="7" height="18" rx="1" />
+            </svg>
+          </ModeButton>
+          <ModeButton
+            active={viewMode === 'dual-preview'}
+            onClick={() => handleModeChange('dual-preview')}
+            title="对照阅读"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <rect x="3" y="3" width="7" height="18" rx="1" />
+              <path d="M7 7h-1M7 11h-1M7 15h-1" />
+              <rect x="14" y="3" width="7" height="18" rx="1" />
+              <path d="M18 7h-1M18 11h-1M18 15h-1" />
+            </svg>
+          </ModeButton>
+          <ModeButton
+            active={viewMode === 'diff-preview'}
+            onClick={() => handleModeChange('diff-preview')}
+            title="Diff 对比"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M6 3v18M18 3v18M9 8h6M9 16h6" />
+            </svg>
+          </ModeButton>
         </div>
       </div>
 
-      {modeMenu && (
-        <ContextMenu position={modeMenu} onClose={() => setModeMenu(null)} minWidth={184} maxWidth={184}>
-          <ContextMenuGroupTitle>文件操作</ContextMenuGroupTitle>
-          <ContextMenuItem onClick={exportFromModeMenu} disabled={!activeTabId}>
+      {exportMenu && (
+        <ContextMenu position={exportMenu} onClose={() => setExportMenu(null)} minWidth={160} maxWidth={160}>
+          <ContextMenuGroupTitle>导出</ContextMenuGroupTitle>
+          <ContextMenuItem onClick={exportPdfFromMenu} disabled={!activeTabId}>
+            导出 PDF
+          </ContextMenuItem>
+          <ContextMenuItem onClick={exportHtmlFromMenu} disabled={!activeTabId}>
             导出 HTML
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuGroupTitle>视图模式</ContextMenuGroupTitle>
-          <ContextMenuItem onClick={() => selectModeFromMenu('edit')}>
-            编辑模式
-          </ContextMenuItem>
-          <ContextMenuItem onClick={() => selectModeFromMenu('preview')}>
-            预览模式
-          </ContextMenuItem>
-          <ContextMenuItem onClick={() => selectModeFromMenu('edit-preview')}>
-            编辑+预览
-          </ContextMenuItem>
-          <ContextMenuItem onClick={() => selectModeFromMenu('dual-preview')}>
-            对照阅读
-          </ContextMenuItem>
-          <ContextMenuItem onClick={() => selectModeFromMenu('diff-preview')}>
-            Diff 对比
           </ContextMenuItem>
         </ContextMenu>
       )}
@@ -518,6 +491,11 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
             </ContextMenuItem>
           )}
           {contextTab?.filePath && (
+            <ContextMenuItem onClick={() => handleContextAction('revealFile')}>
+              打开文件位置
+            </ContextMenuItem>
+          )}
+          {contextTab?.filePath && (
             <ContextMenuItem onClick={() => handleContextAction('reindexRag')}>
               重新索引 RAG
             </ContextMenuItem>
@@ -552,40 +530,13 @@ function ModeButton({ children, active, onClick, title }: {
     <button
       onClick={onClick}
       title={title}
-      className={`p-1.5 rounded-lg transition-all duration-200 ${
+      className={`p-1.5 rounded-lg ${
         active
-          ? 'bg-gm-primary-subtle text-gm-primary'
+          ? 'text-gm-primary'
           : 'text-gm-text-tertiary hover:text-gm-text-secondary hover:bg-gm-surface-hover'
       }`}
     >
       {children}
     </button>
-  )
-}
-
-function FileIconSmall({ extension }: { extension: string }) {
-  const size = 12
-  let color = 'currentColor'
-
-  switch (extension.toLowerCase()) {
-    case 'md':
-      color = '#19c8b9'
-      break
-    case 'json':
-      color = '#f5c31c'
-      break
-    case 'ts':
-    case 'tsx':
-    case 'js':
-    case 'jsx':
-      color = '#e5a96e'
-      break
-  }
-
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5">
-      <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-      <path d="M14 2v6h6" />
-    </svg>
   )
 }

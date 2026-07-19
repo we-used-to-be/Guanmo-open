@@ -1,20 +1,29 @@
-import { resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { Buffer } from 'node:buffer'
 import { build } from 'esbuild'
 
-const outfile = resolve('node_modules/.cache/agent-tool-parser-check.mjs')
-
-await build({
+const result = await build({
   entryPoints: ['scripts/agent-tool-parser-check.ts'],
   bundle: true,
   platform: 'node',
   format: 'esm',
-  sourcemap: 'inline',
-  define: {
-    'import.meta.env': '{}',
-  },
-  outfile,
+  write: false,
   logLevel: 'silent',
 })
 
-await import(pathToFileURL(outfile).href)
+const code = result.outputFiles[0].text
+const encoded = Buffer.from(code, 'utf8').toString('base64')
+globalThis.window = globalThis
+globalThis.addEventListener = () => {}
+globalThis.removeEventListener = () => {}
+globalThis.document = {
+  addEventListener: () => {},
+  visibilityState: 'visible',
+  documentElement: { dataset: {} },
+}
+try {
+  await import(`data:text/javascript;base64,${encoded}`)
+  process.exit(0)
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error)
+  process.exitCode = 1
+}

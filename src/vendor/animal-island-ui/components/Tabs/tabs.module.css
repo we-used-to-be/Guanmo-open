@@ -1,15 +1,15 @@
 .tabs {
-  background: #f8f8f0;
+  background: var(--animal-tabs-bg, #f8f8f0);
   border-radius: 24px;
-  border: 2px solid #e8e2d6;
+  border: 2px solid var(--animal-tabs-border, #e8e2d6);
   overflow: hidden;
 }
 .tabList {
   display: flex;
   gap: 4px;
   padding: 16px;
-  background: rgba(255, 255, 255, 0.6);
-  border-bottom: 2px solid #e8e2d6;
+  background: var(--animal-tabs-list-bg, rgba(255, 255, 255, 0.6));
+  border-bottom: 2px solid var(--animal-tabs-border, #e8e2d6);
 }
 .tabItem {
   position: relative;
@@ -24,21 +24,21 @@
   font-family: Nunito, 'Noto Sans SC', 'Zen Maru Gothic', 'HarmonyOS Sans SC', 'MiSans', -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif !important;
   font-size: 14px;
   font-weight: 500;
-  color: #794f27;
+  color: var(--animal-tabs-item-text, #794f27);
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .tabItem:hover {
-  background: rgba(25, 200, 185, 0.1);
-  color: #794f27;
+  background: var(--animal-tabs-item-hover-bg, rgba(25, 200, 185, 0.1));
+  color: var(--animal-tabs-item-text, #794f27);
 }
 .tabItem.active {
-  background: #0CC0B5;
-  color: #FFF9E3;
+  background: var(--animal-tabs-active-bg, #0CC0B5);
+  color: var(--animal-tabs-active-text, #FFF9E3);
   font-weight: 600;
   border-radius: 24px;
 }
 .tabItem.active-shadow {
-  box-shadow: 0 3px 0 0 rgba(61, 52, 40, 0.08);
+  box-shadow: var(--animal-tabs-active-shadow, 0 3px 0 0 rgba(61, 52, 40, 0.08));
 }
 .tabIcon {
   font-size: 10px;
@@ -52,7 +52,7 @@
   color: inherit;
 }
 .active .tabLabel {
-  color: #FFF9E3;
+  color: var(--animal-tabs-active-text, #FFF9E3);
 }
 .tabLeaf {
   position: absolute;

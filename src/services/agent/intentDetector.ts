@@ -15,6 +15,7 @@ import { classifyMemoryRetrievalIntent } from '@/services/memory/memoryService'
 export type Capability =
   | 'memory'
   | 'knowledge'
+  | 'selection_context'
   | 'file_read'
   | 'file_write'
   | 'web'
@@ -54,6 +55,10 @@ const KEYWORD_CONFIG: Record<Capability, { weak: string[]; strong: string[] }> =
     weak: ['知识', '文档', '笔记', '资料', '索引', 'rag', '文件内容', '文章', '这篇', '提到', '总结', '解释', '分析', '概述', '归纳'],
     strong: ['知识库', '本地知识', '本地文档', '文档库', '资料库', '笔记库', 'search_knowledge', '查找文档', '搜索文档'],
   },
+  selection_context: {
+    weak: [],
+    strong: [],
+  },
   file_read: {
     weak: ['文件', '文档', '内容', '看看', '查看', '读取', '打开'],
     strong: ['读取文件', '查看文件', '打开文件', '文件内容', 'read_context_file'],
@@ -89,6 +94,7 @@ const REGEX_PATTERNS: Record<Capability, RegExp[]> = {
     /(?:[\w\u4e00-\u9fff ._-]+\.(?:md|markdown|mdx|txt)).*(?:总结|解释|分析|概述|归纳|说了什么|讲了什么|提到|内容)/i,
     /(?:总结|解释|分析|概述|归纳|看看|查询|检索).*(?:[\w\u4e00-\u9fff ._-]+\.(?:md|markdown|mdx|txt))/i,
   ],
+  selection_context: [],
   file_read: [
     /(读取|查看|打开|看看).*(文件|文档)/i,
     /(文件|文档).*(内容|里面|说了什么)/i,
@@ -117,6 +123,57 @@ const REGEX_PATTERNS: Record<Capability, RegExp[]> = {
     /(星期|周).*(几|几号)/,
     /(时间|日期|几点).*(现在|当前|今天)/,
   ],
+}
+
+export type SelectionRequestKind = 'none' | 'fast' | 'context' | 'explicit_lookup'
+
+const SELECTION_EXPLICIT_LOOKUP_PATTERN = /(搜索|检索|查询|知识库|本地文档|读取文件|查看文件|打开文件|查看全文|阅读全文|全文内容|上下文|前后文|附近内容|周围内容)/i
+const SELECTION_CONTEXT_RISK_PATTERN = /(为什么|为何|怎么|如何|原因|理由|推导|证明|怎么算|哪里错|错在哪|是否正确|对不对|区别|对比|不同|联系|关系|改进|优化|改成)/i
+const SELECTION_QUESTION_PATTERN = /(为什么|为何|怎么|如何|原因|理由|推导|证明|怎么算|哪里错|错在哪|是否正确|对不对|区别|对比|不同|联系|关系)/i
+const SELECTION_FAST_PATTERN = /(总结|翻译|润色|改写|解释|说明|分析|整理|提炼|格式化|概述|归纳|含义|意思)/i
+const DOCUMENT_REWRITE_PATTERN = /(改写|润色|优化|重写|覆写|调整(?:结构|层级|语气|措辞|格式)?|扩写|缩写|精简|压缩|续写|翻译|格式化|优化\s*Markdown|Markdown\s*格式|标题层级|保留原意|语气|措辞|更(?:正式|自然|简洁|清晰|学术|口语|严谨|流畅)|改成|改为)/i
+const LOCAL_RESEARCH_PATTERN = /(研究|调研|综述|梳理|归纳|综合|对比|比较|分析).*(知识库|本地(?:知识|文档|资料)|文档库|资料库|笔记库|我的(?:文档|笔记|资料)|资料里|笔记里|文档里|已有资料|本地资料|本地知识库)|(?:知识库|本地(?:知识|文档|资料)|文档库|资料库|笔记库|我的(?:文档|笔记|资料)|资料里|笔记里|文档里|已有资料|本地资料|本地知识库).*(研究|调研|综述|梳理|归纳|综合|对比|比较|分析|有没有|是否|哪些|如何|为什么|结论|观点|证据)|(?:根据|基于|结合).*(知识库|本地(?:知识|文档|资料)|文档库|资料库|笔记库|我的(?:文档|笔记|资料)|已有资料|本地资料|本地知识库).*(回答|分析|归纳|综合|对比|比较|判断|说明)|资料里有没有|笔记里有没有|文档里有没有|根据知识库|结合我的笔记|结合我的资料/i
+const TOPIC_RESEARCH_PATTERN = /^(?:(?:请|帮我|麻烦)(?:先)?\s*)?(?:研究一下|调研一下|做个研究|做一份研究|做个调研|做一份调研|综述一下|梳理一下|归纳一下|综合分析一下|研究|调研|综述|梳理|归纳|综合分析)[\s：:，,]*(.+)$/i
+const SCOPED_TEXT_TARGET_PATTERN = /^(?:这个|这份|这篇|这段|当前|本轮|选中|上述|上面|以下|该(?:文件|文档|笔记|文章|内容|文本|选区))/i
+
+function isTopicResearchIntent(query: string): boolean {
+  const match = query.trim().match(TOPIC_RESEARCH_PATTERN)
+  if (!match) return false
+  const target = match[1].trim()
+  return target.length > 0 && !SCOPED_TEXT_TARGET_PATTERN.test(target)
+}
+
+export function isLocalResearchIntent(query: string): boolean {
+  const normalized = query.trim()
+  return LOCAL_RESEARCH_PATTERN.test(normalized) || isTopicResearchIntent(normalized)
+}
+
+export function isDocumentRewriteIntent(query: string): boolean {
+  const normalized = query.trim()
+  return !isTopicResearchIntent(normalized) && DOCUMENT_REWRITE_PATTERN.test(normalized)
+}
+
+const FILE_SUMMARY_PATTERN = /(?:总结|概述|归纳|梳理|提炼|结构化总结).*(?:文件|文档|笔记|文章|这篇|这个文件|内容)|(?:文件|文档|笔记|文章|这篇|这个文件).*(?:总结|概述|归纳|梳理|提炼|结构化总结)|AI\s*总结该文件/i
+
+export function isFileSummaryIntent(query: string, context: AppContext = {}): boolean {
+  return Boolean(context.hasContextTags) && FILE_SUMMARY_PATTERN.test(query.trim())
+}
+
+const WEB_COMPARISON_PATTERN = /(联网|上网|网上|互联网|web|Web|外部资料|网上资料|官网|官方|最新|最近|现在|当前|实时|新闻|资料更新|是否过时|过时|验证|核对|对照|对比).*(知识库|本地|笔记|资料|文档|已有资料|我的资料|网上|外部|官网|官方|最新|现在|当前)|(?:知识库|本地|笔记|资料|文档|已有资料|我的资料).*(联网|上网|网上|互联网|web|Web|外部资料|网上资料|官网|官方|最新|最近|现在|当前|实时|资料更新|是否过时|过时|验证|核对|对照|对比)|和网上.*(对比|对照|验证|核对)|跟网上.*(对比|对照|验证|核对)|联网验证|网上验证|外部验证|官网验证|查官网|看官网|最新资料|网上资料|外部资料|是否过时/i
+
+export function isWebComparisonIntent(query: string): boolean {
+  return WEB_COMPARISON_PATTERN.test(query.trim())
+}
+
+/**
+ * 选区请求优先按当前动作分类，避免“这个/这里/那个”等指代词单独触发工具。
+ */
+export function classifySelectionRequest(query: string, context: AppContext = {}): SelectionRequestKind {
+  if (!context.hasSelection) return 'none'
+  if (SELECTION_EXPLICIT_LOOKUP_PATTERN.test(query)) return 'explicit_lookup'
+  if (SELECTION_CONTEXT_RISK_PATTERN.test(query) && !isDocumentRewriteIntent(query)) return 'context'
+  if (SELECTION_FAST_PATTERN.test(query)) return 'fast'
+  return 'none'
 }
 
 /**
@@ -157,20 +214,41 @@ function scoreCapability(
     }
   }
 
-  // 上下文加成
-  if (capability === 'file_write' && context.hasRecentEdit) {
-    score += 2
-    signals.push('context:recent_edit')
+  if (capability === 'knowledge' && isLocalResearchIntent(query)) {
+    score += 4
+    signals.push('classifier:local_research')
   }
-  if (capability === 'file_read' && context.hasOpenFile) {
+  if ((capability === 'knowledge' || capability === 'web') && isWebComparisonIntent(query)) {
+    score += 4
+    signals.push('classifier:web_comparison')
+  }
+
+  // 上下文加成
+  if (capability === 'file_write' && context.hasRecentEdit && isImplicitEditContinuation(query)) {
+    score += 2
+    signals.push('context:implicit_edit_continuation')
+  }
+  if (capability === 'file_read' && context.hasOpenFile && score > 0) {
     score += 1
     signals.push('context:open_file')
   }
-  if (capability === 'file_read' && context.hasContextTags && /(总结|解释|分析|概述|归纳|这篇|这个文件|文章|全文|内容)/.test(query)) {
+  if (capability === 'file_read' && context.hasContextTags && !context.hasSelection && /(总结|解释|分析|概述|归纳|这篇|这个文件|文章|全文|内容)/.test(query)) {
     score += 2
     signals.push('context:tagged_file_read')
   }
-  if (capability === 'memory' && context.hasContextTags) {
+  if (capability === 'file_read' && isFileSummaryIntent(query, context)) {
+    score += 4
+    signals.push('classifier:file_summary')
+  }
+  if (capability === 'file_write' && isDocumentRewriteIntent(query)) {
+    score += context.hasContextTags ? 5 : 3
+    signals.push('classifier:document_rewrite')
+  }
+  if (capability === 'file_write' && isTopicResearchIntent(query)) {
+    score = 0
+    signals.push('classifier:topic_research_not_write')
+  }
+  if (capability === 'memory' && context.hasContextTags && score > 0) {
     score += 1
     signals.push('context:context_tags')
   }
@@ -185,6 +263,36 @@ function scoreCapability(
       score += 2
       signals.push('classifier:weak')
     }
+  }
+
+  const selectionRequestKind = classifySelectionRequest(query, context)
+  const isSelectionRewrite = selectionRequestKind === 'fast' && isDocumentRewriteIntent(query)
+  if (selectionRequestKind === 'fast' && !isSelectionRewrite) {
+    score = 0
+    signals.push('context:selection_fast_path')
+  }
+  if (isSelectionRewrite && capability !== 'file_write' && capability !== 'selection_context') {
+    score = 0
+    signals.push('context:selection_rewrite_write_only')
+  }
+  if (
+    selectionRequestKind === 'context'
+    && capability === 'file_write'
+    && SELECTION_QUESTION_PATTERN.test(query)
+  ) {
+    score = 0
+    signals.push('context:selection_question_not_write')
+  }
+  if (
+    capability === 'selection_context'
+    && (
+      selectionRequestKind === 'context'
+      || selectionRequestKind === 'explicit_lookup'
+      || (context.hasSelection && isDocumentRewriteIntent(query) && /(上下文|前后文|附近|周围|结合|结构|标题层级|逻辑|衔接)/i.test(query))
+    )
+  ) {
+    score = 4
+    signals.push(`context:selection_${selectionRequestKind}`)
   }
 
   // 判断是否为强依赖
@@ -209,7 +317,7 @@ export function detectIntentScores(
   query: string,
   context: AppContext = {}
 ): IntentDetectionResult {
-  const capabilities: Capability[] = ['memory', 'knowledge', 'file_read', 'file_write', 'web', 'time']
+  const capabilities: Capability[] = ['memory', 'knowledge', 'selection_context', 'file_read', 'file_write', 'web', 'time']
 
   const scores = capabilities.map(cap => scoreCapability(cap, query, context))
 

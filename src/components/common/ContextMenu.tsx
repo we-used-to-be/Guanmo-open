@@ -53,6 +53,7 @@ export function ContextMenu({
   return (
     <div
       ref={menuRef}
+      data-context-menu="true"
       className="fixed z-50 max-h-[70vh] overflow-y-auto rounded-xl border border-gm-border bg-gm-surface py-1.5 shadow-lg animate-bounceIn"
       style={{ left: adjusted.x, top: adjusted.y, minWidth, maxWidth }}
       onClick={(e) => e.stopPropagation()}
@@ -77,7 +78,7 @@ export function ContextMenuItem({
     <button
       onClick={onClick}
       disabled={disabled}
-      className="w-full px-3.5 py-1.5 text-left text-caption font-medium text-gm-text-secondary transition-colors hover:bg-gm-surface-hover hover:text-gm-text disabled:cursor-not-allowed disabled:opacity-45"
+      className="w-full px-3.5 py-1.5 text-left text-caption font-medium text-gm-text transition-colors hover:bg-gm-surface-hover disabled:cursor-not-allowed disabled:opacity-45"
     >
       {children}
     </button>
@@ -92,8 +93,8 @@ export function ContextMenuGroupTitle({
   variant?: 'default' | 'strong'
 }) {
   const className = variant === 'strong'
-    ? 'mx-1.5 mt-1 rounded-md border-l-2 border-gm-text-secondary/75 bg-gm-primary-subtle/25 px-2 py-1 text-[10px] font-medium uppercase leading-none tracking-[0.14em] text-gm-text-secondary'
-    : 'mx-1.5 mt-1 rounded-md border-l-2 border-gm-primary/45 bg-gm-primary-subtle/25 px-2 py-1 text-[10px] font-medium uppercase leading-none tracking-[0.14em] text-gm-primary/60'
+    ? 'mx-1.5 mt-1 rounded-md border-l-2 border-gm-text-secondary/75 bg-gm-primary-subtle/25 px-2 py-1 text-[10px] font-medium uppercase leading-none tracking-[0.14em] text-gm-text-tertiary'
+    : 'mx-1.5 mt-1 rounded-md border-l-2 border-gm-primary/45 bg-gm-primary-subtle/25 px-2 py-1 text-[10px] font-medium uppercase leading-none tracking-[0.14em] text-gm-text-tertiary'
 
   return (
     <div className={className}>

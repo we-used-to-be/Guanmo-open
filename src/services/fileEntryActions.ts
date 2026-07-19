@@ -1,9 +1,10 @@
 import { useEditorStore, type Tab } from '@/stores/editorStore'
-import { indexMarkdownDocument } from '@/services/rag/indexer'
+import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { saveFileAs } from '@/services/fileSystem'
-import { basenamePath, dirnamePath, fileExists, joinPath, readFile, renameFile } from '@/hooks/useTauri'
+import { basenamePath, dirnamePath, fileExists, joinPath, renameFile } from '@/hooks/useTauri'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
+import { readRememberedFile } from '@/services/persistedFileAccess'
 
 export function validateFileName(fileName: string): string | null {
   const value = fileName.trim()
@@ -39,15 +40,15 @@ export async function saveTabAsFile(tab: Tab): Promise<void> {
   const result = await saveFileAs(tab.content)
   if (!result) return
   useEditorStore.getState().saveTabAs(tab.id, result.path, result.name, result.content)
-  indexMarkdownDocument(result.path, result.name, result.content)
+  scheduleMarkdownDocumentIndex(result.path, result.name, result.content)
 }
 
 export async function saveExistingFileAs(path: string): Promise<void> {
   const state = useEditorStore.getState()
   const opened = state.tabs.find((tab) => isSameFilePath(tab.filePath, path))
-  const content = opened?.content ?? await readFile(path)
+  const content = opened?.content ?? await readRememberedFile(path)
   const result = await saveFileAs(content)
   if (!result) return
   state.addTab(result.path, result.name, result.content)
-  indexMarkdownDocument(result.path, result.name, result.content)
+  scheduleMarkdownDocumentIndex(result.path, result.name, result.content)
 }

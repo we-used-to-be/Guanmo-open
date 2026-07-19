@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { isTauri } from '@/hooks/useTauri'
 import { isImagePath, isMarkdownPath, openExternalFilePaths, type ExternalFileOpenSource } from '@/services/externalFileOpen'
 import { toast } from '@/services/toast'
@@ -9,8 +10,23 @@ import { toast } from '@/services/toast'
 const OPEN_FILES_EVENT = 'guanmo:open-files'
 const DROP_IMAGES_EVENT = 'guanmo:drop-image-paths'
 
+function logDuration(label: string, startedAt: number) {
+  console.info(`[Perf] ${label}: ${Math.round(performance.now() - startedAt)}ms`)
+}
+
 function getFileName(path: string): string {
   return path.split(/[/\\]/).pop() || path
+}
+
+async function focusMainWindow() {
+  try {
+    const window = getCurrentWindow()
+    await window.show()
+    await window.unminimize()
+    await window.setFocus()
+  } catch (err) {
+    console.warn('[ExternalFileOpen] Failed to focus window:', err)
+  }
 }
 
 export function useExternalFileOpen(appReady: boolean) {
@@ -25,6 +41,7 @@ export function useExternalFileOpen(appReady: boolean) {
     let unlistenDragDrop: (() => void) | undefined
 
     const openPaths = async (paths: string[], source: ExternalFileOpenSource) => {
+      const startedAt = performance.now()
       const imagePaths = source === 'drag-drop' ? paths.filter(isImagePath) : []
       const openablePaths = source === 'drag-drop' ? paths.filter((path) => !isImagePath(path)) : paths
 
@@ -39,9 +56,14 @@ export function useExternalFileOpen(appReady: boolean) {
       for (const failure of result.failed) {
         toast.error(`打开「${getFileName(failure.path)}」失败: ${failure.reason}`)
       }
+      if (source === 'file-association' && result.opened.length > 0) {
+        await focusMainWindow()
+      }
+      logDuration(`external file open (${source}, ${paths.length})`, startedAt)
     }
 
     const drainPendingFiles = async () => {
+      const startedAt = performance.now()
       drainRequestedRef.current = true
       if (drainingRef.current) return
       drainingRef.current = true
@@ -57,6 +79,7 @@ export function useExternalFileOpen(appReady: boolean) {
         console.error('[ExternalFileOpen] Failed to load pending files:', err)
       } finally {
         drainingRef.current = false
+        logDuration('pending open files drain', startedAt)
       }
     }
 

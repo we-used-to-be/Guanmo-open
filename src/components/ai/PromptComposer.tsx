@@ -121,7 +121,7 @@ export function PromptComposer({ onSend, streaming, onCancel, onManualCapabiliti
         resetKey={resetManualToggle}
       />
 
-      <div className="bg-gm-surface-elevated rounded-2xl border-2 border-gm-border focus-within:border-gm-primary transition-colors">
+      <div className="gm-instant-color bg-gm-surface-elevated rounded-2xl border-2 border-gm-border focus-within:border-gm-primary">
         {/* Context Tags */}
         {contextTags.length > 0 && (
           <div className="flex flex-wrap items-center gap-1 px-3 pt-2 pb-1 max-h-[80px] overflow-y-auto">
@@ -131,7 +131,7 @@ export function PromptComposer({ onSend, streaming, onCancel, onManualCapabiliti
             {contextTags.length > 1 && (
               <button
                 onClick={clearContextTags}
-                className="text-micro text-gm-text-tertiary hover:text-gm-text-secondary transition-colors px-1"
+                className="text-micro text-gm-text-tertiary hover:text-gm-text-secondary px-1"
                 title="清除全部"
               >
                 全部清除
@@ -155,7 +155,7 @@ export function PromptComposer({ onSend, streaming, onCancel, onManualCapabiliti
           {streaming ? (
             <button
               onClick={onCancel}
-              className="flex-shrink-0 w-8 h-8 rounded-xl bg-gm-error/10 flex items-center justify-center hover:bg-gm-error/20 transition-colors"
+              className="flex-shrink-0 w-8 h-8 rounded-xl bg-gm-error/10 flex items-center justify-center hover:bg-gm-error/20"
               title="停止生成"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="var(--gm-error)" stroke="none">

@@ -283,7 +283,7 @@ export function SearchOverlay({ onClose, editorViewRef, previewPanes = [] }: Sea
   useEffect(() => { inputRef.current?.focus() }, [])
 
   return (
-    <div className="absolute top-2 right-2 z-50 bg-gm-surface border border-gm-border rounded-xl shadow-lg p-3 animate-slideInUp min-w-[300px]">
+    <div data-editor-search-overlay className="absolute top-2 right-2 z-50 bg-gm-surface border border-gm-border rounded-xl shadow-lg p-3 animate-slideInUp min-w-[300px]">
       <div className="flex flex-col gap-2">
         {/* Search row */}
         <div className="flex items-center gap-2">
@@ -293,7 +293,7 @@ export function SearchOverlay({ onClose, editorViewRef, previewPanes = [] }: Sea
             onChange={(e) => doSearch(e.target.value)}
             onKeyDown={handleInputKeyDown}
             placeholder="搜索..."
-            className="flex-1 h-8 px-3 text-caption bg-gm-canvas border border-gm-border rounded-lg outline-none focus:border-gm-primary transition-colors"
+            className="flex-1 h-8 px-3 text-caption text-gm-text bg-gm-canvas border border-gm-border rounded-lg outline-none focus:border-gm-primary transition-colors"
           />
           <button onClick={handlePrev} className="p-1.5 rounded-lg text-gm-text-tertiary hover:text-gm-text hover:bg-gm-surface-hover transition-colors" title="上一个 (Shift+Enter)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 15l-6-6-6 6" /></svg>
@@ -318,7 +318,7 @@ export function SearchOverlay({ onClose, editorViewRef, previewPanes = [] }: Sea
               value={replaceText}
               onChange={(e) => setReplaceText(e.target.value)}
               placeholder="替换..."
-              className="flex-1 h-8 px-3 text-caption bg-gm-canvas border border-gm-border rounded-lg outline-none focus:border-gm-primary transition-colors"
+              className="flex-1 h-8 px-3 text-caption text-gm-text bg-gm-canvas border border-gm-border rounded-lg outline-none focus:border-gm-primary transition-colors"
             />
             <button onClick={handleReplace} className="px-2.5 py-1.5 text-micro font-bold text-gm-text-secondary hover:text-gm-text bg-gm-surface-hover hover:bg-gm-surface-overlay rounded-lg transition-colors whitespace-nowrap">
               替换

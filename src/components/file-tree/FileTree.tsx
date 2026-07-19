@@ -1,14 +1,14 @@
 import { useState, useCallback, useRef } from 'react'
 import { useEditorStore } from '@/stores/editorStore'
 import { createFile, createFolder, openFile } from '@/services/fileSystem'
-import { getFileIcon, type FileNode } from '@/services/fileTree'
+import type { FileNode } from '@/services/fileTree'
 import { isSameFilePath } from '@/services/pathIdentity'
-import { addFileContextTag } from '@/services/aiContext'
-import { useChatStore } from '@/stores/chatStore'
+import { addFileContextTag, summarizeFileWithAi } from '@/services/aiContext'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { renameFileEntry, saveExistingFileAs, validateFileName } from '@/services/fileEntryActions'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { toast } from '@/services/toast'
+import { Tooltip, TruncatedText } from '@/components/common/Tooltip'
 
 interface FileTreeProps {
   nodes: FileNode[]
@@ -83,7 +83,6 @@ export function FileTree({ nodes, onOpenFile, workspacePath, onRefreshWorkspace,
       {creating && (
         <div className="flex items-center gap-1.5 px-2 py-1 text-caption text-gm-text">
           <span className="w-3" />
-          <FileIconSVG icon={creating === 'folder' ? 'folder' : 'markdown'} expanded={false} />
           <input
             autoFocus
             value={newName}
@@ -193,8 +192,7 @@ function FileTreeNode({
   }, [node])
 
   const handleSummarize = useCallback(() => {
-    addFileContextTag({ title: node.name, filePath: node.path })
-    useChatStore.getState().setDraftInput('请总结这个文件的内容')
+    summarizeFileWithAi({ title: node.name, filePath: node.path })
     setContextMenu(null)
   }, [node])
 
@@ -248,7 +246,7 @@ function FileTreeNode({
         onClick={handleClick}
         onContextMenu={handleContextMenu}
         onDragStart={handleDragStart}
-        className={`w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-caption text-left transition-all duration-150 truncate ${
+        className={`w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-caption text-left truncate ${
           isActive
             ? 'bg-gm-primary-subtle text-gm-text font-bold'
             : 'text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover'
@@ -270,9 +268,6 @@ function FileTreeNode({
           </svg>
         )}
 
-        {/* File Icon */}
-        <FileIconSVG icon={getFileIcon(node.name, node.type)} expanded={expanded} />
-
         {/* Name */}
         {renaming ? (
           <input
@@ -293,7 +288,7 @@ function FileTreeNode({
             className="min-w-0 flex-1 rounded border border-gm-primary bg-gm-canvas px-1 py-0.5 text-caption outline-none"
           />
         ) : (
-          <span className="truncate">{node.name}</span>
+          <TruncatedText text={node.name} className="flex-1" />
         )}
       </button>
 
@@ -322,66 +317,15 @@ function FileTreeNode({
   )
 }
 
-export function FileIconSVG({ icon, expanded }: { icon: string; expanded: boolean }) {
-  const color = 'currentColor'
-  const size = 14
-
-  switch (icon) {
-    case 'folder':
-      return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          {expanded ? (
-            <path d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z" />
-          ) : (
-            <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
-          )}
-        </svg>
-      )
-    case 'markdown':
-      return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#19c8b9" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-          <path d="M7 17v-5l3 3 3-3v5M17 17v-5h-2l2 3 2-3h-2" />
-        </svg>
-      )
-    case 'code':
-      return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#e5a96e" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="16 18 22 12 16 6" />
-          <polyline points="8 6 2 12 8 18" />
-        </svg>
-      )
-    case 'image':
-      return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#91c88e" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-          <circle cx="8.5" cy="8.5" r="1.5" />
-          <polyline points="21 15 16 10 5 21" />
-        </svg>
-      )
-    case 'json':
-      return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#f5c31c" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-          <path d="M8 13h2M8 17h2M14 13h2M14 17h2" />
-        </svg>
-      )
-    default:
-      return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-          <path d="M14 2v6h6" />
-        </svg>
-      )
-  }
-}
-
 export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
   files: { name: string; path: string }[]
   onOpen?: (file: { name: string; path: string }) => void
   onRefreshWorkspace?: () => void
 }) {
-  const editorStore = useEditorStore()
+  const tabs = useEditorStore((s) => s.tabs)
+  const activeTabId = useEditorStore((s) => s.activeTabId)
+  const setActiveTab = useEditorStore((s) => s.setActiveTab)
+  const addTab = useEditorStore((s) => s.addTab)
   const removeRecentFile = useEditorStore((s) => s.removeRecentFile)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; file: { name: string; path: string } } | null>(null)
   const [renamingPath, setRenamingPath] = useState<string | null>(null)
@@ -395,14 +339,14 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
         onOpen(file)
         return
       }
-      const existing = editorStore.tabs.find((t) => isSameFilePath(t.filePath, file.path))
+      const existing = tabs.find((t) => isSameFilePath(t.filePath, file.path))
       if (existing) {
-        editorStore.setActiveTab(existing.id)
+        setActiveTab(existing.id)
       } else {
-        editorStore.addTab(file.path, file.name, '')
+        addTab(file.path, file.name, '')
       }
     },
-    [editorStore, onOpen]
+    [addTab, onOpen, setActiveTab, tabs]
   )
 
   const startRename = useCallback((file: { name: string; path: string }) => {
@@ -448,7 +392,7 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
   return (
     <div className="space-y-0.5 py-1">
       {files.map((file) => {
-        const isActive = isSameFilePath(editorStore.tabs.find((t) => t.id === editorStore.activeTabId)?.filePath, file.path)
+        const isActive = isSameFilePath(tabs.find((t) => t.id === activeTabId)?.filePath, file.path)
         return (
           <button
             key={file.path}
@@ -457,13 +401,12 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
               e.preventDefault()
               setContextMenu({ x: e.clientX, y: e.clientY, file })
             }}
-            className={`group w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-caption text-left transition-all duration-150 truncate ${
+            className={`group w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-caption text-left truncate ${
               isActive
                 ? 'bg-gm-primary-subtle text-gm-text font-bold'
                 : 'text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover'
             }`}
           >
-            <FileIconSVG icon={getFileIcon(file.name, 'file')} expanded={false} />
             {renamingPath === file.path ? (
               <input
                 autoFocus
@@ -483,20 +426,21 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
                 className="min-w-0 flex-1 rounded border border-gm-primary bg-gm-canvas px-1 py-0.5 outline-none"
               />
             ) : (
-              <span className="truncate">{file.name}</span>
+              <TruncatedText text={file.name} className="flex-1" />
             )}
-            <span
-              onClick={(e) => {
-                e.stopPropagation()
-                removeRecentFile(file.path)
-              }}
-              className="ml-auto flex-shrink-0 rounded-full p-0.5 opacity-0 transition-opacity hover:bg-gm-surface-overlay group-hover:opacity-100"
-              title="删除最近记录"
-            >
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M18 6L6 18M6 6l12 12" />
-              </svg>
-            </span>
+            <Tooltip content="删除最近记录" className="ml-auto flex-shrink-0">
+              <span
+                onClick={(e) => {
+                  e.stopPropagation()
+                  removeRecentFile(file.path)
+                }}
+                className="block rounded-full p-0.5 opacity-0 transition-opacity hover:bg-gm-surface-overlay group-hover:opacity-100"
+              >
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M18 6L6 18M6 6l12 12" />
+                </svg>
+              </span>
+            </Tooltip>
           </button>
         )
       })}

@@ -134,31 +134,25 @@ export function ManualToolToggle({ onChange, disabled = false, resetKey }: Manua
         return (
           <div key={option.id} className="relative group">
             <Button
-              type="primary"
+              type="default"
               size="small"
               disabled={disabled || !isEnabled}
               onClick={() => toggleCapability(option.id)}
               icon={option.icon}
               className={`
-                !px-2 !py-1 !h-7 !text-micro !font-medium
+                gm-manual-tool-toggle !px-2 !py-1 !h-7 !text-micro !font-medium
                 ${isSelected
-                  ? '!translate-y-[2px] !shadow-[0_1px_0_0_#bdaea0] !text-gm-primary'
+                  ? 'gm-manual-tool-toggle--active'
                   : ''
                 }
                 ${!isEnabled ? '!opacity-50 !cursor-not-allowed' : ''}
               `}
-              style={isSelected ? {
-                transform: 'translateY(2px)',
-                boxShadow: '0 1px 0 0 #bdaea0',
-                color: 'var(--gm-primary)',
-              } : undefined}
             >
               {option.label}
             </Button>
             {/* Tooltip */}
-            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 rounded-lg bg-gm-text text-white text-micro whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+            <div className="gm-manual-tool-tooltip absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 rounded-lg text-micro whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
               {isEnabled ? option.tooltip : `${option.label}不可用`}
-              <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-gm-text" />
             </div>
           </div>
         )

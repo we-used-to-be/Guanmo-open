@@ -1,7 +1,7 @@
 import { registerTool } from './toolRegistry'
 import { searchRelevant, getKnowledgeDocumentStates, getKnowledgeIndexStateSummary, getRagStatsAsync } from '@/services/rag/pipeline'
 import type { SearchResult } from '@/services/rag/types'
-import { webSearch, buildSearchContext, updateSearchConfig } from '@/services/webSearch'
+import { webSearch, updateSearchConfig, type SearchResponse } from '@/services/webSearch'
 import { useEditorStore, type Tab } from '@/stores/editorStore'
 import { useChatStore } from '@/stores/chatStore'
 import { getAgentScopeContext } from '@/services/aiScope'
@@ -13,7 +13,14 @@ import { readFile } from '@/hooks/useTauri'
 import type { TextRange } from './editTarget'
 import { normalizeFilePath } from '@/services/pathIdentity'
 import { useSettingsStore } from '@/stores/settingsStore'
-import { getEmbeddingClient, isEmbeddingReady } from '@/services/ai/aiClient'
+import { useAppStore } from '@/stores/appStore'
+import { getEmbeddingClient, getEmbeddingConfig, isEmbeddingReady } from '@/services/ai/aiClient'
+import {
+  buildSelectionContextWindow,
+  SELECTION_CONTEXT_DIRECTIONS,
+  serializeSelectionContextWindow,
+  type SelectionContextDirection,
+} from './selectionContext'
 
 function validateString(value: unknown, name: string): string | null {
   if (!value || typeof value !== 'string') {
@@ -49,6 +56,14 @@ function canEditPathInContextTags(path: string, contextTags: ContextTag[]): bool
   )
 }
 
+function hasFileEditTag(path: string, contextTags: ContextTag[]): boolean {
+  return contextTags.some((tag) =>
+    tag.type === 'file'
+    && typeof tag.filePath === 'string'
+    && normalizeFilePath(tag.filePath) === normalizeFilePath(path)
+  )
+}
+
 interface AuthorizedContextTag {
   tag: ContextTag
   sourceMessage?: ChatMessage
@@ -77,6 +92,30 @@ function getAuthorizedContextTags(): AuthorizedContextTag[] {
   }
 
   return getRecentContextTags()
+}
+
+function getCurrentEditTargets() {
+  return getAgentScopeContext()?.editTargets || []
+}
+
+function findEditTargetById(targetId: unknown) {
+  if (typeof targetId !== 'string' || !targetId.trim()) return undefined
+  return getCurrentEditTargets().find((target) => target.id === targetId)
+}
+
+function findContextTagForEditTarget(targetId: unknown): ContextTag | undefined {
+  const target = findEditTargetById(targetId)
+  if (!target) return undefined
+
+  return getAuthorizedContextTags()
+    .map((entry) => entry.tag)
+    .find((tag) =>
+      tag.type === target.type
+      && typeof tag.filePath === 'string'
+      && normalizeFilePath(tag.filePath) === normalizeFilePath(target.filePath)
+      && (target.type !== 'selection'
+        || (tag.selectionFrom === target.selectionFrom && tag.selectionTo === target.selectionTo))
+    )
 }
 
 function getRecentContextTags(): AuthorizedContextTag[] {
@@ -152,6 +191,15 @@ function limitText(content: string, maxLength: number): string {
   return `${content.slice(0, maxLength)}\n... (已截断，共 ${content.length} 字符)`
 }
 
+function countLines(content: string): number {
+  if (!content) return 1
+  return content.split(/\r\n|\r|\n/).length
+}
+
+function fileNameFromPath(filePath: string): string {
+  return filePath.split(/[/\\]/).pop() || filePath
+}
+
 function formatKnowledgeSearchResults(results: SearchResult[]): string {
   if (results.length === 0) return '未找到相关内容。'
 
@@ -211,10 +259,27 @@ async function formatKnowledgeSearchResultsStructured(results: SearchResult[]): 
   }, null, 2)
 }
 
+function formatWebSearchResultsStructured(response: SearchResponse): string {
+  return JSON.stringify({
+    status: response.results.length > 0 ? 'ok' : 'empty',
+    query: response.query,
+    totalResults: response.totalResults,
+    usage: 'Web search results are external sources. Do not treat them as local knowledge-base facts.',
+    results: response.results.map((result, index) => ({
+      sourceIndex: index + 1,
+      title: result.title,
+      url: result.url,
+      siteName: result.siteName,
+      publishedAt: result.publishedAt,
+      snippet: limitText(result.snippet, 800),
+    })),
+  }, null, 2)
+}
+
 export function registerBuiltinTools() {
   registerTool({
     name: 'search_knowledge',
-    description: '在本地 RAG 数据库中检索已索引文档内容。可查询未打开、未添加到聊天框上下文的文档；工具返回文件路径、行号、标题路径和正文片段，可直接用于基于知识库的问答、归纳和局部总结。只有需要精确读取整份原文或改写文件时，才要求用户添加目标文件上下文。',
+    description: '在本地 RAG 数据库中检索已索引文档内容。可查询未打开、未添加到聊天框上下文的文档；工具返回文件路径、行号、标题路径和正文片段，可直接用于基于知识库的问答、归纳和局部总结。只有需要精确读取整份原文或改写文件时，才要求用户添加目标文件上下文。注意：如果查询超时或返回空结果，可能是数据库仍在加载过程中（应用启动后首次查询时较常见），请告知用户稍后重试。',
     parameters: [
       { name: 'query', type: 'string', description: '搜索查询', required: true },
       { name: 'topK', type: 'number', description: '返回结果数量（1-20），默认 5', required: false },
@@ -231,6 +296,111 @@ export function registerBuiltinTools() {
         signal: context?.signal,
       })
       return formatKnowledgeSearchResultsStructured(results)
+    },
+  })
+
+  registerTool({
+    name: 'read_selection_context',
+    description: '读取本轮 selection 标签附近的 AST 语义原子。direction=auto 按相关性读取，before/after/both 按指定方向和文档顺序读取；框选 Markdown 标题并读取 after 时，范围限定为该标题及其子标题正文。Level 1 总预算 700 tokens；仅当信息不足时再调用 Level 2，累计扩展到 1400 tokens 且只返回新增语义原子。禁止跳过 Level 1、重复读取同一级或直接读取全文。',
+    parameters: [
+      { name: 'targetId', type: 'string', description: '本轮 selection 目标 ID；只有一个选区目标时可省略', required: false },
+      { name: 'level', type: 'number', description: '递进读取层级，只能是 1 或 2，默认 1', required: false },
+      { name: 'direction', type: 'string', description: '读取方向：auto、before、after 或 both，默认 auto', required: false },
+    ],
+    execute: async (args) => {
+      if (args.level !== undefined && args.level !== 1 && args.level !== 2) {
+        return '读取选区上下文失败：level 只能是 1 或 2。'
+      }
+      const level: 1 | 2 = args.level === 2 ? 2 : 1
+      if (args.direction !== undefined && !SELECTION_CONTEXT_DIRECTIONS.includes(args.direction as SelectionContextDirection)) {
+        return '读取选区上下文失败：direction 只能是 auto、before、after 或 both。'
+      }
+      const direction = (args.direction || 'auto') as SelectionContextDirection
+      const selectionTargets = getCurrentEditTargets().filter((target) => target.type === 'selection')
+      const target = args.targetId
+        ? findEditTargetById(args.targetId)
+        : selectionTargets.length === 1 ? selectionTargets[0] : undefined
+
+      if (!target || target.type !== 'selection') {
+        return selectionTargets.length > 1
+          ? '读取选区上下文失败：存在多个选区目标，请提供 targetId。'
+          : '读取选区上下文失败：本轮没有可用的 selection 标签。'
+      }
+
+      const tag = findContextTagForEditTarget(target.id)
+      const initialRange = tag ? getSelectionRange(tag) : undefined
+      if (!tag?.filePath || !initialRange) {
+        return '读取选区上下文失败：selection 标签缺少文件路径或精确字符范围。'
+      }
+
+      const openTab = getOpenTabByPath(tag.filePath)
+      let content: string
+      let range = initialRange
+
+      if (openTab) {
+        content = openTab.content
+        range = getCurrentSelectionTargetRange(
+          content,
+          initialRange,
+          getLatestAppliedRangeForSelection(openTab.id, tag),
+        ) || initialRange
+      } else {
+        try {
+          content = await readFile(tag.filePath)
+        } catch (readErr) {
+          const message = readErr instanceof Error ? readErr.message : String(readErr)
+          return `读取选区上下文失败：${message}`
+        }
+      }
+
+      const contextWindow = buildSelectionContextWindow(
+        content,
+        range,
+        /\.(?:md|markdown|mdx)$/i.test(tag.filePath),
+        level,
+        direction,
+      )
+      if (!contextWindow) {
+        return '读取选区上下文失败：选区范围已失效，或无法建立稳定的语义 Chunk。'
+      }
+
+      if (contextWindow.diagnostics.emptyReason === 'heading-without-content') {
+        return '读取选区上下文失败：所选标题下没有可读取的正文。'
+      }
+
+      if (level === 2 && contextWindow.chunks.length === 0) {
+        return '读取选区上下文失败：Level 2 没有新的可用语义块。'
+      }
+
+      const contextSummary = contextWindow.chunks
+        .map((chunk, index) => {
+          const heading = chunk.headingPath.length > 0 ? ` [${chunk.headingPath.join(' > ')}]` : ''
+          return `#${index + 1} ${chunk.role}${heading}\n${chunk.content}`
+        })
+        .join('\n\n')
+      console.groupCollapsed(`[read_selection_context] Level ${level} 上下文原文汇总：${tag.filePath}`)
+      console.log(contextSummary)
+      console.log(`累计上下文约 ${contextWindow.diagnostics.totalTokens} tokens`)
+      console.table(contextWindow.diagnostics.candidates.map((candidate) => ({
+        role: candidate.role,
+        score: candidate.score,
+        distance: candidate.distance,
+        selected: candidate.selected,
+        reason: candidate.reason,
+        preview: candidate.content.slice(0, 120),
+      })))
+      console.groupEnd()
+
+      const parsedWindow = JSON.parse(serializeSelectionContextWindow(contextWindow))
+      return JSON.stringify({
+        ...parsedWindow,
+        source: {
+          kind: 'selection_context',
+          filePath: tag.filePath,
+          fileName: fileNameFromPath(tag.filePath),
+          title: tag.title,
+        },
+      })
     },
   })
 
@@ -255,12 +425,40 @@ export function registerBuiltinTools() {
 
       const openTab = getOpenTabByPath(path)
       if (openTab) {
-        return `文件路径: ${path}\n来源: 当前打开标签页的最新编辑内容\n---\n${limitText(openTab.content, maxLength)}`
+        const returnedContent = openTab.content.slice(0, maxLength)
+        const truncated = openTab.content.length > maxLength
+        return JSON.stringify({
+          source: {
+            kind: 'context_file',
+            filePath: path,
+            fileName: fileNameFromPath(path),
+            title: openTab.title,
+            startLine: 1,
+            endLine: countLines(returnedContent),
+            truncated,
+            totalLines: countLines(openTab.content),
+          },
+          content: `文件路径: ${path}\n来源: 当前打开标签页的最新编辑内容\n读取范围: L1-${countLines(returnedContent)}${truncated ? `（已截断，全文 ${countLines(openTab.content)} 行）` : ''}\n---\n${limitText(openTab.content, maxLength)}`,
+        })
       }
 
       try {
         const content = await readFile(path)
-        return `文件路径: ${path}\n来源: 磁盘文件内容\n---\n${limitText(content, maxLength)}`
+        const returnedContent = content.slice(0, maxLength)
+        const truncated = content.length > maxLength
+        return JSON.stringify({
+          source: {
+            kind: 'context_file',
+            filePath: path,
+            fileName: fileNameFromPath(path),
+            title: fileNameFromPath(path),
+            startLine: 1,
+            endLine: countLines(returnedContent),
+            truncated,
+            totalLines: countLines(content),
+          },
+          content: `文件路径: ${path}\n来源: 磁盘文件内容\n读取范围: L1-${countLines(returnedContent)}${truncated ? `（已截断，全文 ${countLines(content)} 行）` : ''}\n---\n${limitText(content, maxLength)}`,
+        })
       } catch (readErr) {
         const msg = readErr instanceof Error ? readErr.message : String(readErr)
         return `读取文件失败: ${msg}`
@@ -351,7 +549,7 @@ export function registerBuiltinTools() {
       }
       updateSearchConfig(useSettingsStore.getState().webSearch)
       const response = await webSearch(args.query as string, context?.signal)
-      return buildSearchContext(response) || '未找到搜索结果。'
+      return formatWebSearchResultsStructured(response)
     },
   })
 
@@ -454,6 +652,13 @@ export function registerBuiltinTools() {
           source: memory.source,
           locked: memory.locked,
           content: memory.content,
+          scopeType: memory.scopeType || 'global',
+          scopeKey: memory.scopeKey,
+          subject: memory.subject,
+          factKey: memory.factKey,
+          factValue: memory.factValue,
+          confidence: memory.confidence,
+          supersedesId: memory.supersedesId,
           updatedAt: memory.updatedAt,
         })),
       }, null, 2)
@@ -461,35 +666,63 @@ export function registerBuiltinTools() {
   })
 
   registerTool({
+    name: 'list_current_edit_targets',
+    description: '列出本轮用户新添加的可编辑 selection/file 目标。返回的 targetId 是 replace_current_tab_text 的首选授权参数；没有目标时不得生成修改确认卡。',
+    parameters: [],
+    execute: async () => {
+      const targets = getCurrentEditTargets()
+      return JSON.stringify({
+        status: targets.length > 0 ? 'ok' : 'empty',
+        usage: targets.length > 0
+          ? '用户本轮已经添加可编辑目标。修改文本时调用 replace_current_tab_text，并优先传入 targetId。'
+          : '本轮没有新的 selection/file 标签。用户要求修改文本时，请提示重新添加目标标签。',
+        targets,
+      }, null, 2)
+    },
+  })
+
+  registerTool({
     name: 'replace_current_tab_text',
-    description: '为用户本轮明确添加的 file/selection 标签生成文本替换确认卡片。必须传入目标文件 path；selection 会由工具读取授权范围内当前完整原文，整文替换应设置 replaceWholeDocument=true。工具不会直接写入文件。',
+    description: '为用户本轮明确添加的 file/selection 标签生成文本替换确认卡片。必须传入目标文件 path；selection 会由工具读取授权范围内当前完整原文，整文替换应设置 replaceWholeDocument=true。工具不会直接写入文件。确认卡片应包含简短 changeSummary。',
     parameters: [
+      { name: 'targetId', type: 'string', description: '本轮 list_current_edit_targets 返回的可编辑目标 ID。优先使用；提供后工具会自动解析 path 和 selection 范围', required: false },
       { name: 'oldText', type: 'string', description: 'file 片段替换时要被替换的原文，必须与文档内容完全匹配；selection 修改和整文替换时省略', required: false },
       { name: 'newText', type: 'string', description: '替换后的新文本', required: true },
-      { name: 'path', type: 'string', description: '目标文件绝对路径；必须是用户本轮添加到聊天框且已打开的 file 或 selection 标签', required: true },
+      { name: 'path', type: 'string', description: '兼容旧格式的目标文件绝对路径；优先使用 targetId', required: false },
       { name: 'replaceWholeDocument', type: 'boolean', description: '是否替换目标标签页整份内容；为 true 时由工具自动使用完整原文', required: false },
+      { name: 'changeSummary', type: 'string', description: '简短变更摘要，例如：调整语气、压缩重复、优化标题层级、保留原意', required: false },
     ],
     execute: async (args) => {
       const newTextErr = validateString(args.newText, 'newText')
       if (newTextErr) return newTextErr
 
       const state = useEditorStore.getState()
-      const path = typeof args.path === 'string' && args.path.trim() ? args.path : undefined
+      const targetTag = findContextTagForEditTarget(args.targetId)
+      const target = findEditTargetById(args.targetId)
+      if (args.targetId && !targetTag) {
+        return '修改被拒绝：targetId 不属于本轮可编辑 selection/file 标签。请重新添加要修改的标签后再试。'
+      }
+      const path = target?.filePath || (typeof args.path === 'string' && args.path.trim() ? args.path : undefined)
       if (!path) {
-        return '修改被拒绝：必须提供用户本轮添加的文件或选区标签路径。'
+        return '修改被拒绝：必须提供本轮可编辑目标的 targetId，或兼容旧格式的 path。'
       }
       let tab: Tab | undefined
       let targetedSelection: ContextTag | undefined
 
       const contextTags = getAuthorizedContextTags().map((entry) => entry.tag)
-      if (!canEditPathInContextTags(path, contextTags)) {
-        return '修改被拒绝：目标文件没有作为本轮文件或选中文本标签添加到聊天框。请先添加该文件或选区。'
+      if (!targetTag && !canEditPathInContextTags(path, contextTags)) {
+        if (contextTags.length === 0) {
+          return '修改被拒绝：本轮没有新添加的 file 或 selection 标签。请先把要修改的文件或选区添加到聊天框。'
+        }
+        return `修改被拒绝：目标路径「${path}」不是本轮新添加的 file 或 selection 标签。请确认标签指向同一个已打开文件。`
       }
-      targetedSelection = [...contextTags].reverse().find(
-        (tag) => tag.type === 'selection'
-          && tag.filePath
-          && normalizeFilePath(tag.filePath) === normalizeFilePath(path)
-      )
+      targetedSelection = targetTag
+        ? (targetTag.type === 'selection' ? targetTag : undefined)
+        : [...contextTags].reverse().find(
+          (tag) => tag.type === 'selection'
+            && tag.filePath
+            && normalizeFilePath(tag.filePath) === normalizeFilePath(path)
+        )
       tab = state.tabs.find((item) => item.filePath && normalizeFilePath(item.filePath) === normalizeFilePath(path))
       if (!tab) {
         return '修改被拒绝：目标文件尚未在标签页打开。请先打开文件后重新请求修改。'
@@ -497,8 +730,17 @@ export function registerBuiltinTools() {
 
       if (!tab) return '当前没有打开的编辑标签页。'
 
-      const replaceWholeDocument = args.replaceWholeDocument === true
+      const replaceWholeDocumentRequested = args.replaceWholeDocument === true
       const selectionRange = targetedSelection && getSelectionRange(targetedSelection)
+      const selectionCoversWholeDocument =
+        Boolean(selectionRange && selectionRange.from === 0 && selectionRange.to === tab.content.length)
+      if (replaceWholeDocumentRequested && !hasFileEditTag(path, contextTags) && !selectionCoversWholeDocument) {
+        return '整文替换被拒绝：整份文件修改必须添加 file 标签；selection 标签只授权修改选区范围。'
+      }
+      const replaceWholeDocument = replaceWholeDocumentRequested && hasFileEditTag(path, contextTags) && !targetedSelection
+      if (targetedSelection && !selectionRange) {
+        return '替换失败：本轮 selection 标签缺少精确字符范围。请重新框选目标文本后再次发起修改。'
+      }
       if (!replaceWholeDocument && !selectionRange) {
         const oldTextErr = validateString(args.oldText, 'oldText')
         if (oldTextErr) return oldTextErr
@@ -517,17 +759,23 @@ export function registerBuiltinTools() {
       } else {
         const index = tab.content.indexOf(oldText)
         if (index < 0) {
-          return '替换失败：当前文档中没有找到完全匹配的 oldText。请先缩小到一个准确的段落或句子。'
+          return '替换失败：当前文档中没有找到完全匹配的 oldText。请基于目标文件当前内容重新生成确认卡，或让用户改用 selection 标签框选目标文本。'
+        }
+        const nextIndex = tab.content.indexOf(oldText, index + oldText.length)
+        if (nextIndex >= 0) {
+          return '替换失败：oldText 在当前文档中出现多次，无法安全判断要修改哪一处。请让用户框选唯一目标文本后重试。'
         }
         replaceRange = { from: index, to: index + oldText.length }
       }
 
       const newText = args.newText as string
-      const changeSummary = replaceWholeDocument
+      const providedSummary = typeof args.changeSummary === 'string' ? args.changeSummary.trim() : ''
+      const fallbackSummary = replaceWholeDocument
         ? `整文替换：将替换当前文档全部 ${oldText.length} 字符`
         : oldText.length >= 1200
           ? `大段替换：将替换 ${oldText.length} 字符`
           : `将替换 ${oldText.length} 字符`
+      const changeSummary = providedSummary || fallbackSummary
       // 返回待确认内容，不直接修改编辑器
       return JSON.stringify({
         __pendingEdit: true,
@@ -601,10 +849,18 @@ export function registerBuiltinTools() {
       const embedding = isEmbeddingReady()
         ? async (text: string, signal?: AbortSignal) => (await getEmbeddingClient().embedding(text, signal)).embedding
         : undefined
+      const batchEmbedding = isEmbeddingReady()
+        ? async (texts: string[], signal?: AbortSignal) => getEmbeddingClient().batchEmbedding(texts, signal)
+        : undefined
+      const workspacePath = useAppStore.getState().workspacePath
       const memories = await searchMemories(args.query as string, {
         mode: 'strong',
         topK,
         embedding,
+        batchEmbedding,
+        scopeType: workspacePath ? 'project' : 'global',
+        scopeKey: workspacePath,
+        embeddingModel: getEmbeddingConfig()?.embeddingModel,
         signal: context?.signal,
       })
       return buildMemoryContext(memories) || '未找到相关记忆。'
@@ -625,7 +881,9 @@ export function registerBuiltinTools() {
       const category = validCategories.includes(args.category as string)
         ? (args.category as string)
         : 'preference'
-      const result = await upsertExplicitMemory(args.content as string, category)
+      const result = await upsertExplicitMemory(args.content as string, category, {
+        workspacePath: useAppStore.getState().workspacePath,
+      })
       return `${result.action === 'updated' ? '已更新已有记忆' : '已保存新记忆'}：「${result.memory.content}」（分类：${result.memory.category}）`
     },
   })

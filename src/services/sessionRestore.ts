@@ -1,23 +1,42 @@
-import { exists } from '@tauri-apps/plugin-fs'
 import type { Tab } from '@/stores/editorStore'
+import { readRememberedFile } from '@/services/persistedFileAccess'
 
 /**
- * 验证持久化的标签页，移除文件不存在的标签
+ * 恢复持久化标签页。
+ * 未修改的磁盘文件刷新为当前文件内容；有未保存修改的标签保留持久化内容，避免丢失草稿。
  */
-export async function validatePersistedTabs(tabs: Tab[]): Promise<Tab[]> {
-  const valid: Tab[] = []
+export async function restorePersistedTabs(tabs: Tab[]): Promise<Tab[]> {
+  const restored: Tab[] = []
+
   for (const tab of tabs) {
     if (!tab.filePath) {
-      valid.push(tab)
+      restored.push(tab)
       continue
     }
+
     try {
-      if (await exists(tab.filePath)) {
-        valid.push(tab)
+      const diskContent = await readRememberedFile(tab.filePath)
+      if (tab.modified) {
+        restored.push({
+          ...tab,
+          savedContent: diskContent,
+          modified: tab.content !== diskContent,
+        })
+      } else {
+        restored.push({
+          ...tab,
+          content: diskContent,
+          savedContent: diskContent,
+          originalContent: diskContent,
+          modified: false,
+        })
       }
-    } catch {
-      // 文件不存在，跳过
+    } catch (error) {
+      console.warn(`[SessionRestore] Failed to read file ${tab.filePath}:`, error)
+      // 文件读取失败时保留标签，使用持久化的内容
+      restored.push(tab)
     }
   }
-  return valid
+
+  return restored
 }

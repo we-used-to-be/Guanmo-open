@@ -1,12 +1,13 @@
-import { useEffect, useRef, useMemo } from 'react'
+import { useEffect, useLayoutEffect, useRef, useMemo } from 'react'
 import { EditorState } from '@codemirror/state'
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap, indentWithTab, undoDepth, redoDepth } from '@codemirror/commands'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { languages } from '@codemirror/language-data'
 import { highlightSelectionMatches } from '@codemirror/search'
-import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, indentUnit } from '@codemirror/language'
+import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, indentUnit, HighlightStyle } from '@codemirror/language'
 import { autocompletion, completionKeymap } from '@codemirror/autocomplete'
+import { tags } from '@lezer/highlight'
 import { useEditorStore } from '@/stores/editorStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { setActiveEditorView } from '@/services/editorViewRef'
@@ -20,6 +21,7 @@ interface CodeMirrorEditorProps {
   viewRef?: React.MutableRefObject<EditorView | null>
   documentKey?: string | null
   tabId?: string | null
+  initialScrollTop?: number
 }
 
 function buildTheme(fontSize: number, lineHeight: number, fontFamily: string) {
@@ -41,10 +43,10 @@ function buildTheme(fontSize: number, lineHeight: number, fontFamily: string) {
       borderLeftWidth: '2px',
     },
     '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection': {
-      backgroundColor: 'rgba(25, 200, 185, 0.15) !important',
+      backgroundColor: 'var(--gm-editor-selection) !important',
     },
     '.cm-activeLine': {
-      backgroundColor: 'rgba(25, 200, 185, 0.05)',
+      backgroundColor: 'var(--gm-editor-line-highlight)',
     },
     '.cm-gutters': {
       backgroundColor: 'var(--gm-canvas)',
@@ -60,28 +62,28 @@ function buildTheme(fontSize: number, lineHeight: number, fontFamily: string) {
       color: 'var(--gm-text-tertiary)',
     },
     '.cm-header': {
-      color: 'var(--gm-text)',
+      color: 'var(--gm-editor-heading)',
       fontWeight: '700',
     },
     '.cm-header-1': { fontSize: '1.4em' },
     '.cm-header-2': { fontSize: '1.25em' },
     '.cm-header-3': { fontSize: '1.15em' },
     '.cm-emphasis': { fontStyle: 'italic', color: 'var(--gm-text)' },
-    '.cm-strong': { fontWeight: '700', color: 'var(--gm-text)' },
+    '.cm-strong': { fontWeight: '700', color: 'var(--gm-editor-heading)' },
     '.cm-strikethrough': { textDecoration: 'line-through', color: 'var(--gm-text-secondary)' },
-    '.cm-url': { color: 'var(--gm-primary)', textDecoration: 'underline' },
-    '.cm-link': { color: 'var(--gm-primary)' },
-    '.cm-quote': { color: 'var(--gm-text-secondary)', fontStyle: 'italic' },
-    '.cm-list': { color: 'var(--gm-text)' },
+    '.cm-url': { color: 'var(--gm-editor-link)', textDecoration: 'underline' },
+    '.cm-link': { color: 'var(--gm-editor-link)' },
+    '.cm-quote': { color: 'var(--gm-editor-quote)', fontStyle: 'italic' },
+    '.cm-list': { color: 'var(--gm-editor-list)', fontWeight: '600' },
     '.cm-hr': { color: 'var(--gm-border)' },
     '.cm-inline-code': {
       backgroundColor: 'var(--gm-surface-elevated)',
-      color: 'var(--gm-text)',
+      color: 'var(--gm-editor-code)',
       padding: '1px 6px',
       borderRadius: '12px',
       fontSize: '0.9em',
     },
-    '.cm-codeblock': { backgroundColor: 'var(--gm-surface-elevated)', color: 'var(--gm-text)' },
+    '.cm-codeblock': { backgroundColor: 'var(--gm-code-bg)', color: 'var(--gm-code-text)' },
     '.cm-tooltip': {
       backgroundColor: 'var(--gm-surface)',
       border: '1px solid var(--gm-border)',
@@ -109,6 +111,19 @@ function buildTheme(fontSize: number, lineHeight: number, fontFamily: string) {
   })
 }
 
+const markdownHighlightStyle = HighlightStyle.define([
+  { tag: tags.heading, color: 'var(--gm-editor-heading)', fontWeight: '700' },
+  { tag: tags.quote, color: 'var(--gm-editor-quote)', fontStyle: 'italic' },
+  { tag: tags.monospace, color: 'var(--gm-editor-code)' },
+  { tag: tags.link, color: 'var(--gm-editor-link)' },
+  { tag: tags.url, color: 'var(--gm-editor-link)', textDecoration: 'underline' },
+  { tag: tags.list, color: 'var(--gm-editor-list)', fontWeight: '600' },
+  { tag: tags.strong, color: 'var(--gm-editor-heading)', fontWeight: '700' },
+  { tag: tags.emphasis, fontStyle: 'italic' },
+  { tag: tags.strikethrough, color: 'var(--gm-text-secondary)', textDecoration: 'line-through' },
+  { tag: tags.processingInstruction, color: 'var(--gm-text-tertiary)' },
+])
+
 const saveKeymap = keymap.of([
   {
     key: 'Ctrl-s',
@@ -120,12 +135,14 @@ const saveKeymap = keymap.of([
   },
 ])
 
-export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, viewRef: externalViewRef, documentKey, tabId }: CodeMirrorEditorProps) {
+export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, viewRef: externalViewRef, documentKey, tabId, initialScrollTop }: CodeMirrorEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const internalViewRef = useRef<EditorView | null>(null)
   const viewRef = externalViewRef || internalViewRef
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
+  const lastEmittedContentRef = useRef(content)
+  const previousDocumentKeyRef = useRef(documentKey)
 
   const onSaveRef = useRef(onSave)
   onSaveRef.current = onSave
@@ -154,11 +171,15 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
   }, [])
 
   // Recreate editor when settings change
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!containerRef.current) return
 
-    // Save current doc content before recreating
-    const currentDoc = viewRef.current?.state.doc.toString() ?? content
+    const documentChanged = previousDocumentKeyRef.current !== documentKey
+    previousDocumentKeyRef.current = documentKey
+    const currentDoc = documentChanged
+      ? content
+      : viewRef.current?.state.doc.toString() ?? content
+    lastEmittedContentRef.current = currentDoc
 
     // Destroy old editor
     if (viewRef.current) {
@@ -168,7 +189,9 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
 
     const updateListener = EditorView.updateListener.of((update) => {
       if (update.docChanged) {
-        onChangeRef.current(update.state.doc.toString())
+        const nextContent = update.state.doc.toString()
+        lastEmittedContentRef.current = nextContent
+        onChangeRef.current(nextContent)
       }
       // 更新 undo/redo 状态
       const { setCanUndo, setCanRedo } = useEditorHistoryStore.getState()
@@ -186,6 +209,7 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
         bracketMatching(),
         autocompletion(),
         highlightSelectionMatches(),
+        syntaxHighlighting(markdownHighlightStyle),
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
         markdown({ base: markdownLanguage, codeLanguages: languages }),
         indentUnit.of(' '.repeat(editorSettings.tabSize)),
@@ -232,6 +256,9 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
     })
 
     viewRef.current = view
+    if (typeof initialScrollTop === 'number') {
+      view.scrollDOM.scrollTop = initialScrollTop
+    }
     setActiveEditorView(view)
     const { setCanUndo, setCanRedo } = useEditorHistoryStore.getState()
     setCanUndo(false)
@@ -250,11 +277,13 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
   useEffect(() => {
     const view = viewRef.current
     if (!view) return
+    if (content === lastEmittedContentRef.current) return
     const currentContent = view.state.doc.toString()
     if (content !== currentContent) {
       view.dispatch({
         changes: { from: 0, to: currentContent.length, insert: content },
       })
+      lastEmittedContentRef.current = content
     }
   }, [content])
 

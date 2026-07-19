@@ -4,7 +4,7 @@ import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
 import { openFile, saveFile } from '@/services/fileSystem'
 import { exportMarkdownAsHtml } from '@/services/markdownExport'
-import { indexMarkdownDocument } from '@/services/rag/indexer'
+import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { SHORTCUTS } from '@/services/shortcuts'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { toast } from '@/services/toast'
@@ -50,7 +50,7 @@ export function CommandPalette({ open, onClose, mode = 'commands' }: CommandPale
       } else {
         state.addTab(file.path, file.name, file.content)
       }
-      indexMarkdownDocument(file.path, file.name, file.content)
+      scheduleMarkdownDocumentIndex(file.path, file.name, file.content)
     } catch (err) {
       console.error('Open file failed:', err)
     }
@@ -64,11 +64,25 @@ export function CommandPalette({ open, onClose, mode = 'commands' }: CommandPale
     try {
       if (tab.filePath) {
         await saveFile(tab.filePath, tab.content)
-        indexMarkdownDocument(tab.filePath, tab.title, tab.content)
+        scheduleMarkdownDocumentIndex(tab.filePath, tab.title, tab.content)
+        useEditorStore.setState((s) => ({
+          tabs: s.tabs.map((t) =>
+            t.id === tab.id ? { ...t, savedContent: tab.content, modified: false } : t
+          ),
+        }))
       } else {
         const { saveFileAs } = await import('@/services/fileSystem')
         const result = await saveFileAs(tab.content)
-        if (result) indexMarkdownDocument(result.path, result.name, result.content)
+        if (result) {
+          scheduleMarkdownDocumentIndex(result.path, result.name, result.content)
+          useEditorStore.setState((s) => ({
+            tabs: s.tabs.map((t) =>
+              t.id === tab.id
+                ? { ...t, filePath: result.path, title: result.name, savedContent: result.content, modified: false }
+                : t
+            ),
+          }))
+        }
       }
       toast.success('已保存')
     } catch (err) {

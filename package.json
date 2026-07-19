@@ -1,73 +1,95 @@
 {
-    "name":  "guanmo",
-    "private":  false,
-    "version":  "0.4.0",
-    "description":  "AI-powered Markdown knowledge management desktop application built with Tauri and React.",
-    "license":  "MIT",
-    "repository":  {
-                       "type":  "git",
-                       "url":  "git+https://github.com/we-used-to-be/Guanmo-open.git"
-                   },
-    "homepage":  "https://github.com/we-used-to-be/Guanmo-open#readme",
-    "bugs":  {
-                 "url":  "https://github.com/we-used-to-be/Guanmo-open/issues"
-             },
-    "keywords":  [
-                     "tauri",
-                     "markdown",
-                     "knowledge-management",
-                     "rag",
-                     "ai"
-                 ],
-    "engines":  {
-                    "node":  ">=18"
-                },
-    "type":  "module",
-    "scripts":  {
-                    "dev":  "vite",
-                    "build":  "tsc -b \u0026\u0026 vite build",
-                    "test:agent-parser":  "node scripts/run-agent-parser-check.mjs",
-                    "check:paths":  "node scripts/check-paths.mjs",
-                    "preview":  "vite preview",
-                    "tauri":  "tauri"
-                },
-    "dependencies":  {
-                         "@codemirror/autocomplete":  "^6.20.2",
-                         "@codemirror/commands":  "^6.10.3",
-                         "@codemirror/lang-markdown":  "^6.5.0",
-                         "@codemirror/language-data":  "^6.5.2",
-                         "@codemirror/search":  "^6.7.0",
-                         "@codemirror/state":  "^6.6.0",
-                         "@codemirror/view":  "^6.43.0",
-                         "@tauri-apps/api":  "^2.11.0",
-                         "@tauri-apps/plugin-dialog":  "^2.7.1",
-                         "@tauri-apps/plugin-fs":  "^2.5.1",
-                         "@tauri-apps/plugin-shell":  "^2.3.5",
-                         "@tauri-apps/plugin-sql":  "^2.4.0",
-                         "codemirror":  "^6.0.2",
-                         "katex":  "^0.16.47",
-                         "mermaid":  "^11.15.0",
-                         "react":  "^18.3.1",
-                         "react-dom":  "^18.3.1",
-                         "react-markdown":  "^10.1.0",
-                         "rehype-highlight":  "^7.0.2",
-                         "rehype-katex":  "^7.0.1",
-                         "rehype-react":  "^8.0.0",
-                         "remark":  "^15.0.1",
-                         "remark-gfm":  "^4.0.1",
-                         "remark-math":  "^6.0.0",
-                         "remark-rehype":  "^11.1.2",
-                         "zustand":  "^5.0.3"
-                     },
-    "devDependencies":  {
-                            "@tauri-apps/cli":  "^2.0.0",
-                            "@types/react":  "^18.3.18",
-                            "@types/react-dom":  "^18.3.5",
-                            "@vitejs/plugin-react":  "^4.3.4",
-                            "autoprefixer":  "^10.4.20",
-                            "postcss":  "^8.5.1",
-                            "tailwindcss":  "^3.4.17",
-                            "typescript":  "^5.7.3",
-                            "vite":  "^6.0.7"
-                        }
+    "name": "guanmo",
+    "private": false,
+    "version": "1.2.3",
+    "description": "AI-powered Markdown knowledge management desktop application built with Tauri and React.",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/we-used-to-be/Guanmo-open.git"
+    },
+    "homepage": "https://github.com/we-used-to-be/Guanmo-open#readme",
+    "bugs": {
+        "url": "https://github.com/we-used-to-be/Guanmo-open/issues"
+    },
+    "keywords": [
+        "tauri",
+        "markdown",
+        "knowledge-management",
+        "rag",
+        "ai"
+    ],
+    "engines": {
+        "node": ">=18"
+    },
+    "type": "module",
+    "scripts": {
+        "dev": "vite --mode web",
+        "dev:desktop": "vite --mode desktop",
+        "build": "tsc -b && vite build --mode web",
+        "build:desktop": "tsc -b && vite build --mode desktop",
+        "test:agent-parser": "node scripts/run-agent-parser-check.mjs",
+        "test:memory": "node scripts/run-memory-policy-check.mjs",
+        "test:markdown-math": "node scripts/run-markdown-math-check.mjs",
+        "test:markdown-preview": "node scripts/run-markdown-preview-check.mjs",
+        "test:markdown-export": "node scripts/run-markdown-export-check.mjs",
+        "test:selection-context": "node scripts/run-selection-context-check.mjs",
+        "test:rag-index": "node scripts/run-rag-index-check.mjs",
+        "test:rag-query": "node scripts/run-rag-query-benchmark.mjs",
+        "test:file-access": "node scripts/run-file-access-check.mjs",
+        "test:update-version": "node scripts/run-update-version-check.mjs",
+        "test:update-service": "node scripts/run-update-service-check.mjs",
+        "test:toast": "node scripts/run-toast-store-check.mjs",
+        "test:ai-http": "node scripts/run-ai-http-transport-check.mjs",
+        "check:paths": "node scripts/check-paths.mjs",
+        "check:bundle": "node scripts/bundle-budget-check.mjs",
+        "check:push": "node scripts/pre-push-check.mjs",
+        "check:release": "node scripts/pre-push-check.mjs --release",
+        "preview": "vite preview",
+        "tauri": "tauri"
+    },
+    "dependencies": {
+        "@codemirror/autocomplete": "^6.20.2",
+        "@codemirror/commands": "^6.10.3",
+        "@codemirror/lang-markdown": "^6.5.0",
+        "@codemirror/language-data": "^6.5.2",
+        "@codemirror/search": "^6.7.0",
+        "@codemirror/state": "^6.6.0",
+        "@codemirror/view": "^6.43.0",
+        "@tauri-apps/api": "^2.11.0",
+        "@tauri-apps/plugin-dialog": "^2.7.1",
+        "@tauri-apps/plugin-fs": "^2.5.1",
+        "@tauri-apps/plugin-shell": "^2.3.5",
+        "@tauri-apps/plugin-sql": "^2.4.0",
+        "codemirror": "^6.0.2",
+        "hast-util-to-jsx-runtime": "^2.3.6",
+        "html-url-attributes": "^3.0.1",
+        "katex": "^0.16.47",
+        "mermaid": "^11.15.0",
+        "react": "^18.3.1",
+        "react-dom": "^18.3.1",
+        "react-markdown": "^10.1.0",
+        "rehype-highlight": "^7.0.2",
+        "rehype-katex": "^7.0.1",
+        "rehype-react": "^8.0.0",
+        "remark": "^15.0.1",
+        "remark-gfm": "^4.0.1",
+        "remark-math": "^6.0.0",
+        "remark-parse": "^11.0.0",
+        "remark-rehype": "^11.1.2",
+        "unified": "^11.0.5",
+        "zustand": "^5.0.3"
+    },
+    "devDependencies": {
+        "@tauri-apps/cli": "^2.0.0",
+        "@types/hast": "^3.0.4",
+        "@types/react": "^18.3.18",
+        "@types/react-dom": "^18.3.5",
+        "@vitejs/plugin-react": "^4.3.4",
+        "autoprefixer": "^10.4.20",
+        "postcss": "^8.5.1",
+        "tailwindcss": "^3.4.17",
+        "typescript": "^5.7.3",
+        "vite": "^6.0.7"
+    }
 }

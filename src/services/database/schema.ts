@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS documents (
   file_path TEXT UNIQUE NOT NULL,
   title TEXT NOT NULL,
   content TEXT NOT NULL,
+  content_hash TEXT,
   last_modified INTEGER NOT NULL,
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
@@ -35,6 +36,9 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE TABLE IF NOT EXISTS embeddings (
   chunk_id TEXT PRIMARY KEY,
   embedding BLOB NOT NULL,
+  embedding_model TEXT,
+  preprocess_version TEXT,
+  input_hash TEXT,
   FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE
 );
 
@@ -64,6 +68,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL,
   role TEXT NOT NULL CHECK (role IN ('system', 'user', 'assistant')),
+  parent_id TEXT,
   content TEXT NOT NULL,
   metadata TEXT,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -78,6 +83,17 @@ CREATE TABLE IF NOT EXISTS memories (
   source TEXT NOT NULL DEFAULT 'auto_extracted',
   locked INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'active',
+  scope_type TEXT NOT NULL DEFAULT 'global',
+  scope_key TEXT,
+  subject TEXT,
+  fact_key TEXT,
+  fact_value TEXT,
+  confidence REAL NOT NULL DEFAULT 1,
+  evidence TEXT,
+  supersedes_id TEXT,
+  embedding TEXT,
+  embedding_model TEXT,
+  content_hash TEXT,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
@@ -89,16 +105,62 @@ CREATE TABLE IF NOT EXISTS settings (
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
+-- Lightweight legacy IndexedDB detection state.
+-- Stores whether old IndexedDB data was detected and whether user was notified.
+CREATE TABLE IF NOT EXISTS legacy_idb_detection (
+  id INTEGER PRIMARY KEY DEFAULT 1,
+  legacy_detected INTEGER NOT NULL DEFAULT 0,
+  user_noticed INTEGER NOT NULL DEFAULT 0,
+  detected_at INTEGER,
+  noticed_at INTEGER,
+  detected_counts TEXT,
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON chunks(document_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_content_hash ON chunks(content_hash);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages(session_id);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_parent_id ON chat_messages(parent_id);
 CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
 CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status);
 CREATE INDEX IF NOT EXISTS idx_embedding_jobs_status ON embedding_jobs(status);
 `
 
 export const DB_MIGRATIONS = [
+  {
+    table: 'documents',
+    column: 'content_hash',
+    sql: 'ALTER TABLE documents ADD COLUMN content_hash TEXT',
+  },
+  {
+    table: 'embeddings',
+    column: 'embedding_model',
+    sql: 'ALTER TABLE embeddings ADD COLUMN embedding_model TEXT',
+  },
+  {
+    table: 'embeddings',
+    column: 'preprocess_version',
+    sql: 'ALTER TABLE embeddings ADD COLUMN preprocess_version TEXT',
+  },
+  {
+    table: 'embeddings',
+    column: 'input_hash',
+    sql: 'ALTER TABLE embeddings ADD COLUMN input_hash TEXT',
+  },
+  ...[
+    ['scope_type', "ALTER TABLE memories ADD COLUMN scope_type TEXT NOT NULL DEFAULT 'global'"],
+    ['scope_key', 'ALTER TABLE memories ADD COLUMN scope_key TEXT'],
+    ['subject', 'ALTER TABLE memories ADD COLUMN subject TEXT'],
+    ['fact_key', 'ALTER TABLE memories ADD COLUMN fact_key TEXT'],
+    ['fact_value', 'ALTER TABLE memories ADD COLUMN fact_value TEXT'],
+    ['confidence', 'ALTER TABLE memories ADD COLUMN confidence REAL NOT NULL DEFAULT 1'],
+    ['evidence', 'ALTER TABLE memories ADD COLUMN evidence TEXT'],
+    ['supersedes_id', 'ALTER TABLE memories ADD COLUMN supersedes_id TEXT'],
+    ['embedding', 'ALTER TABLE memories ADD COLUMN embedding TEXT'],
+    ['embedding_model', 'ALTER TABLE memories ADD COLUMN embedding_model TEXT'],
+    ['content_hash', 'ALTER TABLE memories ADD COLUMN content_hash TEXT'],
+  ].map(([column, sql]) => ({ table: 'memories', column, sql })),
   {
     table: 'memories',
     column: 'source',
@@ -118,6 +180,11 @@ export const DB_MIGRATIONS = [
     table: 'chat_messages',
     column: 'metadata',
     sql: 'ALTER TABLE chat_messages ADD COLUMN metadata TEXT',
+  },
+  {
+    table: 'chat_messages',
+    column: 'parent_id',
+    sql: 'ALTER TABLE chat_messages ADD COLUMN parent_id TEXT',
   },
   {
     table: 'chunks',
@@ -152,3 +219,13 @@ export const DB_MIGRATIONS = [
 ] as const
 
 export const DB_NAME = 'guanmo.db'
+
+export function splitDatabaseSchemaStatements(schema: string): string[] {
+  return schema
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('--'))
+    .join('\n')
+    .split(';')
+    .map((statement) => statement.trim())
+    .filter(Boolean)
+}

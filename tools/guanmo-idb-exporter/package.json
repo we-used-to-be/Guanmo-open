@@ -1,0 +1,42 @@
+{
+  "name": "guanmo-idb-exporter",
+  "version": "1.0.0",
+  "description": "观墨数据迁移工具 - 将旧版 IndexedDB 数据迁移到 SQLite",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "guanmo-idb-export": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "migrate": "node index.js migrate",
+    "detect": "node index.js detect",
+    "export": "node index.js export",
+    "merge-sqlite": "node index.js merge-sqlite",
+    "build": "pkg . --targets node18-win-x64 --output guanmo-migrate.exe"
+  },
+  "pkg": {
+    "assets": [
+      "node_modules/better-sqlite3/**/*"
+    ],
+    "outputPath": "dist"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1",
+    "playwright": "^1.61.0"
+  },
+  "devDependencies": {
+    "@yao-pkg/pkg": "^6.21.0",
+    "nexe": "^5.0.0-beta.4"
+  },
+  "keywords": [
+    "guanmo",
+    "indexeddb",
+    "export",
+    "webview2",
+    "sqlite",
+    "migration"
+  ],
+  "author": "",
+  "license": "ISC"
+}

@@ -17,10 +17,36 @@
   <img src="https://img.shields.io/badge/Vite_6-646CFF?style=flat-square&logo=vite&logoColor=white" alt="Vite 6" />
 </p>
 
+## 📥 下载 · Download
+
+<table align="center">
+  <tr>
+    <td><b>🪟 Windows</b></td>
+    <td>
+      <a href="https://github.com/we-used-to-be/Guanmo-open/releases/latest"><b>⬇ 下载安装包</b></a><br/>
+      <sub>提供 NSIS (<code>.exe</code>) 和 WiX (<code>.msi</code>) 安装程序</sub>
+    </td>
+  </tr>
+  <tr>
+    <td><b>🌐 网页版</b></td>
+    <td>
+      <a href="https://we-used-to-be.github.io/Guanmo-page/"><b>在线体验</b></a><br/>
+      <sub>浏览器环境下仅可体验编辑、预览等基础md功能。文件系统、自动保存、AI助手、知识库、长期记忆等桌面功能不可用，样式和交互可能与桌面版存在差异</sub>
+    </td>
+  </tr>
+  <tr>
+    <td><b>🍎 macOS</b></td>
+    <td>
+      <sub>暂不提供预编译版本，请自行打包测试（参考下方 <a href="#-快速开始-quick-start">快速开始</a>）</sub>
+    </td>
+  </tr>
+</table>
+
 ---
 
 <p align="center">
   <a href="#-功能特性-features">功能特性</a> ·
+  <a href="#-使用说明-user-guide">使用说明</a> ·
   <a href="#-快速开始-quick-start">快速开始</a> ·
   <a href="#%EF%B8%8F-技术栈-tech-stack">技术栈</a> ·
   <a href="#-项目结构-project-structure">项目结构</a> ·
@@ -32,9 +58,13 @@
 
 ## 📖 简介 · Introduction
 
-**观墨**（GuanMo）是一款面向知识工作者的 **AI Markdown 编辑器**，基于 [Tauri 2](https://v2.tauri.app/) 构建为轻量桌面应用。它将专业的 Markdown 编辑能力、本地 RAG 知识库、长期记忆系统和 Agent 工具调用整合为一体，让你在写作的同时拥有一个真正「理解」你文档上下文的 AI 助手。
+**观墨**（GuanMo）是一款本地优先的 AI Markdown 知识管理应用。它把多文档编辑、公式与图表预览、本地 RAG、长期记忆和可控 Agent 工具整合在同一工作区，让 AI 能围绕用户明确提供的文件、文件夹和选区上下文完成阅读、问答与编辑。
 
-**GuanMo** is an **AI-powered Markdown editor** for knowledge workers, built as a lightweight desktop app with [Tauri 2](https://v2.tauri.app/). It combines a professional Markdown editor, local RAG knowledge base, long-term memory system, and Agent tool-calling into one seamless experience — giving you an AI assistant that truly understands the context of your documents.
+观墨的定位不是构建复杂的插件生态或大型知识图谱系统，而是提供一个轻量、开箱即用、AI 原生的 Markdown 工作区。
+
+它更关注本地文档的阅读、编辑、对照、比较和 AI 辅助处理，让用户少折腾配置，把更多注意力放回内容本身。
+
+桌面版基于 [Tauri 2](https://v2.tauri.app/)；浏览器模式可用于体验编辑、预览和 AI 对话，并会明确标示文件系统、自动保存、知识库与长期记忆等桌面专属能力。
 
 ---
 
@@ -63,65 +93,48 @@ VITE_GUANMO_WEB_SEARCH_API_KEY_SECRET=guanmo.web-search.api-key
 
 ## ✨ 功能特性 · Features
 
-### 📝 Markdown 编辑器 · Editor
+### 📝 编辑、预览与导出
 
-| 功能 | 说明 |
-|------|------|
-| **多视图模式** | 编辑 / 预览 / 并排 / 双文档 / Diff 对比 |
-| **语法高亮** | CodeMirror 6 驱动，支持 Markdown、代码块语法高亮 |
-| **数学公式** | KaTeX 渲染行内 & 块级 LaTeX 公式 |
-| **Mermaid 图表** | 流程图、时序图、甘特图等直接渲染 |
-| **任务列表** | 预览模式下可交互勾选 `- [ ]` 任务项 |
-| **目录导航** | 自动提取标题生成侧边目录 TOC |
-| **图片插入** | 支持选择、拖拽、粘贴图片，自动复制到 Markdown 同级 `assets` 目录并插入相对路径 |
-| **搜索替换** | `Ctrl+F` 正则搜索与批量替换 |
-| **多标签页** | 同时打开多个文件，标签栏切换 |
-| **自动保存** | 可配置延迟的自动保存机制 |
-| **HTML 导出** | `Ctrl+Shift+E` 一键导出为 HTML |
+- CodeMirror 6 编辑器，支持多标签页、搜索替换、自动保存和会话恢复。
+- 编辑、预览、并排、双文档与 Diff 视图；编辑和预览共用阅读位置并支持同步滚动。
+- 全屏专注模式提供独立控制栏，鼠标移至顶部唤起，可快速切换编辑 / 预览 / Diff 视图，并通过"标签 / 文件"或 `Ctrl+B` 打开全屏文件侧边栏。全屏模式下 AI 助手改为小窗模式，拖动顶部调节位置，点击外部关闭弹窗，实现即用即走。
+- 支持 GFM、代码高亮、可交互任务列表、目录导航和 Mermaid 图表。
+- KaTeX 统一处理行内公式、独立公式块及常见 LaTeX 定界符，并保持预览、选区和 HTML 导出的格式一致。
+- 支持选择、拖拽和粘贴图片，自动生成相对资源路径；支持一键导出 HTML。
 
-### 🤖 AI 助手 · AI Assistant
+### 🤖 AI Agent 与语义上下文
 
-| 功能 | 说明 |
-|------|------|
-| **Agent 工具调用** | 基于意图打分的智能工具选择，支持多工具并行执行 |
-| **上下文标签** | 为对话添加文件、文件夹、选区、记忆、网络搜索作为上下文 |
-| **本地 RAG 知识库** | 文档分块 → 向量嵌入 → 余弦相似度检索，作用域由上下文标签控制 |
-| **长期记忆** | 自动提取 + 手动保存，支持分类、锁定、搜索 |
-| **联网搜索** | 支持 DuckDuckGo / Brave Search / 自定义搜索引擎 |
-| **自定义提示词** | 支持在设置中配置 AI 风格提示词 |
-| **选区编辑确认** | AI 修改文本需用户确认，精确范围锚定避免误改 |
-| **流式渲染** | AI 回答实时流式输出为 Markdown |
-| **Agent 时间线** | 可视化展示 Agent 执行链：本地搜索 → 联网搜索 → 生成 → 完成 |
+- 支持 OpenAI 兼容接口及 Ollama 等本地模型，流式展示回答与 Agent 执行时间线。
+- 根据请求规则裁剪候选工具，再由模型选择实际工具；知识库、记忆、联网搜索和文件操作各自保持明确边界。
+- 文件、文件夹和 selection tag 均可作为本轮上下文；修改操作必须具有本轮新授权并经用户确认。
+- `read_selection_context` 会围绕当前选区读取完整语义原子：Level 1 最多 700 tokens，仅在信息不足时递进到累计 1400 tokens 的 Level 2，避免直接发送全文。
+- RAG 与选区阅读共用 AST 语义分块，保留标题、段落、列表、引用、代码、公式和表格边界。
+- 本地知识库支持批量索引、向量检索、队列状态、失效清理和重建；长期记忆支持提取、确认、锁定与搜索。
+- 支持 DuckDuckGo、Brave Search 和自定义搜索服务，并提供自定义提示词。
 
-### 🗂 文件管理 · File Management
+### 🗂 本地文件与工作区
 
-- 文件树侧边栏，支持工作区文件夹
-- 最近文件、收藏夹、重命名、另存为
-- 工作区文档批量索引 / 清理 / 重建
+- 工作区文件树、最近文件、收藏夹、重命名、另存为和多标签页管理。
+- 启动时恢复上次会话；支持双击、拖放 `.md` 文件打开并唤回应用窗口。
+- 文件访问受用户选择的工作区或单文件授权约束，知识库索引和应用数据保存在本机。
+- AI 功能由用户自行配置模型接口，不内置密钥，也不要求上传本地文档。
 
-### ⚙️ 设置 · Settings
+### 🌐 浏览器模式
 
-- **AI 模型配置**：预设 OpenAI、DeepSeek、MiMo、SiliconFlow、智谱 GLM、Ollama
-- **独立 Embedding 模型配置**
-- **编辑器设置**：字体、字号、Tab 宽度、自动换行、行号
-- **记忆管理**：查看、锁定、删除、确认候选记忆
-- **数据备份**：一键导出 / 导入全部数据
+- 可体验 Markdown 编辑、预览、公式、图表与 AI 对话。
+- 最近文件、收藏夹、工作区、自动保存、知识库和长期记忆依赖桌面能力，在浏览器中会禁用并显示说明。
+- 浏览器模式不会用下载行为模拟自动保存，避免产生意外文件。
 
-### 🖥 本地优先 · Local-First
+### ⚙️ 配置与数据
 
-观墨无需后端服务，安装后即可在本地运行。
+- AI 与 Embedding 模型独立配置，支持暖色 / 浅色 / 深色主题及编辑器显示设置。新增 AI 吉祥物头像选项和模式闲时预热设置。
+- 支持记忆管理、知识库状态查看，以及应用数据的导出和导入。
 
-- 文档编辑、预览与管理均在本地完成
-- 知识库索引保存在本机
-- 不强制上传用户文档
-- AI 功能需用户自行配置模型接口
+---
 
-### 📂 文件关联 · File Association
+## 📚 使用说明 · User Guide
 
-
-- 双击 Markdown 文件直接打开
-- 支持拖放打开文件
-- 自动注册系统关联
+完整的安装、配置与功能使用指南请查阅 **[观墨使用说明书](docs/USER_GUIDE.md)**，涵盖界面总览、文件管理、编辑预览、AI 助手、知识库、长期记忆、联网搜索、外观设置、快捷键和常见问题等内容。
 
 ---
 
@@ -194,6 +207,9 @@ npm run tauri build
 # Agent 解析器测试 · Agent parser tests
 npm run test:agent-parser
 
+# Markdown 数学公式测试 · Markdown math tests
+npm run test:markdown-math
+
 # 资源路径检查 · Resource path check
 npm run check:paths
 ```
@@ -234,6 +250,7 @@ guanmo/
 │   ├── features/               # 功能模块：设置页面
 │   │                         # Feature modules: settings page
 │   ├── styles/                 # 全局样式 + 主题令牌（亮色 / 暗色 / 动物暗色）
+│   │   └── tokens/             # 主题设计令牌：light.css / dark.css / animal-dark.css
 │   │                         # Global styles + theme tokens (light / dark / animal-dark)
 │   └── vendor/                 # 内置 UI 组件库：Animal Island UI
 │                             # Vendored UI library: Animal Island UI
@@ -265,6 +282,7 @@ guanmo/
 | `Ctrl + P` | 命令面板（文件） |
 | `Ctrl + Shift + P` | 命令面板（命令） |
 | `Ctrl + Shift + E` | 导出为 HTML |
+| `F11` | 切换全屏专注模式 |
 | `Ctrl + Shift + 1 ~ 5` | 快速切换编辑视图模式 |
 | `Ctrl + 滚轮` | 调整编辑器字号 |
 | `Ctrl + Tab` | 切换标签页 |
@@ -290,8 +308,8 @@ Contributions are welcome! Feel free to open issues and submit pull requests.
 推送 `v*` 格式的 tag 会触发 GitHub Actions，在 Windows 上构建 Tauri 应用、创建 GitHub Release，并上传 NSIS `.exe` 与 WiX `.msi` 安装包。安装包不会提交到 Git 仓库。
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag -a v1.2.3
+git push origin v1.2.3
 ```
 
 发布 tag 应与 `package.json`、`src-tauri/Cargo.toml` 和 `src-tauri/tauri.conf.json` 中的版本号保持一致。

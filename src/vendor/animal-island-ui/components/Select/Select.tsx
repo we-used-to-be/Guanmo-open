@@ -53,6 +53,8 @@ export const Select: React.FC<SelectProps> = ({
                 width: rect.width,
                 left: 0,
                 right: 'auto',
+                maxHeight: 260,
+                overflowY: 'auto',
             };
 
             // 垂直方向：默认向下弹出，空间不足时向上

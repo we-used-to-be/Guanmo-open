@@ -1,7 +1,7 @@
 .wrapper {
     position: relative;
     width: 100%;
-    background: rgb(247, 243, 223);
+    background: var(--animal-table-bg, rgb(247, 243, 223));
     border-radius: 24px;
     padding: 6px;
     box-sizing: border-box;
@@ -21,7 +21,7 @@
 }
 
 .thead {
-    background: rgb(247, 243, 223);
+    background: var(--animal-table-bg, rgb(247, 243, 223));
 }
 
 .headerRow {
@@ -36,8 +36,8 @@
         height: 1px;
         background: repeating-linear-gradient(
             90deg,
-            rgb(240, 232, 216) 0,
-            rgb(240, 232, 216) 6px,
+            var(--animal-table-divider, rgb(240, 232, 216)) 0,
+            var(--animal-table-divider, rgb(240, 232, 216)) 6px,
             transparent 6px,
             transparent 12px
         );
@@ -49,7 +49,7 @@
     padding: 16px 20px;
     font-size: 14px;
     font-weight: 700;
-    color: #725d42;
+    color: var(--animal-table-text, #725d42);
     text-align: left;
     white-space: nowrap;
     letter-spacing: 0.02em;
@@ -57,7 +57,7 @@
 }
 
 .tbody {
-    background: rgb(247, 243, 223);
+    background: var(--animal-table-bg, rgb(247, 243, 223));
 }
 
 .row {
@@ -73,8 +73,8 @@
         height: 1px;
         background: repeating-linear-gradient(
             90deg,
-            rgb(240, 232, 216) 0,
-            rgb(240, 232, 216) 6px,
+            var(--animal-table-divider, rgb(240, 232, 216)) 0,
+            var(--animal-table-divider, rgb(240, 232, 216)) 6px,
             transparent 6px,
             transparent 12px
         );
@@ -83,10 +83,10 @@
     &:hover {
         background-image: repeating-linear-gradient(
             -45deg,
-            rgba(25, 200, 185, 0.6),
-            rgba(25, 200, 185, 0.6) 10px,
-            rgba(14, 196, 182, 0.6) 10px,
-            rgba(14, 196, 182, 0.6) 20px
+            var(--animal-table-hover-stripe-a, rgba(25, 200, 185, 0.6)),
+            var(--animal-table-hover-stripe-a, rgba(25, 200, 185, 0.6)) 10px,
+            var(--animal-table-hover-stripe-b, rgba(14, 196, 182, 0.6)) 10px,
+            var(--animal-table-hover-stripe-b, rgba(14, 196, 182, 0.6)) 20px
         );
         background-size: 28.28px 28.28px;
         clip-path: inset(0 0 0 0 round 18px);
@@ -96,7 +96,7 @@
         }
 
         .cell {
-            color: #3d2e1e;
+            color: var(--animal-table-text-hover, #3d2e1e);
         }
     }
 
@@ -108,15 +108,15 @@
 }
 
 .striped {
-    background: rgba(248, 248, 240, 0.6);
+    background: var(--animal-table-striped-bg, rgba(248, 248, 240, 0.6));
 
     &:hover {
         background-image: repeating-linear-gradient(
             -45deg,
-            rgba(25, 200, 185, 0.65),
-            rgba(25, 200, 185, 0.65) 10px,
-            rgba(14, 196, 182, 0.65) 10px,
-            rgba(14, 196, 182, 0.65) 20px
+            var(--animal-table-hover-stripe-a, rgba(25, 200, 185, 0.65)),
+            var(--animal-table-hover-stripe-a, rgba(25, 200, 185, 0.65)) 10px,
+            var(--animal-table-hover-stripe-b, rgba(14, 196, 182, 0.65)) 10px,
+            var(--animal-table-hover-stripe-b, rgba(14, 196, 182, 0.65)) 20px
         );
         background-size: 28.28px 28.28px;
         clip-path: inset(0 0 0 0 round 18px);
@@ -126,7 +126,7 @@
         }
 
         .cell {
-            color: #3d2e1e;
+            color: var(--animal-table-text-hover, #3d2e1e);
         }
     }
 }
@@ -135,7 +135,7 @@
     padding: 14px 20px;
     font-size: 14px;
     font-weight: 500;
-    color: #725d42;
+    color: var(--animal-table-text, #725d42);
     line-height: 1.6;
     transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
@@ -150,7 +150,7 @@
     flex-direction: column;
     align-items: center;
     gap: 16px;
-    color: #9f927d;
+    color: var(--animal-table-text-muted, #9f927d);
     font-size: 14px;
 
     svg {
@@ -159,7 +159,7 @@
 }
 
 .emptyIcon {
-    color: #9f927d;
+    color: var(--animal-table-text-muted, #9f927d);
     opacity: 0.5;
 }
 
@@ -174,12 +174,12 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(247, 243, 223, 0.8);
+    background: var(--animal-table-loading-bg, rgba(247, 243, 223, 0.8));
     backdrop-filter: blur(2px);
 }
 
 .loadingSpinner {
-    color: #19c8b9;
+    color: var(--animal-table-loading-color, #19c8b9);
     animation: spin 1s linear infinite;
 
     svg {

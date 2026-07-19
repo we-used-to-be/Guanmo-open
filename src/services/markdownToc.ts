@@ -4,7 +4,6 @@ export interface TocItem {
   level: number
   line: number
 }
-
 function slugify(text: string): string {
   const slug = text
     .trim()
@@ -42,11 +41,13 @@ export function extractToc(content: string): TocItem[] {
     const text = match[2].trim()
     if (!text) return
 
+    const lineNumber = index + 1
     items.push({
-      id: createHeadingId(text, usedIds),
+      // 使用行号作为唯一标识，避免重复标题导致 id 不一致
+      id: `heading-${lineNumber}`,
       text,
       level: match[1].length,
-      line: index + 1,
+      line: lineNumber,
     })
   })
 

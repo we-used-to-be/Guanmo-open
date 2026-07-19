@@ -1,6 +1,6 @@
 /**
  * Tauri API integration layer.
- * Uses @tauri-apps/plugin-fs and @tauri-apps/plugin-dialog in Tauri.
+ * Uses policy-checked Rust commands and @tauri-apps/plugin-dialog in Tauri.
  * Falls back gracefully when running in web browser.
  */
 
@@ -16,18 +16,6 @@ export function isTauri(): boolean {
 
 // --- File System ---
 
-async function authorizeWorkspacePath(path: string): Promise<void> {
-  if (!isTauri()) return
-  const { invoke } = await import('@tauri-apps/api/core')
-  await invoke('authorize_workspace_path', { path })
-}
-
-async function authorizeSelectedPath(path: string): Promise<void> {
-  if (!isTauri()) return
-  const { invoke } = await import('@tauri-apps/api/core')
-  await invoke('authorize_selected_path', { path })
-}
-
 function toNativeFilePath(path: string): string {
   if (/^[a-zA-Z]:[\\/]/.test(path) || /^\\\\/.test(path) || /^\/\//.test(path)) {
     return path.replace(/\//g, '\\')
@@ -38,35 +26,71 @@ function toNativeFilePath(path: string): string {
 export async function readFile(path: string): Promise<string> {
   if (!isTauri()) throw new Error('Not running in Tauri')
   const nativePath = toNativeFilePath(path)
-  await authorizeSelectedPath(nativePath)
   const { invoke } = await import('@tauri-apps/api/core')
-  try {
-    return await invoke<string>('read_text_file_by_path', { path: nativePath })
-  } catch (commandErr) {
-    try {
-      const { readTextFile } = await import('@tauri-apps/plugin-fs')
-      return await readTextFile(nativePath)
-    } catch {
-      throw commandErr
-    }
-  }
+  return invoke<string>('read_text_file_by_path', { path: nativePath })
+}
+
+export interface LegacyFileAccessMigrationResult {
+  status: 'migrated' | 'already_migrated'
+  workspaceCount: number
+  fileCount: number
+  ignoredCount: number
+  pendingCount: number
+}
+
+export async function migrateLegacyFileAccessPaths(
+  workspacePaths: string[],
+  filePaths: string[]
+): Promise<LegacyFileAccessMigrationResult> {
+  if (!isTauri()) throw new Error('Not running in Tauri')
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<LegacyFileAccessMigrationResult>('migrate_legacy_file_access', {
+    workspacePaths: workspacePaths.map(toNativeFilePath),
+    filePaths: filePaths.map(toNativeFilePath),
+  })
+}
+
+async function authorizeSelectedPath(path: string): Promise<void> {
+  if (!isTauri()) throw new Error('Not running in Tauri')
+  const nativePath = toNativeFilePath(path)
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke<void>('authorize_selected_path', { path: nativePath })
+}
+
+async function authorizeWorkspacePath(path: string): Promise<void> {
+  if (!isTauri()) throw new Error('Not running in Tauri')
+  const nativePath = toNativeFilePath(path)
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke<void>('authorize_workspace_path', { path: nativePath })
+}
+
+export async function prepareMarkdownAssetsDir(markdownPath: string): Promise<void> {
+  if (!isTauri()) throw new Error('Not running in Tauri')
+  const nativePath = toNativeFilePath(markdownPath)
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke<void>('prepare_markdown_assets_dir', { markdownPath: nativePath })
 }
 
 export async function writeFile(path: string, content: string): Promise<void> {
   if (!isTauri()) throw new Error('Not running in Tauri')
   const nativePath = toNativeFilePath(path)
-  await authorizeSelectedPath(nativePath)
   const { invoke } = await import('@tauri-apps/api/core')
-  try {
-    return await invoke<void>('write_text_file_by_path', { path: nativePath, content })
-  } catch (commandErr) {
-    try {
-      const { writeTextFile } = await import('@tauri-apps/plugin-fs')
-      return await writeTextFile(nativePath, content)
-    } catch {
-      throw commandErr
-    }
-  }
+  return invoke<void>('write_text_file_by_path', { path: nativePath, content })
+}
+
+export async function readBinaryFile(path: string): Promise<Uint8Array> {
+  if (!isTauri()) throw new Error('Not running in Tauri')
+  const nativePath = toNativeFilePath(path)
+  const { invoke } = await import('@tauri-apps/api/core')
+  const bytes = await invoke<number[]>('read_binary_file_by_path', { path: nativePath })
+  return new Uint8Array(bytes)
+}
+
+export async function writeBinaryFile(path: string, content: Uint8Array): Promise<void> {
+  if (!isTauri()) throw new Error('Not running in Tauri')
+  const nativePath = toNativeFilePath(path)
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<void>('write_binary_file_by_path', { path: nativePath, content: Array.from(content) })
 }
 
 export async function readBinaryFile(path: string): Promise<Uint8Array> {
@@ -103,15 +127,8 @@ export async function writeBinaryFile(path: string, content: Uint8Array): Promis
 export async function createTextFile(path: string): Promise<void> {
   if (!isTauri()) throw new Error('Not running in Tauri')
   const nativePath = toNativeFilePath(path)
-  try {
-    const { writeTextFile } = await import('@tauri-apps/plugin-fs')
-    return await writeTextFile(nativePath, '', { createNew: true })
-  } catch (err) {
-    const { invoke } = await import('@tauri-apps/api/core')
-    return invoke<void>('create_text_file_by_path', { path: nativePath }).catch((fallbackErr) => {
-      throw fallbackErr || err
-    })
-  }
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<void>('create_text_file_by_path', { path: nativePath })
 }
 
 export interface DirEntry {
@@ -122,18 +139,9 @@ export interface DirEntry {
 
 export async function readDir(path: string): Promise<DirEntry[]> {
   if (!isTauri()) throw new Error('Not running in Tauri')
-  await authorizeWorkspacePath(path)
   const nativePath = toNativeFilePath(path)
-  let entries: DirEntry[]
-  try {
-    const { readDir: tauriReadDir } = await import('@tauri-apps/plugin-fs')
-    entries = await tauriReadDir(nativePath)
-  } catch (err) {
-    const { invoke } = await import('@tauri-apps/api/core')
-    entries = await invoke<DirEntry[]>('read_dir_by_path', { path: nativePath }).catch(() => {
-      throw err
-    })
-  }
+  const { invoke } = await import('@tauri-apps/api/core')
+  const entries = await invoke<DirEntry[]>('read_dir_by_path', { path: nativePath })
   return entries.map((e) => ({
     name: e.name,
     isDirectory: e.isDirectory,
@@ -144,48 +152,37 @@ export async function readDir(path: string): Promise<DirEntry[]> {
 export async function fileExists(path: string): Promise<boolean> {
   if (!isTauri()) return false
   const nativePath = toNativeFilePath(path)
-  try {
-    const { exists } = await import('@tauri-apps/plugin-fs')
-    return await exists(nativePath)
-  } catch {
-    return false
-  }
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<boolean>('path_exists', { path: nativePath })
+}
+
+export async function revealFileInFolder(path: string): Promise<void> {
+  if (!isTauri()) throw new Error('Not running in Tauri')
+  const nativePath = toNativeFilePath(path)
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke<void>('reveal_file_in_folder', { path: nativePath })
 }
 
 export async function createDir(path: string): Promise<void> {
   if (!isTauri()) throw new Error('Not running in Tauri')
   const nativePath = toNativeFilePath(path)
-  try {
-    const { mkdir } = await import('@tauri-apps/plugin-fs')
-    return await mkdir(nativePath)
-  } catch (err) {
-    const { invoke } = await import('@tauri-apps/api/core')
-    return invoke<void>('create_dir_by_path', { path: nativePath }).catch((fallbackErr) => {
-      throw fallbackErr || err
-    })
-  }
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<void>('create_dir_by_path', { path: nativePath })
 }
 
 export async function removeFile(path: string): Promise<void> {
   if (!isTauri()) throw new Error('Not running in Tauri')
   const nativePath = toNativeFilePath(path)
-  const { remove } = await import('@tauri-apps/plugin-fs')
-  return remove(nativePath)
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<void>('remove_file_by_path', { path: nativePath })
 }
 
 export async function renameFile(oldPath: string, newPath: string): Promise<void> {
   if (!isTauri()) throw new Error('Not running in Tauri')
   const nativeOldPath = toNativeFilePath(oldPath)
   const nativeNewPath = toNativeFilePath(newPath)
-  try {
-    const { rename } = await import('@tauri-apps/plugin-fs')
-    return await rename(nativeOldPath, nativeNewPath)
-  } catch (err) {
-    const { invoke } = await import('@tauri-apps/api/core')
-    return invoke<void>('rename_text_file_by_path', { oldPath: nativeOldPath, newPath: nativeNewPath }).catch((fallbackErr) => {
-      throw fallbackErr || err
-    })
-  }
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<void>('rename_text_file_by_path', { oldPath: nativeOldPath, newPath: nativeNewPath })
 }
 
 // --- Dialogs ---
@@ -193,6 +190,53 @@ export async function renameFile(oldPath: string, newPath: string): Promise<void
 export interface DialogFilter {
   name: string
   extensions: string[]
+}
+
+function normalizeSelectedPath(path: string): string {
+  const normalized = toNativeFilePath(path).replace(/[\\/]+$/, '')
+  return /^[a-zA-Z]:\\|^\\\\/.test(normalized) ? normalized.toLowerCase() : normalized
+}
+
+function isSameSelectedPath(expected: string, selected: string): boolean {
+  return normalizeSelectedPath(expected) === normalizeSelectedPath(selected)
+}
+
+export async function requestSelectedPathAccess(
+  path: string,
+  filters?: DialogFilter[]
+): Promise<boolean> {
+  if (!isTauri()) throw new Error('Not running in Tauri')
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const selected = await open({
+    multiple: false,
+    defaultPath: toNativeFilePath(path),
+    filters: filters ?? [
+      { name: 'Markdown', extensions: ['md', 'markdown', 'mdx'] },
+      { name: 'Text and Code', extensions: ['txt', 'json', 'html', 'css', 'js', 'ts', 'jsx', 'tsx'] },
+    ],
+  })
+  if (typeof selected !== 'string') return false
+  if (!isSameSelectedPath(path, selected)) {
+    throw new Error('请选择原文件以恢复访问权限')
+  }
+  await authorizeSelectedPath(selected)
+  return true
+}
+
+export async function requestWorkspacePathAccess(path: string): Promise<boolean> {
+  if (!isTauri()) throw new Error('Not running in Tauri')
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    defaultPath: toNativeFilePath(path),
+  })
+  if (typeof selected !== 'string') return false
+  if (!isSameSelectedPath(path, selected)) {
+    throw new Error('请选择原工作区以恢复访问权限')
+  }
+  await authorizeWorkspacePath(selected)
+  return true
 }
 
 export async function openFileDialog(
@@ -207,8 +251,9 @@ export async function openFileDialog(
       { name: 'Text and Code', extensions: ['txt', 'json', 'html', 'css', 'js', 'ts', 'jsx', 'tsx'] },
     ],
   })
-  const paths = Array.isArray(result) ? result : result ? [result] : []
-  await Promise.all(paths.map(authorizeSelectedPath))
+  if (typeof result === 'string') {
+    await authorizeSelectedPath(result)
+  }
   return result
 }
 
@@ -236,7 +281,7 @@ export async function openDirectoryDialog(): Promise<string | null> {
     directory: true,
     multiple: false,
   })
-  const path = typeof result === 'string' ? result : Array.isArray(result) ? result[0] ?? null : null
+  const path = typeof result === 'string' ? result : null
   if (path) await authorizeWorkspacePath(path)
   return path
 }

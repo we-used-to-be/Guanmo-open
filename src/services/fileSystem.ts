@@ -110,6 +110,9 @@ export async function pickDirectory(): Promise<string | null> {
  * 在指定目录下创建新文件
  */
 export async function createFile(dirPath: string, fileName: string): Promise<string> {
+  if (!isTauri()) {
+    throw new Error('浏览器模式下无法创建文件，请下载桌面版')
+  }
   const { join } = await import('@tauri-apps/api/path')
   const fullPath = await join(dirPath, fileName)
   if (await fileExists(fullPath)) {
@@ -127,6 +130,9 @@ export async function createFile(dirPath: string, fileName: string): Promise<str
  * 在指定目录下创建新文件夹
  */
 export async function createFolder(dirPath: string, folderName: string): Promise<string> {
+  if (!isTauri()) {
+    throw new Error('浏览器模式下无法创建文件夹，请下载桌面版')
+  }
   const { join } = await import('@tauri-apps/api/path')
   const fullPath = await join(dirPath, folderName)
   if (await fileExists(fullPath)) {

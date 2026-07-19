@@ -1,7 +1,8 @@
 [package]
 name = "guanmo"
-version = "0.4.0"
+version = "1.2.3"
 edition = "2021"
+license = "MIT"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -10,7 +11,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["protocol-asset"] }
 serde = { version = "=1.0.219", features = ["derive"] }
 serde_json = "=1.0.140"
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+windows-sys = { version = "0.60.2", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
 
 # Tauri plugins
 tauri-plugin-fs = "2"
@@ -18,6 +19,10 @@ tauri-plugin-dialog = "2"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 tauri-plugin-shell = "2"
 tauri-plugin-single-instance = "2"
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "sync"] }
+url = "2"
 
 [lib]
 name = "guanmo_lib"

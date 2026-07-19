@@ -2,26 +2,26 @@
   display: inline-flex;
   align-items: center;
   width: 100%;
-  background: #f7f3df;
-  border: 2px solid #c4b89e;
+  background: var(--animal-bg-color, #f7f3df);
+  border: 2px solid var(--animal-border-color, #c4b89e);
   border-radius: 50px;
   transition: all var(--animal-motion-duration-base) var(--animal-motion-ease);
-  box-shadow: 0 3px 0 0 #d4c9b4;
+  box-shadow: 0 3px 0 0 var(--animal-border-color-light, #d4c9b4);
 }
 .wrapper:hover:not(.wrapper-disabled) {
-  border-color: #a89878;
-  box-shadow: 0 3px 0 0 #c4b89e;
+  border-color: var(--animal-border-color-hover, #a89878);
+  box-shadow: 0 3px 0 0 var(--animal-border-color, #c4b89e);
 }
 .wrapper-disabled {
-  background: #ece8dc;
-  border-color: #d4c9b4;
+  background: var(--animal-bg-color-disabled, #ece8dc);
+  border-color: var(--animal-border-color-light, #d4c9b4);
   box-shadow: none;
   opacity: 0.6;
   cursor: not-allowed;
 }
 .wrapper-disabled .input {
   cursor: not-allowed;
-  color: #c4b89e;
+  color: var(--animal-text-color-disabled, #c4b89e);
 }
 .wrapper-no-shadow {
   box-shadow: none;
@@ -36,7 +36,7 @@
   border-radius: 40px;
 }
 .wrapper-small:not(.wrapper-no-shadow) {
-  box-shadow: 0 2px 0 0 #d4c9b4;
+  box-shadow: 0 2px 0 0 var(--animal-border-color-light, #d4c9b4);
 }
 .wrapper-middle {
   height: var(--animal-height-base);
@@ -51,7 +51,7 @@
   border-radius: 50px;
 }
 .wrapper-large:not(.wrapper-no-shadow) {
-  box-shadow: 0 4px 0 0 #d4c9b4;
+  box-shadow: 0 4px 0 0 var(--animal-border-color-light, #d4c9b4);
 }
 .wrapper-error {
   border-color: var(--animal-error-color);
@@ -75,7 +75,7 @@
   border: none;
   outline: none;
   background: transparent;
-  color: #725d42;
+  color: var(--animal-text-color, #725d42);
   font-size: inherit;
   font-family: var(--animal-font-family);
   font-weight: 500;
@@ -83,14 +83,14 @@
   letter-spacing: 0.01em;
 }
 .input::placeholder {
-  color: #c4b89e;
+  color: var(--animal-text-color-muted, #c4b89e);
   font-weight: 400;
 }
 .prefix,
 .suffix {
   display: inline-flex;
   align-items: center;
-  color: #a0936e;
+  color: var(--animal-text-color-secondary, #a0936e);
   flex-shrink: 0;
   font-size: 1em;
 }
@@ -107,7 +107,7 @@
   width: 20px;
   height: 20px;
   margin-left: 4px;
-  color: #c4b89e;
+  color: var(--animal-text-color-muted, #c4b89e);
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
@@ -116,6 +116,6 @@
   transition: all var(--animal-motion-duration-fast);
 }
 .clear:hover {
-  color: #725d42;
-  background: rgba(114, 93, 66, 0.1);
+  color: var(--animal-text-color, #725d42);
+  background: var(--animal-primary-color-bg, rgba(114, 93, 66, 0.1));
 }

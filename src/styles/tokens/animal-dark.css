@@ -5,48 +5,110 @@
 
 [data-theme='dark'] {
   /* === Primary (保留青绿色系，微调适配深色) === */
-  --animal-primary-color: #2dd4bf;
-  --animal-primary-color-hover: #5eead4;
-  --animal-primary-color-active: #14b8a6;
-  --animal-primary-color-bg: rgba(45, 212, 191, 0.12);
+  --animal-primary-color: #58b8ae;
+  --animal-primary-color-hover: #72c8bf;
+  --animal-primary-color-active: #449d94;
+  --animal-primary-color-bg: rgba(88, 184, 174, 0.13);
 
   /* === Semantic Colors === */
-  --animal-success-color: #4ade80;
-  --animal-success-color-hover: #6ee7a0;
-  --animal-success-color-active: #22c55e;
+  --animal-success-color: #7bcf9a;
+  --animal-success-color-hover: #9be0b5;
+  --animal-success-color-active: #58b77e;
 
-  --animal-warning-color: #fbbf24;
-  --animal-warning-color-hover: #fcd34d;
-  --animal-warning-color-active: #f59e0b;
+  --animal-warning-color: #e9b95d;
+  --animal-warning-color-hover: #f0c987;
+  --animal-warning-color-active: #d49c35;
 
-  --animal-error-color: #f87171;
-  --animal-error-color-hover: #fca5a5;
-  --animal-error-color-active: #ef4444;
+  --animal-error-color: #ef7d74;
+  --animal-error-color-hover: #ff9a91;
+  --animal-error-color-active: #dc6259;
 
   /* === Neutral (Text) === */
-  --animal-text-color: #e4e6ef;
-  --animal-text-color-secondary: #9498ab;
-  --animal-text-color-muted: #6b6f82;
-  --animal-text-color-disabled: #4a4e60;
+  --animal-text-color: #eee4d2;
+  --animal-text-color-secondary: #b7aa94;
+  --animal-text-color-muted: #887b66;
+  --animal-text-color-disabled: #625746;
 
   /* === Borders === */
-  --animal-border-color: #2a2d3e;
-  --animal-border-color-hover: #3a3d52;
-  --animal-border-color-light: #222536;
+  --animal-border-color: #3b3327;
+  --animal-border-color-hover: #514532;
+  --animal-border-color-light: #2d271f;
 
   /* === Backgrounds === */
-  --animal-bg-color: #161822;
-  --animal-bg-color-secondary: #1c1f2e;
-  --animal-bg-color-disabled: #0f1117;
+  --animal-bg-color: #1d1a15;
+  --animal-bg-color-secondary: #252017;
+  --animal-bg-color-disabled: #15130f;
+  --animal-tabs-bg: #1d1a15;
+  --animal-tabs-border: #3b3327;
+  --animal-tabs-list-bg: rgba(255, 244, 226, 0.04);
+  --animal-tabs-item-text: #b7aa94;
+  --animal-tabs-item-hover-bg: rgba(88, 184, 174, 0.12);
+  --animal-tabs-active-bg: #58b8ae;
+  --animal-tabs-active-text: #eee4d2;
+  --animal-tabs-active-shadow: 0 3px 0 0 rgba(0, 0, 0, 0.28);
+  --animal-select-trigger-bg: #1d1a15;
+  --animal-select-trigger-border: #3b3327;
+  --animal-select-trigger-hover-bg: #252017;
+  --animal-select-trigger-hover-border: #514532;
+  --animal-select-dropdown-bg: #252017;
+  --animal-select-pill-bg: #58b8ae;
+  --animal-select-disabled-bg: #15130f;
+  --animal-switch-bg: #30291e;
+  --animal-switch-border: #514532;
+  --animal-switch-hover-border: #6a5a40;
+  --animal-switch-focus: #58b8ae;
+  --animal-switch-handle-bg: #eee4d2;
+  --animal-switch-text: #10211f;
+  --animal-button-primary-text: #10211f;
+  --animal-button-primary-bg: #58b8ae;
+  --animal-button-primary-border: #58b8ae;
+  --animal-button-primary-shadow: #449d94;
+  --animal-button-text-active-bg: #30291e;
+  --animal-table-bg: #1d1a15;
+  --animal-table-divider: #3b3327;
+  --animal-table-text: #b7aa94;
+  --animal-table-text-hover: #eee4d2;
+  --animal-table-text-muted: #887b66;
+  --animal-table-striped-bg: rgba(255, 244, 226, 0.04);
+  --animal-table-hover-stripe-a: rgba(88, 184, 174, 0.18);
+  --animal-table-hover-stripe-b: rgba(88, 184, 174, 0.26);
+  --animal-table-loading-bg: rgba(29, 26, 21, 0.82);
+  --animal-table-loading-color: #58b8ae;
 
   /* === Shadows (深色主题用更柔和的阴影) === */
   --animal-shadow-sm: 0 2px 4px 0 rgba(0, 0, 0, 0.3);
   --animal-shadow-base: 0 3px 10px 0 rgba(0, 0, 0, 0.4);
   --animal-shadow-lg: 0 8px 24px 0 rgba(0, 0, 0, 0.5);
 
-  /* === Border Radius (减小圆角，更专业) === */
-  --animal-border-radius-sm: 6px;
-  --animal-border-radius-base: 8px;
-  --animal-border-radius-lg: 10px;
+  /* === Border Radius === */
+  --animal-border-radius-sm: 12px;
+  --animal-border-radius-base: 16px;
+  --animal-border-radius-lg: 20px;
   --animal-border-width: 1px;
+
+  /* === Card Colors (深色模式降低饱和度) === */
+  --card-color-pink: #c47a84;
+  --card-color-pink-text: #fff;
+  --card-color-purple: #9a6fd4;
+  --card-color-purple-text: #fff;
+  --card-color-blue: #6b7fcf;
+  --card-color-blue-text: #fff;
+  --card-color-yellow: #c9a65a;
+  --card-color-yellow-text: #1d1a15;
+  --card-color-orange: #c47a58;
+  --card-color-orange-text: #fff;
+  --card-color-teal: #5fb89e;
+  --card-color-teal-text: #fff;
+  --card-color-green: #6fa06f;
+  --card-color-green-text: #fff;
+  --card-color-red: #d4605a;
+  --card-color-red-text: #fff;
+  --card-color-lime-green: #a8b340;
+  --card-color-lime-green-text: #1d1a15;
+  --card-color-yellow-green: #c4b845;
+  --card-color-yellow-green-text: #1d1a15;
+  --card-color-brown: #8a7350;
+  --card-color-brown-text: #fff;
+  --card-color-warm-peach-pink: #c47660;
+  --card-color-warm-peach-pink-text: #fff;
 }
