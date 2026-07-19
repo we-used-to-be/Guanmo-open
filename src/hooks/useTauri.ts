@@ -81,21 +81,6 @@ export async function writeFile(path: string, content: string): Promise<void> {
 export async function readBinaryFile(path: string): Promise<Uint8Array> {
   if (!isTauri()) throw new Error('Not running in Tauri')
   const nativePath = toNativeFilePath(path)
-  const { invoke } = await import('@tauri-apps/api/core')
-  const bytes = await invoke<number[]>('read_binary_file_by_path', { path: nativePath })
-  return new Uint8Array(bytes)
-}
-
-export async function writeBinaryFile(path: string, content: Uint8Array): Promise<void> {
-  if (!isTauri()) throw new Error('Not running in Tauri')
-  const nativePath = toNativeFilePath(path)
-  const { invoke } = await import('@tauri-apps/api/core')
-  return invoke<void>('write_binary_file_by_path', { path: nativePath, content: Array.from(content) })
-}
-
-export async function readBinaryFile(path: string): Promise<Uint8Array> {
-  if (!isTauri()) throw new Error('Not running in Tauri')
-  const nativePath = toNativeFilePath(path)
   await authorizeSelectedPath(nativePath)
   try {
     const { readFile: tauriReadFile } = await import('@tauri-apps/plugin-fs')

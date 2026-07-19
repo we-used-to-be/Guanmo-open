@@ -209,16 +209,7 @@ export async function exportMarkdownAsPdf(markdown: string, title: string, sourc
       window.setTimeout(() => void printFrame(), 0)
     }, { once: true })
 
-    const frameDocument = iframe.contentDocument
-    if (!frameDocument) {
-      cleanup()
-      reject(new Error('无法准备 PDF 导出内容，请稍后重试。'))
-      return
-    }
-
-    frameDocument.open()
-    frameDocument.write(html)
-    frameDocument.close()
+    iframe.srcdoc = html
   })
 }
 
