@@ -46,6 +46,8 @@
 
 <p align="center">
   <a href="#-功能特性-features">功能特性</a> ·
+  <a href="#-主题切换-themes">主题</a> ·
+  <a href="#-全屏专注模式-focus-mode">专注模式</a> ·
   <a href="#-使用说明-user-guide">使用说明</a> ·
   <a href="#-快速开始-quick-start">快速开始</a> ·
   <a href="#%EF%B8%8F-技术栈-tech-stack">技术栈</a> ·
@@ -70,7 +72,47 @@
 
 ## 🖼 软件截图 · Screenshot
 
-![观墨软件截图](docs/images/guanmo-screenshot-2026-06-12.png)
+<p align="center">
+  <img src="docs/images/guanmo-main-warm.png" alt="观墨主界面" width="100%" />
+</p>
+
+---
+
+## 🎨 主题切换 · Themes
+
+<p align="center">
+  <table align="center">
+    <tr>
+      <td align="center"><b>🌞 暖色主题</b></td>
+      <td align="center"><b>☀️ 浅色主题</b></td>
+      <td align="center"><b>🌙 深色主题</b></td>
+    </tr>
+    <tr>
+      <td><img src="docs/images/guanmo-theme-warm.png" width="100%" /></td>
+      <td><img src="docs/images/guanmo-theme-light.png" width="100%" /></td>
+      <td><img src="docs/images/guanmo-theme-dark.png" width="100%" /></td>
+    </tr>
+  </table>
+</p>
+
+---
+
+## 🎯 全屏专注模式 · Focus Mode
+
+全屏模式隐藏标题栏与侧边栏，提供纯净的阅读与编辑空间。鼠标移至顶部唤起隐藏式控制条，支持快速切换编辑 / 预览 / Diff 视图；AI 助手以弹窗形式即用即走，不影响沉浸体验。
+
+<p align="center">
+  <table align="center">
+    <tr>
+      <td align="center"><b>隐藏式控制条</b><br/><sub>鼠标移至顶部唤起，支持视图切换、文件导航、主题切换</sub></td>
+      <td align="center"><b>即用即走 AI 助手</b><br/><sub>弹窗形式，点击外部自动关闭，拖动顶部调节位置</sub></td>
+    </tr>
+    <tr>
+      <td><img src="docs/images/guanmo-fullscreen-focus.png" width="100%" /></td>
+      <td><img src="docs/images/guanmo-fullscreen-ai.png" width="100%" /></td>
+    </tr>
+  </table>
+</p>
 
 ---
 
