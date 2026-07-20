@@ -13,6 +13,7 @@ use tauri::{Emitter, Manager, State};
 use tauri_plugin_fs::FsExt;
 
 mod api_http;
+mod database_transactions;
 mod rag_index;
 use api_http::ApiOriginState;
 
@@ -1379,6 +1380,9 @@ pub fn run() {
             api_http::revoke_api_origin,
             api_http::external_http_request,
             api_http::external_http_stream,
+            database_transactions::persist_document_transaction,
+            database_transactions::confirm_memory_candidate_transaction,
+            database_transactions::import_backup_transaction,
             rag_index::get_rag_index_state,
             rag_index::initialize_rag_index,
             rag_index::search_rag_index,

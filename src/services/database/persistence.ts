@@ -3,7 +3,8 @@
  * Syncs documents, chunks, and embeddings to/from the database.
  */
 
-import { getDatabase, isDatabaseReady, serializeDatabaseTransaction } from './db'
+import { invoke } from '@tauri-apps/api/core'
+import { getDatabase, isDatabaseReady } from './db'
 import type { Document, Chunk } from '@/services/rag/types'
 import { normalizeFilePath } from '@/services/pathIdentity'
 import { buildMemoryEmbeddingQuery, buildMemoryQuery, type MemoryQueryFilters } from './memoryQuery'
@@ -87,109 +88,11 @@ export async function persistDocument(
   options: { enqueueEmbeddingJob?: boolean } = {},
 ): Promise<void> {
   if (!isDatabaseReady()) return
-  await serializeDatabaseTransaction(async () => {
-    const db = getDatabase()
-    const [byPath, byId, existingChunks] = await Promise.all([
-      db.select<{ id: string }>('SELECT id FROM documents WHERE file_path = $1', [doc.filePath]),
-      db.select<{ id: string }>('SELECT id FROM documents WHERE id = $1', [doc.id]),
-      db.select<{ id: string }>('SELECT id FROM chunks WHERE document_id = $1', [doc.id]),
-    ])
-    const conflictingIds = new Set([...byPath, ...byId].map((row) => row.id))
-    conflictingIds.delete(doc.id)
-    for (const id of conflictingIds) {
-      const conflictingChunks = await db.select<{ id: string }>(
-        'SELECT id FROM chunks WHERE document_id = $1',
-        [id]
-      )
-      for (const chunk of conflictingChunks) {
-        await db.execute('DELETE FROM embeddings WHERE chunk_id = $1', [chunk.id])
-        await db.execute('DELETE FROM chunks WHERE id = $1', [chunk.id])
-      }
-      await db.execute('DELETE FROM documents WHERE id = $1', [id])
-    }
-
-    await db.execute(
-      `INSERT INTO documents (id, file_path, title, content, content_hash, last_modified, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, COALESCE((SELECT created_at FROM documents WHERE id = $1), unixepoch()))
-       ON CONFLICT(id) DO UPDATE SET
-         file_path = excluded.file_path,
-         title = excluded.title,
-         content = excluded.content,
-         content_hash = excluded.content_hash,
-         last_modified = excluded.last_modified`,
-      [doc.id, doc.filePath, doc.title, doc.content, doc.contentHash || null, doc.lastModified]
-    )
-
-    const nextIds = new Set(doc.chunks.map((chunk) => chunk.id))
-    for (const row of existingChunks) {
-      if (!nextIds.has(row.id)) {
-        await db.execute('DELETE FROM embeddings WHERE chunk_id = $1', [row.id])
-        await db.execute('DELETE FROM chunks WHERE id = $1', [row.id])
-      }
-    }
-
-    const now = Date.now()
-    for (const chunk of doc.chunks) {
-      await db.execute(
-        `INSERT INTO chunks (
-          id, document_id, content, content_hash, chunk_index, start_line, end_line,
-          title_path, heading, source_type, created_at, updated_at
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7,
-          $8, $9, $10,
-          COALESCE((SELECT created_at FROM chunks WHERE id = $1), $11),
-          $12
-        ) ON CONFLICT(id) DO UPDATE SET
-          document_id = excluded.document_id,
-          content = excluded.content,
-          content_hash = excluded.content_hash,
-          chunk_index = excluded.chunk_index,
-          start_line = excluded.start_line,
-          end_line = excluded.end_line,
-          title_path = excluded.title_path,
-          heading = excluded.heading,
-          source_type = excluded.source_type,
-          updated_at = excluded.updated_at`,
-        [
-          chunk.id, doc.id, chunk.content, chunk.contentHash || null, chunk.index,
-          chunk.startLine, chunk.endLine,
-          chunk.titlePath ? JSON.stringify(chunk.titlePath) : null,
-          chunk.heading || null, chunk.sourceType || 'markdown',
-          chunk.createdAt || now, chunk.updatedAt || now,
-        ]
-      )
-
-      if (chunk.embedding) {
-        await db.execute(
-          `INSERT INTO embeddings (
-            chunk_id, embedding, embedding_model, preprocess_version, input_hash
-          ) VALUES ($1, $2, $3, $4, $5)
-          ON CONFLICT(chunk_id) DO UPDATE SET
-            embedding = excluded.embedding,
-            embedding_model = excluded.embedding_model,
-            preprocess_version = excluded.preprocess_version,
-            input_hash = excluded.input_hash`,
-          [
-            chunk.id, JSON.stringify(chunk.embedding), chunk.embeddingModel || null,
-            chunk.embeddingPreprocessVersion || null, chunk.embeddingInputHash || null,
-          ]
-        )
-      } else {
-        await db.execute('DELETE FROM embeddings WHERE chunk_id = $1', [chunk.id])
-      }
-    }
-
-    if (options.enqueueEmbeddingJob !== undefined) {
-      await db.execute('DELETE FROM embedding_jobs WHERE file_path = $1', [doc.filePath])
-      if (options.enqueueEmbeddingJob) {
-        await db.execute(
-          `INSERT INTO embedding_jobs
-            (id, document_id, file_path, status, error, retry_count, created_at, updated_at)
-           VALUES ($1, $2, $3, 'pending', NULL, 0, unixepoch(), unixepoch())`,
-          [`job-${doc.id}`, doc.id, doc.filePath]
-        )
-      }
-    }
+  await invoke('persist_document_transaction', {
+    request: {
+      document: doc,
+      enqueueEmbeddingJob: options.enqueueEmbeddingJob,
+    },
   })
 }
 
@@ -772,25 +675,7 @@ export async function updateMemoryStatus(id: string, status: MemoryStatus): Prom
 
 export async function confirmMemoryCandidate(id: string): Promise<boolean> {
   if (!isDatabaseReady()) return false
-  const candidate = (await loadAllMemories(undefined, ['candidate'])).find((memory) => memory.id === id)
-  if (!candidate) return false
-  return serializeDatabaseTransaction(async () => {
-    const db = getDatabase()
-    if (candidate.supersedesId) {
-      await db.execute(
-        `UPDATE memories SET status = 'superseded', updated_at = unixepoch() * 1000
-         WHERE id = $1 AND status = 'active'`,
-        [candidate.supersedesId]
-      )
-    }
-    const result = await db.execute(
-      `UPDATE memories
-       SET status = 'active', source = 'user_explicit', updated_at = unixepoch() * 1000
-       WHERE id = $1 AND status = 'candidate'`,
-      [id]
-    )
-    return result.rowsAffected > 0
-  })
+  return invoke<boolean>('confirm_memory_candidate_transaction', { id })
 }
 
 function safeParseEmbedding(value: string): number[] | null {
@@ -935,38 +820,7 @@ export async function importBackupPayload(payload: BackupPayload): Promise<{ ses
   if (payload.version !== 1) {
     throw new Error(`不支持的备份版本：${payload.version}`)
   }
-
-  let messageCount = 0
-  for (const item of payload.sessions) {
-    await persistChatSession({ id: item.session.id, title: item.session.title })
-    let previousMessage: ChatMessageRow | null = null
-    for (const message of item.messages) {
-      await persistChatMessage({
-        id: message.id,
-        sessionId: item.session.id,
-        parentId: message.parent_id
-          ?? (message.role === 'assistant' && previousMessage?.role === 'user'
-            ? previousMessage.id
-            : undefined),
-        role: message.role,
-        content: message.content,
-        metadata: message.metadata ?? undefined,
-        createdAt: message.created_at,
-      })
-      messageCount++
-      previousMessage = message
-    }
-  }
-
-  for (const memory of payload.memories) {
-    await persistMemory(memory)
-  }
-
-  return {
-    sessions: payload.sessions.length,
-    messages: messageCount,
-    memories: payload.memories.length,
-  }
+  return invoke('import_backup_transaction', { payload })
 }
 
 /**
