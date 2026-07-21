@@ -18,9 +18,10 @@ import { addSelectionContextTag, setAiShortcutPrompt } from '@/services/aiContex
 import { CodeMirrorEditor } from './CodeMirrorEditor'
 import { EditorContextMenu } from './EditorContextMenu'
 import { MarkdownDiffView } from './MarkdownDiffView'
-import { MarkdownPreview, MarkdownToc } from './MarkdownPreview'
+import { MarkdownPreview, MarkdownToc, type MarkdownBlockCommitRequest } from './MarkdownPreview'
 import { SearchOverlay } from './SearchOverlay'
 import { TabBar } from './TabBar'
+import { replaceMarkdownBlock } from '@/services/markdownBlocks'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import {
   MODE_PREWARM_ACTIVITY_PAUSE,
@@ -143,6 +144,7 @@ export function EditorArea() {
   const editorWordWrap = useSettingsStore((s) => s.editor.wordWrap)
   const editorLineNumbers = useSettingsStore((s) => s.editor.lineNumbers)
   const syncScroll = useSettingsStore((s) => s.editor.syncScroll)
+  const inlinePreviewEdit = useSettingsStore((s) => s.editor.inlinePreviewEdit)
   const modePrewarm = useSettingsStore((s) => s.editor.modePrewarm)
   const fullscreenContentPadding = useSettingsStore((s) => s.editor.fullscreenContentPadding)
   const viewModeUsage = useEditorStore((s) => s.viewModeUsage)
@@ -734,6 +736,21 @@ export function EditorArea() {
     if (tab) void handleTaskToggle(tab.id, tab.content, line, checked)
   }, [handleTaskToggle])
 
+  const handlePreviewBlockCommit = useCallback((request: MarkdownBlockCommitRequest) => {
+    const tab = useEditorStore.getState().tabs.find((item) => item.id === request.documentKey)
+    if (!tab) {
+      toast.warning('文档已关闭，块修改未写入；可复制修改内容后重新打开文档。')
+      return { status: 'conflict' as const, currentSource: '' }
+    }
+    const result = replaceMarkdownBlock(tab.content, request.block, request.draft)
+    if (result.status === 'conflict') {
+      toast.warning('该 Markdown 块已被其他操作修改，当前草稿未覆盖原文。')
+      return result
+    }
+    if (result.content !== tab.content) updateTabContent(tab.id, result.content)
+    return { status: 'applied' as const, content: result.content }
+  }, [updateTabContent])
+
   const handleRightTaskToggle = useCallback((line: number, checked: boolean) => {
     if (!rightTab?.id) return
     const tab = useEditorStore.getState().tabs.find((item) => item.id === rightTab.id)
@@ -1066,9 +1083,6 @@ export function EditorArea() {
     if (!previewMenu?.selectedText) return
     const sourceSelection = getPreviewSourceSelection()
     if (!sourceSelection) return
-    if (typeof sourceSelection.selectionFrom !== 'number' || typeof sourceSelection.selectionTo !== 'number') {
-      toast.warning('预览选区无法精确定位，修改文本请切到编辑模式框选。')
-    }
     addSelectionContextTag({
       title: sourceSelection.title,
       filePath: sourceSelection.filePath,
@@ -1086,10 +1100,6 @@ export function EditorArea() {
     if (!previewMenu?.selectedText) return
     const sourceSelection = getPreviewSourceSelection()
     if (!sourceSelection) return
-    if (typeof sourceSelection.selectionFrom !== 'number' || typeof sourceSelection.selectionTo !== 'number') {
-      toast.warning('预览选区无法精确定位，修改文本请切到编辑模式框选。')
-      return
-    }
     addSelectionContextTag({
       title: sourceSelection.title,
       filePath: sourceSelection.filePath,
@@ -1215,6 +1225,12 @@ export function EditorArea() {
                   filePath={leftPreviewRenderRef.current.filePath}
                   fontSize={editorFontSize}
                   lineHeight={editorLineHeight}
+                  fontFamily={editorFontFamily}
+                  wordWrap={editorWordWrap}
+                  documentKey={activeTab?.id}
+                  documentVersion={getContentSignature(activeTab?.content || '')}
+                  inlineEditEnabled={inlinePreviewEdit}
+                  onBlockCommit={handlePreviewBlockCommit}
                   onHeadingClick={handleLeftPreviewHeadingClick}
                   onTaskToggle={activeTab ? handleActiveTaskToggle : undefined}
                 />
@@ -1251,6 +1267,12 @@ export function EditorArea() {
                   filePath={rightTab.filePath}
                   fontSize={editorFontSize}
                   lineHeight={editorLineHeight}
+                  fontFamily={editorFontFamily}
+                  wordWrap={editorWordWrap}
+                  documentKey={rightTab.id}
+                  documentVersion={getContentSignature(rightTab.content)}
+                  inlineEditEnabled={inlinePreviewEdit}
+                  onBlockCommit={handlePreviewBlockCommit}
                   onTaskToggle={handleRightTaskToggle}
                 />
               ) : (

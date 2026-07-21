@@ -25,7 +25,7 @@ interface CodeMirrorEditorProps {
   initialScrollTop?: number
 }
 
-function buildTheme(fontSize: number, lineHeight: number, fontFamily: string) {
+export function buildMarkdownEditorTheme(fontSize: number, lineHeight: number, fontFamily: string) {
   return EditorView.theme({
     '&': {
       backgroundColor: 'var(--gm-editor-bg)',
@@ -112,7 +112,7 @@ function buildTheme(fontSize: number, lineHeight: number, fontFamily: string) {
   })
 }
 
-const markdownHighlightStyle = HighlightStyle.define([
+export const markdownHighlightStyle = HighlightStyle.define([
   { tag: tags.heading, color: 'var(--gm-editor-heading)', fontWeight: '700' },
   { tag: tags.quote, color: 'var(--gm-editor-quote)', fontStyle: 'italic' },
   { tag: tags.monospace, color: 'var(--gm-editor-code)' },
@@ -157,7 +157,7 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
   const settingsKey = `${editorSettings.fontSize}-${editorSettings.lineHeight}-${editorSettings.fontFamily}-${editorSettings.wordWrap}-${editorSettings.lineNumbers}-${editorSettings.tabSize}`
 
   const guanmoTheme = useMemo(
-    () => buildTheme(editorSettings.fontSize, editorSettings.lineHeight, editorSettings.fontFamily),
+    () => buildMarkdownEditorTheme(editorSettings.fontSize, editorSettings.lineHeight, editorSettings.fontFamily),
     [editorSettings.fontSize, editorSettings.lineHeight, editorSettings.fontFamily]
   )
 

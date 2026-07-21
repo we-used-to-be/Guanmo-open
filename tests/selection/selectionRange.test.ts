@@ -31,4 +31,16 @@ describe('选区读取', () => {
     expect(tag.selectionFrom).toBe(from)
     expect(tag.selectionTo).toBe(to)
   })
+
+  it('允许无精确字符范围的预览选区添加到 AI 上下文', () => {
+    addSelectionContextTag({
+      title: '匿名文档.md',
+      text: '块内草稿选区',
+    })
+
+    const tag = useChatStore.getState().contextTags[0]
+    expect(tag.content).toBe('块内草稿选区')
+    expect(tag.selectionFrom).toBeUndefined()
+    expect(tag.selectionTo).toBeUndefined()
+  })
 })

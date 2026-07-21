@@ -3,27 +3,72 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeKatex from 'rehype-katex'
-import { isValidElement, memo, useEffect, useMemo, useState } from 'react'
+import { isValidElement, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { isTauri } from '@/hooks/useTauri'
 import { createHeadingId, type TocItem } from '@/services/markdownToc'
 import { normalizeLatexBlockDelimiters, remarkStandaloneDisplayMath } from '@/services/markdownMath'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { parseMarkdownBlocks, type MarkdownBlock } from '@/services/markdownBlocks'
+import { InlineMarkdownBlockEditor } from './InlineMarkdownBlockEditor'
 
 const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath, remarkStandaloneDisplayMath]
 const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex, rehypeHighlight]
 const NORMALIZED_MARKDOWN_CACHE_LIMIT = 4
 const normalizedMarkdownCache = new Map<string, string>()
 
+export interface MarkdownBlockCommitRequest {
+  block: MarkdownBlock
+  draft: string
+  documentKey: string
+  documentVersion: number | string
+}
+
+export type MarkdownBlockCommitResult =
+  | { status: 'applied'; content?: string }
+  | { status: 'conflict'; currentSource: string }
+
 interface MarkdownPreviewProps {
   content: string
   filePath?: string | null
   fontSize?: number
   lineHeight?: number
+  fontFamily?: string
+  wordWrap?: boolean
   skipHtml?: boolean
+  documentKey?: string
+  documentVersion?: number | string
+  inlineEditEnabled?: boolean
+  onBlockCommit?: (request: MarkdownBlockCommitRequest) => Promise<MarkdownBlockCommitResult> | MarkdownBlockCommitResult
   onTaskToggle?: (line: number, checked: boolean) => void
   onHeadingClick?: (line: number) => void
 }
+
+interface ActiveBlockEdit {
+  block: MarkdownBlock
+  documentKey: string
+  documentVersion: number | string
+  contentSnapshot: string
+  initialCursor: number
+  initialHeight: number
+  conflict: boolean
+}
+
+interface AltPointerIntent {
+  pointerId: number
+  startX: number
+  startY: number
+  blockIndex: number
+  target: Element
+  moved: boolean
+}
+
+interface OptimisticPreviewContent {
+  content: string
+  acceptedContents: string[]
+}
+
+const ALT_CLICK_MOVE_THRESHOLD = 6
 
 function getNormalizedMarkdown(content: string): string {
   const cached = normalizedMarkdownCache.get(content)
@@ -43,12 +88,254 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   filePath,
   fontSize = 14,
   lineHeight = 1.65,
+  fontFamily = "'JetBrains Mono', 'Cascadia Code', monospace",
+  wordWrap = true,
   skipHtml = false,
+  documentKey,
+  documentVersion = 0,
+  inlineEditEnabled = false,
+  onBlockCommit,
   onTaskToggle,
   onHeadingClick,
 }: MarkdownPreviewProps) {
-  const normalizedContent = useMemo(() => getNormalizedMarkdown(content), [content])
+  const rootRef = useRef<HTMLDivElement>(null)
+  const [activeEdit, setActiveEdit] = useState<ActiveBlockEdit | null>(null)
+  const [optimisticContent, setOptimisticContent] = useState<OptimisticPreviewContent | null>(null)
+  const activeEditRef = useRef<ActiveBlockEdit | null>(null)
+  const optimisticContentRef = useRef<OptimisticPreviewContent | null>(null)
+  const submitPromiseRef = useRef<Promise<boolean> | null>(null)
+  const documentVersionRef = useRef(documentVersion)
+  const draftRef = useRef('')
+  const altPointerRef = useRef<AltPointerIntent | null>(null)
+  const handledAltClickRef = useRef(false)
+  const mountedRef = useRef(true)
+  const onBlockCommitRef = useRef(onBlockCommit)
+  const scrollRestoreRef = useRef<{ line: number; top: number; container: HTMLElement } | null>(null)
+  const displayedContent = activeEdit?.contentSnapshot ?? optimisticContent?.content ?? content
+  const blocks = useMemo(() => parseMarkdownBlocks(displayedContent), [displayedContent])
+  const normalizedContent = useMemo(() => getNormalizedMarkdown(displayedContent), [displayedContent])
   const [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(null)
+
+  activeEditRef.current = activeEdit
+  optimisticContentRef.current = optimisticContent
+  documentVersionRef.current = documentVersion
+  onBlockCommitRef.current = onBlockCommit
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      const edit = activeEditRef.current
+      const commit = onBlockCommitRef.current
+      if (edit && commit) {
+        void commit({
+          block: edit.block,
+          draft: draftRef.current,
+          documentKey: edit.documentKey,
+          documentVersion: edit.documentVersion,
+        })
+      }
+      mountedRef.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!optimisticContent) return
+    if (content !== optimisticContent.content && optimisticContent.acceptedContents.includes(content)) return
+    optimisticContentRef.current = null
+    setOptimisticContent(null)
+  }, [content, optimisticContent])
+
+  useLayoutEffect(() => {
+    if (activeEdit || !scrollRestoreRef.current || !rootRef.current) return
+    const pending = scrollRestoreRef.current
+    const target = rootRef.current.querySelector<HTMLElement>(`[data-md-line="${pending.line}"]`)
+    if (target) {
+      pending.container.scrollTop += target.getBoundingClientRect().top - pending.top
+    }
+    scrollRestoreRef.current = null
+  }, [activeEdit, displayedContent])
+
+  const closeActiveEdit = useCallback((edit: ActiveBlockEdit) => {
+    if (!mountedRef.current) return
+    const editor = rootRef.current?.querySelector<HTMLElement>('.gm-inline-markdown-editor')
+    const scrollContainer = rootRef.current?.parentElement
+    if (editor && scrollContainer) {
+      scrollRestoreRef.current = {
+        line: edit.block.startLine,
+        top: editor.getBoundingClientRect().top,
+        container: scrollContainer,
+      }
+    }
+    if (activeEditRef.current?.documentKey === edit.documentKey && activeEditRef.current.block.renderKey === edit.block.renderKey) {
+      activeEditRef.current = null
+    }
+    setActiveEdit((current) => (
+      current?.documentKey === edit.documentKey && current.block.renderKey === edit.block.renderKey
+        ? null
+        : current
+    ))
+  }, [])
+
+  const submitEdit = useCallback(async (edit: ActiveBlockEdit): Promise<boolean> => {
+    const draft = draftRef.current
+    if (!onBlockCommit) {
+      closeActiveEdit(edit)
+      return true
+    }
+    const result = await onBlockCommit({
+      block: edit.block,
+      draft,
+      documentKey: edit.documentKey,
+      documentVersion: edit.documentVersion,
+    })
+    if (result.status === 'conflict') {
+      if (mountedRef.current) {
+        setActiveEdit((current) => (
+          current?.documentKey === edit.documentKey && current.block.renderKey === edit.block.renderKey
+            ? { ...current, conflict: true }
+            : current
+        ))
+      }
+      return false
+    }
+    const nextContent = result.content ?? (
+      edit.contentSnapshot.slice(0, edit.block.startOffset)
+      + draft
+      + edit.contentSnapshot.slice(edit.block.endOffset)
+    )
+    const pending = optimisticContentRef.current
+    const nextOptimisticContent: OptimisticPreviewContent = {
+      content: nextContent,
+      acceptedContents: pending?.content === edit.contentSnapshot
+        ? [...pending.acceptedContents, edit.contentSnapshot]
+        : [edit.contentSnapshot],
+    }
+    optimisticContentRef.current = nextOptimisticContent
+    setOptimisticContent(nextOptimisticContent)
+    closeActiveEdit(edit)
+    return true
+  }, [closeActiveEdit, onBlockCommit])
+
+  const submitActiveEdit = useCallback(() => {
+    if (submitPromiseRef.current) return submitPromiseRef.current
+    const edit = activeEditRef.current
+    if (!edit) return Promise.resolve(true)
+    const promise = submitEdit(edit).finally(() => {
+      if (submitPromiseRef.current === promise) submitPromiseRef.current = null
+    })
+    submitPromiseRef.current = promise
+    return promise
+  }, [submitEdit])
+
+  useEffect(() => {
+    const edit = activeEditRef.current
+    if (edit && documentKey && edit.documentKey !== documentKey) void submitEdit(edit)
+  }, [documentKey, submitEdit])
+
+  useEffect(() => {
+    if (!activeEdit) return
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Element)) return
+      if (target.closest('.gm-inline-markdown-editor')) return
+      if (target.closest('.cm-tooltip, [role="dialog"], [role="menu"], [data-context-menu="true"]')) return
+      if (event.altKey && rootRef.current?.contains(target.closest('[data-md-block-index]'))) return
+      void submitActiveEdit()
+    }
+    document.addEventListener('pointerdown', handlePointerDown, true)
+    return () => document.removeEventListener('pointerdown', handlePointerDown, true)
+  }, [activeEdit, submitActiveEdit])
+
+  const beginEditing = useCallback(async (blockIndex: number, target: Element) => {
+    if (!inlineEditEnabled || !documentKey || !onBlockCommit) return
+    const requestedBlock = blocks[blockIndex]
+    if (!requestedBlock) return
+    const current = activeEditRef.current
+    const wrapper = target.closest<HTMLElement>('[data-md-block-index]')
+    const lineElement = target.closest<HTMLElement>('[data-md-line]')
+    const clickedLine = Number(lineElement?.dataset.mdLine)
+    const initialHeight = Math.max(44, wrapper?.getBoundingClientRect().height || wrapper?.offsetHeight || 0)
+    if (current?.block.renderKey === requestedBlock.renderKey && current.documentKey === documentKey) return
+
+    let contentSnapshot = displayedContent
+    let block = requestedBlock
+    if (current) {
+      const currentDraftLength = draftRef.current.length
+      if (!(await submitActiveEdit())) return
+      contentSnapshot = optimisticContentRef.current?.content ?? content
+      const adjustedStartOffset = requestedBlock.startOffset + (
+        current.block.endOffset <= requestedBlock.startOffset
+          ? currentDraftLength - current.block.rawSource.length
+          : 0
+      )
+      block = findBlockAtOffset(parseMarkdownBlocks(contentSnapshot), adjustedStartOffset) ?? requestedBlock
+    }
+
+    const mappedClickedLine = Number.isFinite(clickedLine)
+      ? block.startLine + (clickedLine - requestedBlock.startLine)
+      : Number.NaN
+    const initialCursor = Number.isFinite(mappedClickedLine)
+      ? getBlockOffsetForLine(block, mappedClickedLine)
+      : block.rawSource.length
+    const edit: ActiveBlockEdit = {
+      block,
+      documentKey,
+      documentVersion: documentVersionRef.current,
+      contentSnapshot,
+      initialCursor,
+      initialHeight,
+      conflict: false,
+    }
+    draftRef.current = block.rawSource
+    activeEditRef.current = edit
+    setActiveEdit(edit)
+  }, [blocks, content, displayedContent, documentKey, inlineEditEnabled, onBlockCommit, submitActiveEdit])
+
+  const handlePointerDownCapture = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!event.altKey || !inlineEditEnabled || activeEditRef.current && (event.target as Element).closest('.gm-inline-markdown-editor')) return
+    const target = event.target
+    if (!(target instanceof Element)) return
+    const wrapper = target.closest<HTMLElement>('[data-md-block-index]')
+    if (!wrapper || !rootRef.current?.contains(wrapper)) return
+    const blockIndex = Number(wrapper.dataset.mdBlockIndex)
+    if (!Number.isInteger(blockIndex)) return
+    altPointerRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      blockIndex,
+      target,
+      moved: false,
+    }
+  }, [inlineEditEnabled])
+
+  const handlePointerMoveCapture = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const intent = altPointerRef.current
+    if (!intent || intent.pointerId !== event.pointerId) return
+    if (Math.hypot(event.clientX - intent.startX, event.clientY - intent.startY) > ALT_CLICK_MOVE_THRESHOLD) {
+      intent.moved = true
+    }
+  }, [])
+
+  const handlePointerUpCapture = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const intent = altPointerRef.current
+    altPointerRef.current = null
+    if (!intent || intent.pointerId !== event.pointerId || intent.moved || !event.altKey) return
+    event.preventDefault()
+    event.stopPropagation()
+    handledAltClickRef.current = true
+    void beginEditing(intent.blockIndex, intent.target)
+  }, [beginEditing])
+
+  const handleClickCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (!event.altKey || !handledAltClickRef.current) return
+    handledAltClickRef.current = false
+    event.preventDefault()
+    event.stopPropagation()
+  }, [])
+
+  const blockWrapperPlugin = useMemo(() => createMarkdownBlockWrapperPlugin(blocks), [blocks])
+  const rehypePlugins = useMemo(() => [...MARKDOWN_REHYPE_PLUGINS, blockWrapperPlugin], [blockWrapperPlugin])
 
   const components = useMemo<Partial<Components>>(() => {
     const headingIds = new Map<string, number>()
@@ -69,6 +356,33 @@ export const MarkdownPreview = memo(function MarkdownPreview({
     }
 
     return {
+          div: ({ children, node, ...props }) => {
+            void node
+            const blockIndexValue = (props as Record<string, unknown>)['data-md-block-index']
+            const blockIndex = typeof blockIndexValue === 'number' ? blockIndexValue : Number(blockIndexValue)
+            const block = Number.isInteger(blockIndex) ? blocks[blockIndex] : undefined
+            if (block && activeEdit?.block.renderKey === block.renderKey) {
+              return (
+                <InlineMarkdownBlockEditor
+                  block={activeEdit.block}
+                  initialCursor={activeEdit.initialCursor}
+                  initialHeight={activeEdit.initialHeight}
+                  fontSize={fontSize}
+                  lineHeight={lineHeight}
+                  fontFamily={fontFamily}
+                  wordWrap={wordWrap}
+                  conflict={activeEdit.conflict}
+                  onDraftChange={(draft) => { draftRef.current = draft }}
+                  onSubmit={(draft) => {
+                    draftRef.current = draft
+                    void submitActiveEdit()
+                  }}
+                  onCopyDraft={(draft) => void navigator.clipboard.writeText(draft)}
+                />
+              )
+            }
+            return <div {...props}>{children}</div>
+          },
           h1: ({ children, node }) => {
             const line = getNodeStartLine(node)
             const id = line ? `heading-${line}` : createHeadingId(getText(children), headingIds)
@@ -220,7 +534,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
           del: ({ children }) => (
             <del className="text-gm-text-tertiary line-through">{children}</del>
           ),
-          input: ({ checked, node, ...props }) => {
+          input: ({ checked, node: _node, ...props }) => {
             // 只处理task list的checkbox
             if (props.type !== 'checkbox') {
               return <input {...props} />
@@ -249,17 +563,22 @@ export const MarkdownPreview = memo(function MarkdownPreview({
             )
           },
         }
-  }, [filePath, fontSize, onHeadingClick, onTaskToggle])
+  }, [activeEdit, blocks, filePath, fontFamily, fontSize, lineHeight, onHeadingClick, onTaskToggle, submitActiveEdit, wordWrap])
 
   return (
     <div
+      ref={rootRef}
       className="prose gm-markdown-preview max-w-none min-w-0 text-gm-text"
       style={{ fontSize: `${fontSize}px`, lineHeight }}
+      onPointerDownCapture={handlePointerDownCapture}
+      onPointerMoveCapture={handlePointerMoveCapture}
+      onPointerUpCapture={handlePointerUpCapture}
+      onClickCapture={handleClickCapture}
     >
       <ReactMarkdown
         skipHtml={skipHtml}
         remarkPlugins={MARKDOWN_REMARK_PLUGINS}
-        rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
+        rehypePlugins={rehypePlugins}
         components={components}
       >
         {normalizedContent}
@@ -396,6 +715,95 @@ function getNodeLine(node: unknown, edge: 'start' | 'end'): number | undefined {
   const position = (node as { position?: { start?: { line?: unknown }; end?: { line?: unknown } } }).position
   const line = position?.[edge]?.line
   return typeof line === 'number' && Number.isFinite(line) ? line : undefined
+}
+
+interface HastNode {
+  type: string
+  tagName?: string
+  properties?: Record<string, unknown>
+  children?: HastNode[]
+  position?: {
+    start?: { line?: number }
+    end?: { line?: number }
+  }
+}
+
+function createMarkdownBlockWrapperPlugin(blocks: MarkdownBlock[]) {
+  return () => (tree: HastNode) => {
+    if (!tree.children) return
+    const output: HastNode[] = []
+    let currentIndex: number | null = null
+    let currentChildren: HastNode[] = []
+    let blockCursor = 0
+
+    const flush = () => {
+      if (currentIndex === null || currentChildren.length === 0) return
+      const block = blocks[currentIndex]
+      output.push({
+        type: 'element',
+        tagName: 'div',
+        properties: {
+          className: ['gm-markdown-block'],
+          dataMdBlockIndex: currentIndex,
+          dataMdBlockKey: block.renderKey,
+          dataMdBlockType: block.type,
+          dataMdLine: block.startLine,
+          dataMdEndLine: block.endLine,
+        },
+        children: currentChildren,
+      })
+      currentIndex = null
+      currentChildren = []
+    }
+
+    for (const child of tree.children) {
+      const startLine = child.position?.start?.line
+      const endLine = child.position?.end?.line
+      while (
+        typeof startLine === 'number'
+        && blockCursor < blocks.length
+        && blocks[blockCursor].endLine < startLine
+      ) blockCursor += 1
+      const candidate = blocks[blockCursor]
+      const index = candidate
+        && typeof startLine === 'number'
+        && typeof endLine === 'number'
+        && startLine >= candidate.startLine
+        && endLine <= candidate.endLine
+        ? blockCursor
+        : null
+      if (index === null) {
+        if (currentIndex !== null && typeof startLine !== 'number' && typeof endLine !== 'number') {
+          currentChildren.push(child)
+          continue
+        }
+        flush()
+        output.push(child)
+        continue
+      }
+      if (currentIndex !== null && currentIndex !== index) flush()
+      currentIndex = index
+      currentChildren.push(child)
+    }
+    flush()
+    tree.children = output
+  }
+}
+
+function getBlockOffsetForLine(block: MarkdownBlock, clickedLine: number): number {
+  if (clickedLine < block.startLine || clickedLine > block.endLine) return block.rawSource.length
+  const localLine = clickedLine - block.startLine
+  let offset = 0
+  for (let index = 0; index < localLine; index += 1) {
+    const match = /\r\n|\r|\n/.exec(block.rawSource.slice(offset))
+    if (!match) return block.rawSource.length
+    offset += match.index + match[0].length
+  }
+  return offset
+}
+
+function findBlockAtOffset(blocks: MarkdownBlock[], offset: number): MarkdownBlock | undefined {
+  return blocks.find((block) => block.startOffset <= offset && offset < block.endOffset)
 }
 
 function MermaidBlock({ code, startLine, endLine }: { code: string; startLine?: number; endLine?: number }) {

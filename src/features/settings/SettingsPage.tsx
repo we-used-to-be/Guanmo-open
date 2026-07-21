@@ -1042,6 +1042,9 @@ function EditorSettings() {
       <SettingField label="同步滚动" description="编辑 + 预览模式下同步两侧滚动位置">
         <Switch checked={editor.syncScroll} onChange={(v) => updateEditorSettings({ syncScroll: v })} />
       </SettingField>
+      <SettingField label="预览内源码编辑" description="预览模式下按住 Alt 并点击 Markdown 块，可直接编辑该块源码">
+        <Switch checked={editor.inlinePreviewEdit} onChange={(v) => updateEditorSettings({ inlinePreviewEdit: v })} />
+      </SettingField>
       <SettingField label="快捷 AI 自动发送" description="点击编辑区右键菜单中的快捷 AI 操作后立即发送；关闭时仅填入输入框">
         <Switch checked={editor.autoSendAiShortcut} onChange={(v) => updateEditorSettings({ autoSendAiShortcut: v })} />
       </SettingField>
@@ -1192,6 +1195,7 @@ function GeneralSettings() {
       autoSaveDelay: 1000,
       syncScroll: true,
       autoSendAiShortcut: true,
+      inlinePreviewEdit: true,
       modePrewarm: 'smart',
     })
     updateAppearanceSettings({ customCursorEnabled: true, aiMascotAvatarEnabled: false, theme: 'light', lightPalette: 'warm' })

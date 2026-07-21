@@ -26,6 +26,7 @@ interface EditorSettings {
   autoSaveDelay: number
   syncScroll: boolean
   autoSendAiShortcut: boolean
+  inlinePreviewEdit: boolean
   modePrewarm: 'off' | 'smart' | 'turbo'
   fullscreenContentPadding: number
 }
@@ -78,6 +79,7 @@ const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   autoSaveDelay: 1000,
   syncScroll: true,
   autoSendAiShortcut: true,
+  inlinePreviewEdit: true,
   modePrewarm: 'smart',
   fullscreenContentPadding: FULLSCREEN_CONTENT_PADDING.default,
 }
