@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { eventMarker } from '@/services/eventMarker'
 
 interface DiffLine {
@@ -16,6 +16,8 @@ interface MarkdownDiffViewProps {
   fontFamily: string
   wordWrap: boolean
   lineNumbers: boolean
+  documentKey?: string
+  resource?: 'diff'
 }
 
 function buildLineDiff(original: string, current: string): DiffLine[] {
@@ -60,10 +62,14 @@ export function MarkdownDiffView({
   fontFamily,
   wordWrap,
   lineNumbers,
+  documentKey,
+  resource = 'diff',
 }: MarkdownDiffViewProps) {
+  const lifecycleMetadataRef = useRef({ documentKey, resource })
   useEffect(() => {
-    eventMarker.mark('diff-create')
-    return () => eventMarker.mark('diff-dispose')
+    const lifecycleMetadata = lifecycleMetadataRef.current
+    eventMarker.mark('diff-create', lifecycleMetadata)
+    return () => eventMarker.mark('diff-dispose', lifecycleMetadata)
   }, [])
 
   const lines = buildLineDiff(original, current)

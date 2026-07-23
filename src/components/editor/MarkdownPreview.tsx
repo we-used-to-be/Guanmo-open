@@ -10,6 +10,7 @@ import { createHeadingId, type TocItem } from '@/services/markdownToc'
 import { normalizeLatexBlockDelimiters, remarkStandaloneDisplayMath } from '@/services/markdownMath'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { parseMarkdownBlocks, type MarkdownBlock } from '@/services/markdownBlocks'
+import { eventMarker } from '@/services/eventMarker'
 import { InlineMarkdownBlockEditor } from './InlineMarkdownBlockEditor'
 
 const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath, remarkStandaloneDisplayMath]
@@ -42,6 +43,8 @@ interface MarkdownPreviewProps {
   onBlockCommit?: (request: MarkdownBlockCommitRequest) => Promise<MarkdownBlockCommitResult> | MarkdownBlockCommitResult
   onTaskToggle?: (line: number, checked: boolean) => void
   onHeadingClick?: (line: number) => void
+  onDraftStateChange?: (hasDraft: boolean) => void
+  resource?: 'preview' | 'left-preview' | 'right-preview'
 }
 
 interface ActiveBlockEdit {
@@ -128,6 +131,8 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   onBlockCommit,
   onTaskToggle,
   onHeadingClick,
+  onDraftStateChange,
+  resource = 'preview',
 }: MarkdownPreviewProps) {
   const rootRef = useRef<HTMLDivElement>(null)
   const [activeEdit, setActiveEdit] = useState<ActiveBlockEdit | null>(null)
@@ -143,6 +148,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   const handledAltClickRef = useRef(false)
   const mountedRef = useRef(true)
   const onBlockCommitRef = useRef(onBlockCommit)
+  const lifecycleMetadataRef = useRef({ documentKey, resource })
   const scrollRestoreRef = useRef<{ scrollTop: number; container: HTMLElement } | null>(null)
   const displayedContent = activeEdit?.contentSnapshot ?? optimisticContent?.content ?? content
   const blocks = useMemo(() => parseMarkdownBlocks(displayedContent), [displayedContent])
@@ -155,11 +161,18 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   onBlockCommitRef.current = onBlockCommit
 
   useEffect(() => {
+    onDraftStateChange?.(activeEdit !== null)
+  }, [activeEdit, onDraftStateChange])
+
+  useEffect(() => {
+    const lifecycleMetadata = lifecycleMetadataRef.current
     mountedRef.current = true
+    eventMarker.mark('model-create', lifecycleMetadata)
     return () => {
+      eventMarker.mark('model-dispose', lifecycleMetadata)
       const edit = activeEditRef.current
       const commit = onBlockCommitRef.current
-      if (edit && commit) {
+      if (edit && commit && !submitPromiseRef.current) {
         void commit({
           block: edit.block,
           draft: draftRef.current,

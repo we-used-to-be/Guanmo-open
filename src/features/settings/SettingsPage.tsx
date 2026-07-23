@@ -1059,6 +1059,17 @@ function EditorSettings() {
           onChange={(modePrewarm) => updateEditorSettings({ modePrewarm })}
         />
       </SettingField>
+      <SettingField label="模式资源策略" description="控制切换模式后旧编辑器与预览的保留策略。节省内存：立即释放；平衡：延时释放；极速：尽量保留。">
+        <Select
+          options={[
+            { key: 'memory', label: '节省内存' },
+            { key: 'balanced', label: '平衡（默认）' },
+            { key: 'speed', label: '极速切换' },
+          ]}
+          value={editor.modeResourcePolicy}
+          onChange={(v) => updateEditorSettings({ modeResourcePolicy: v as 'memory' | 'balanced' | 'speed' })}
+        />
+      </SettingField>
     </div>
   )
 }

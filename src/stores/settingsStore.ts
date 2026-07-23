@@ -28,6 +28,7 @@ interface EditorSettings {
   autoSendAiShortcut: boolean
   inlinePreviewEdit: boolean
   modePrewarm: 'off' | 'smart' | 'turbo'
+  modeResourcePolicy: 'memory' | 'balanced' | 'speed'
   fullscreenContentPadding: number
 }
 
@@ -81,6 +82,7 @@ const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   autoSendAiShortcut: true,
   inlinePreviewEdit: true,
   modePrewarm: 'smart',
+  modeResourcePolicy: 'balanced',
   fullscreenContentPadding: FULLSCREEN_CONTENT_PADDING.default,
 }
 

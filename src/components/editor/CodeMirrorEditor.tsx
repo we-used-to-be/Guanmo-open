@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useMemo } from 'react'
-import { EditorState, type Text } from '@codemirror/state'
+import { EditorState, type Text, EditorSelection } from '@codemirror/state'
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap, indentWithTab, undoDepth, redoDepth } from '@codemirror/commands'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
@@ -24,6 +24,12 @@ interface CodeMirrorEditorProps {
   documentKey?: string | null
   tabId?: string | null
   initialScrollTop?: number
+  initialCursor?: number
+  initialSelection?: { anchor: number; head: number }
+  initialRanges?: Array<{ anchor: number; head: number }>
+  initialMainIndex?: number
+  onBeforeDestroy?: (documentKey: string | null | undefined, view: EditorView) => void
+  resource?: 'editor'
 }
 
 export function buildMarkdownEditorTheme(fontSize: number, lineHeight: number, fontFamily: string) {
@@ -136,7 +142,7 @@ const saveKeymap = keymap.of([
   },
 ])
 
-export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, viewRef: externalViewRef, documentKey, tabId, initialScrollTop }: CodeMirrorEditorProps) {
+export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, viewRef: externalViewRef, documentKey, tabId, initialScrollTop, initialCursor, initialSelection, initialRanges, initialMainIndex, onBeforeDestroy, resource = 'editor' }: CodeMirrorEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const internalViewRef = useRef<EditorView | null>(null)
   const viewRef = externalViewRef || internalViewRef
@@ -150,6 +156,8 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
   onSaveRef.current = onSave
   const onImageFilesRef = useRef(onImageFiles)
   onImageFilesRef.current = onImageFiles
+  const onBeforeDestroyRef = useRef(onBeforeDestroy)
+  onBeforeDestroyRef.current = onBeforeDestroy
 
   // Read editor settings from store
   const editorSettings = useSettingsStore((s) => s.editor)
@@ -177,7 +185,8 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
 
     inputBufferRef.current?.flush()
 
-    const documentChanged = previousDocumentKeyRef.current !== documentKey
+    const replacedDocumentKey = previousDocumentKeyRef.current
+    const documentChanged = replacedDocumentKey !== documentKey
     previousDocumentKeyRef.current = documentKey
     const currentDoc = documentChanged
       ? content
@@ -195,9 +204,10 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
 
     // Destroy old editor
     if (viewRef.current) {
+      onBeforeDestroyRef.current?.(replacedDocumentKey, viewRef.current)
       viewRef.current.destroy()
-      eventMarker.mark('model-dispose', { editor: 'codemirror', reason: 'recreate' })
-      eventMarker.mark('editor-dispose', { editor: 'codemirror', reason: 'recreate' })
+      eventMarker.mark('model-dispose', { editor: 'codemirror', reason: 'recreate', resource, documentKey: replacedDocumentKey })
+      eventMarker.mark('editor-dispose', { editor: 'codemirror', reason: 'recreate', resource, documentKey: replacedDocumentKey })
       viewRef.current = null
     }
 
@@ -266,12 +276,43 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
       state,
       parent: containerRef.current,
     })
-    eventMarker.mark('editor-create', { editor: 'codemirror' })
-    eventMarker.mark('model-create', { editor: 'codemirror', charCount: state.doc.length })
+    eventMarker.mark('editor-create', { editor: 'codemirror', resource, documentKey })
+    eventMarker.mark('model-create', { editor: 'codemirror', charCount: state.doc.length, resource, documentKey })
 
     viewRef.current = view
     if (typeof initialScrollTop === 'number') {
       view.scrollDOM.scrollTop = initialScrollTop
+    }
+    // Restore cursor/selection if provided, clipped to doc length
+    const clipPos = (pos: number, docLen: number) => Math.max(0, Math.min(pos, docLen))
+    if (initialRanges && initialRanges.length > 0) {
+      const docLen = view.state.doc.length
+      const ranges = initialRanges.map((r) => ({
+        anchor: clipPos(r.anchor, docLen),
+        head: clipPos(r.head, docLen),
+      }))
+      const mainIndex = typeof initialMainIndex === 'number'
+        ? Math.min(initialMainIndex, ranges.length - 1)
+        : ranges.length - 1
+      view.dispatch({
+        selection: EditorSelection.create(
+          ranges.map((r) => EditorSelection.range(r.anchor, r.head)),
+          mainIndex
+        ),
+      })
+    } else if (initialSelection) {
+      const docLen = view.state.doc.length
+      view.dispatch({
+        selection: {
+          anchor: clipPos(initialSelection.anchor, docLen),
+          head: clipPos(initialSelection.head, docLen),
+        },
+      })
+    } else if (typeof initialCursor === 'number') {
+      const docLen = view.state.doc.length
+      view.dispatch({
+        selection: { anchor: clipPos(initialCursor, docLen) },
+      })
     }
     setActiveEditorView(view)
     const { setCanUndo, setCanRedo } = useEditorHistoryStore.getState()
@@ -282,9 +323,10 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
       inputBuffer.flush()
       inputBuffer.dispose()
       if (inputBufferRef.current === inputBuffer) inputBufferRef.current = null
+      onBeforeDestroyRef.current?.(documentKey, view)
       view.destroy()
-      eventMarker.mark('model-dispose', { editor: 'codemirror' })
-      eventMarker.mark('editor-dispose', { editor: 'codemirror' })
+      eventMarker.mark('model-dispose', { editor: 'codemirror', resource, documentKey })
+      eventMarker.mark('editor-dispose', { editor: 'codemirror', resource, documentKey })
       viewRef.current = null
       setActiveEditorView(null)
       setCanUndo(false)

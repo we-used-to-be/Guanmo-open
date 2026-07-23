@@ -6,6 +6,69 @@ export const MODE_PREWARM_ACTIVITY_PAUSE = 1200
 const MODE_PREWARM_HUGE_DOC_LENGTH = 100000
 const MODE_PREWARM_DIFF_LINE_LIMIT = 900
 
+// 资源策略常量
+export const BALANCED_SMALL_DOC_TTL_MS = 45000
+export const BALANCED_LARGE_DOC_THRESHOLD = 100000
+export const BALANCED_LARGE_DOC_TTL_MS = 5000
+
+export type ResourcePolicy = 'memory' | 'balanced' | 'speed'
+export type InstanceType = 'editor' | 'preview' | 'diff'
+
+export interface ResourceDecisionInput {
+  policy: ResourcePolicy
+  /** 当前活跃文档 ID */
+  docId: string | null
+  /** 候选实例关联的文档 ID */
+  candidateDocId: string | null
+  /** 候选实例对应文档的字符数 */
+  docCharCount: number
+  instanceType: InstanceType
+  isCurrentlyVisible: boolean
+  /** 最后一次真正可见或使用的时间（ms 时间戳） */
+  lastUsedAt: number
+  /** 当前时间 */
+  now: number
+  hasUncommittedDraft: boolean
+}
+
+export type ResourceDecision =
+  | { action: 'keep' }
+  | { action: 'keepUntil'; deadline: number }
+  | { action: 'release' }
+
+export function decideResource(input: ResourceDecisionInput): ResourceDecision {
+  if (input.hasUncommittedDraft) return { action: 'keep' }
+  if (input.isCurrentlyVisible) return { action: 'keep' }
+
+  if (input.instanceType === 'diff') return { action: 'release' }
+
+  // 不同文档：非 speed 策略释放
+  if (input.docId && input.candidateDocId && input.docId !== input.candidateDocId) {
+    return { action: 'release' }
+  }
+
+  switch (input.policy) {
+    case 'memory':
+      return { action: 'release' }
+
+    case 'balanced': {
+      const ttl = input.docCharCount >= BALANCED_LARGE_DOC_THRESHOLD
+        ? BALANCED_LARGE_DOC_TTL_MS
+        : BALANCED_SMALL_DOC_TTL_MS
+      const deadline = input.lastUsedAt + ttl
+      if (deadline <= input.now) return { action: 'release' }
+      return { action: 'keepUntil', deadline }
+    }
+
+    case 'speed':
+      return { action: 'keep' }
+
+    default:
+      return { action: 'release' }
+  }
+}
+
+/** 切换文档时始终释放旧文档实例，所有策略统一。 */
 export type ScrollSyncSource = 'editor' | 'preview'
 export type PrewarmTargetMode = Exclude<ViewMode, 'edit'>
 export type PrewarmedModeKeys = Partial<Record<PrewarmTargetMode, string>>
@@ -14,6 +77,14 @@ export interface ReadingPosition {
   editorScrollTop?: number
   previewScrollTop?: number
   topLine?: number
+  /** 编辑器光标位置 */
+  cursor?: number
+  /** 编辑器主选区 {anchor, head} */
+  selection?: { anchor: number; head: number }
+  /** 编辑器多选区（含主选区），保留 anchor/head 方向 */
+  ranges?: Array<{ anchor: number; head: number }>
+  /** 主选区在 ranges 数组中的索引 */
+  mainIndex?: number
 }
 
 export class ReadingPositionSession {
@@ -23,8 +94,17 @@ export class ReadingPositionSession {
     return tabId ? this.positions[tabId] : undefined
   }
 
+  getForPane(tabId: string | null | undefined, pane: 'left' | 'right'): ReadingPosition | undefined {
+    return tabId ? this.positions[`${tabId}:${pane}`] : undefined
+  }
+
   save(tabId: string, position: ReadingPosition): void {
     this.positions[tabId] = { ...this.positions[tabId], ...position }
+  }
+
+  saveForPane(tabId: string, pane: 'left' | 'right', position: ReadingPosition): void {
+    const key = `${tabId}:${pane}`
+    this.positions[key] = { ...this.positions[key], ...position }
   }
 }
 
@@ -89,13 +169,17 @@ function getFrequentPrewarmModes(
     .map((item) => item.mode)
 }
 
-export function scheduleIdlePrewarm(callback: () => void): void {
+export function scheduleIdlePrewarm(callback: () => void): () => void {
   const idleWindow = window as Window & {
     requestIdleCallback?: (cb: IdleRequestCallback, options?: IdleRequestOptions) => number
+    cancelIdleCallback?: (id: number) => void
   }
   if (idleWindow.requestIdleCallback) {
-    idleWindow.requestIdleCallback(callback, { timeout: 900 })
-    return
+    const id = idleWindow.requestIdleCallback(callback, { timeout: 900 })
+    return () => {
+      if (idleWindow.cancelIdleCallback) idleWindow.cancelIdleCallback(id)
+    }
   }
-  window.setTimeout(callback, 120)
+  const id = window.setTimeout(callback, 120)
+  return () => window.clearTimeout(id)
 }

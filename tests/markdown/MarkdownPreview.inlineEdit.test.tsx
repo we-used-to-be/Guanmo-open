@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { StrictMode, useRef, useState } from 'react'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
@@ -299,6 +299,27 @@ describe('MarkdownPreview 预览内源码编辑', () => {
     expect(await screen.findByText(/内容已在其他位置发生变化/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '复制修改内容' })).toBeInTheDocument()
     expect(document.querySelector('.cm-editor')).toBeInTheDocument()
+  })
+
+  it('异步提交未完成时卸载不会重复提交同一草稿', async () => {
+    let resolveCommit: ((result: { status: 'applied'; content: string }) => void) | undefined
+    const pendingCommit = new Promise<{ status: 'applied'; content: string }>((resolve) => {
+      resolveCommit = resolve
+    })
+    const onBlockCommit = vi.fn(() => pendingCommit)
+    const { unmount } = renderPreview({ onBlockCommit })
+    altClick(screen.getByText(/段落/))
+
+    fireEvent.pointerDown(document.body)
+    await waitFor(() => expect(onBlockCommit).toHaveBeenCalledOnce())
+    unmount()
+    expect(onBlockCommit).toHaveBeenCalledOnce()
+
+    await act(async () => {
+      resolveCommit?.({ status: 'applied', content: '匿名内容' })
+      await pendingCommit
+    })
+    expect(onBlockCommit).toHaveBeenCalledOnce()
   })
 
   it('输入法组合期间忽略提交快捷键且不卸载编辑器', async () => {

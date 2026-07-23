@@ -48,6 +48,14 @@ describe('设置兼容', () => {
     expect(state.ai).toBeDefined()
   })
 
+  it('旧配置缺少 modeResourcePolicy 时默认 balanced', async () => {
+    const store = await loadSettingsStore({
+      editor: { fontSize: 16 },
+    })
+    const state = store.getState()
+    expect(state.editor.modeResourcePolicy).toBe('balanced')
+  })
+
   it('损坏的持久配置不会阻止应用使用默认设置', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined)
     const store = await loadSettingsStore(undefined, '{not-valid-json')

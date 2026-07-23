@@ -2,7 +2,6 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { EditorView } from '@codemirror/view'
 import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
-import type { ViewMode } from '@/stores/editorStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useFileOperations } from '@/hooks/useFileOperations'
 import { useActiveHeading } from '@/hooks/useActiveHeading'
@@ -31,9 +30,10 @@ import {
   ScrollSyncSession,
   getNextPrewarmTarget,
   scheduleIdlePrewarm,
+  decideResource,
   type PrewarmTargetMode,
   type PrewarmedModeKeys,
-  type ReadingPosition,
+  type InstanceType,
 } from '@/services/editorSession'
 
 export const OPEN_EDITOR_SEARCH_EVENT = 'guanmo:open-editor-search'
@@ -104,7 +104,13 @@ function useScheduledPreviewContent(
 
   useLayoutEffect(() => {
     previousEnabledRef.current = enabled
-    if (!enabled) return
+    if (!enabled) {
+      if (preview.content) {
+        versionRef.current += 1
+        setPreview({ content: '', version: versionRef.current, pending: false })
+      }
+      return
+    }
     if (switchedDocument || becameEnabled) {
       setPreview({ content, version: versionRef.current, pending: false })
       return
@@ -147,6 +153,7 @@ export function EditorArea() {
   const syncScroll = useSettingsStore((s) => s.editor.syncScroll)
   const inlinePreviewEdit = useSettingsStore((s) => s.editor.inlinePreviewEdit)
   const modePrewarm = useSettingsStore((s) => s.editor.modePrewarm)
+  const modeResourcePolicy = useSettingsStore((s) => s.editor.modeResourcePolicy)
   const fullscreenContentPadding = useSettingsStore((s) => s.editor.fullscreenContentPadding)
   const viewModeUsage = useEditorStore((s) => s.viewModeUsage)
   const isFullscreen = useAppStore((s) => s.isFullscreen)
@@ -178,6 +185,7 @@ export function EditorArea() {
   const warmedModeKeysRef = useRef<Set<string>>(new Set())
   const warmScopeRef = useRef<string | null>(null)
   const prewarmCancelRef = useRef(0)
+  const idlePrewarmCancelRef = useRef<(() => void) | null>(null)
   const lastUserActivityAtRef = useRef(Date.now())
 
   useEffect(() => {
@@ -189,33 +197,315 @@ export function EditorArea() {
   const dualRightTab = !rightPaneUserSelected
     ? activeTab
     : selectedRightTab
-  const prewarmLeftPreview = Boolean(
-    prewarmedModeKeys.preview
-    || prewarmedModeKeys['edit-preview']
-    || prewarmedModeKeys['dual-preview']
-  )
-  const prewarmRightPreview = Boolean(prewarmedModeKeys['dual-preview'])
-  const prewarmDiffPreview = Boolean(prewarmedModeKeys['diff-preview'])
   const retainedRightTabRef = useRef<(typeof tabs)[number] | null>(null)
-  if (viewMode === 'dual-preview' || prewarmRightPreview) {
-    retainedRightTabRef.current = dualRightTab ?? null
+  const leftPreviewDraftRef = useRef(false)
+  const rightPreviewDraftRef = useRef(false)
+  if (viewMode === 'dual-preview') {
+    if (!rightPreviewDraftRef.current || retainedRightTabRef.current?.id === dualRightTab?.id) {
+      retainedRightTabRef.current = dualRightTab ?? null
+    }
   }
-  const rightTab = viewMode === 'dual-preview' || prewarmRightPreview ? dualRightTab : retainedRightTabRef.current
+  const rightTab = retainedRightTabRef.current
   const leftPreviewVisible = viewMode === 'preview' || viewMode === 'edit-preview' || viewMode === 'dual-preview'
   const editorVisible = viewMode === 'edit' || viewMode === 'edit-preview'
-  const leftPreviewMountedRef = useRef(false)
-  const rightPreviewMountedRef = useRef(false)
+
+  const [leftPreviewMounted, setLeftPreviewMounted] = useState(false)
+  const [rightPreviewMounted, setRightPreviewMounted] = useState(false)
+  const [editorMounted, setEditorMounted] = useState(true)
+  const [diffMounted, setDiffMounted] = useState(false)
+  const [draftDecisionVersion, setDraftDecisionVersion] = useState(0)
+  const leftPreviewMountedRef = useRef(leftPreviewMounted)
+  const rightPreviewMountedRef = useRef(rightPreviewMounted)
+  const editorMountedRef = useRef(editorMounted)
+  const diffMountedRef = useRef(diffMounted)
+  leftPreviewMountedRef.current = leftPreviewMounted
+  rightPreviewMountedRef.current = rightPreviewMounted
+  editorMountedRef.current = editorMounted
+  diffMountedRef.current = diffMounted
+  const leftPreviewTtlRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const rightPreviewTtlRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const editorTtlRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const diffReleaseFrameRef = useRef<number | null>(null)
+  const lastInstanceUseRef = useRef<Record<string, number>>({})
+  const instanceDocumentRef = useRef<Record<string, string | null>>({})
+  const forceDraftReleaseRef = useRef({ left: false, right: false })
+  const resourcePolicyRef = useRef(modeResourcePolicy)
+  resourcePolicyRef.current = modeResourcePolicy
   const viewModeRef = useRef(viewMode)
   viewModeRef.current = viewMode
-  if (leftPreviewVisible || prewarmLeftPreview) {
-    leftPreviewMountedRef.current = true
-  }
-  if (viewMode === 'dual-preview' || prewarmRightPreview) {
-    rightPreviewMountedRef.current = true
-  }
-  const leftPreviewWorkEnabled = viewMode !== 'edit' && (leftPreviewVisible || prewarmLeftPreview)
-  const rightPreviewWorkEnabled = viewMode !== 'edit' && (viewMode === 'dual-preview' || prewarmRightPreview)
-  const activePreview = useScheduledPreviewContent(activeTab?.content || '', activeTab?.id)
+  const activeTabIdRef = useRef(activeTabId)
+  activeTabIdRef.current = activeTabId
+  const previousVisibilityRef = useRef({
+    editor: editorVisible,
+    left: leftPreviewVisible,
+    right: viewMode === 'dual-preview',
+  })
+
+  const setResourceMounted = useCallback((
+    resource: 'editor' | 'left-preview' | 'right-preview' | 'diff',
+    mounted: boolean,
+    documentKey: string | null = null,
+  ) => {
+    instanceDocumentRef.current[resource] = mounted ? documentKey : null
+    if (resource === 'editor') {
+      editorMountedRef.current = mounted
+      setEditorMounted(mounted)
+    } else if (resource === 'left-preview') {
+      leftPreviewMountedRef.current = mounted
+      setLeftPreviewMounted(mounted)
+    } else if (resource === 'right-preview') {
+      rightPreviewMountedRef.current = mounted
+      setRightPreviewMounted(mounted)
+    } else {
+      diffMountedRef.current = mounted
+      setDiffMounted(mounted)
+    }
+  }, [])
+
+  // Resource policy: clean up stale TTL timers and manage instance lifecycle
+  const clearTtl = useCallback((ref: React.MutableRefObject<ReturnType<typeof setTimeout> | null>) => {
+    if (ref.current !== null) {
+      clearTimeout(ref.current)
+      ref.current = null
+    }
+  }, [])
+
+  const clearAllTtls = useCallback(() => {
+    clearTtl(leftPreviewTtlRef)
+    clearTtl(rightPreviewTtlRef)
+    clearTtl(editorTtlRef)
+  }, [clearTtl])
+
+  const isInstanceVisible = useCallback((instanceKey: 'editor' | 'left-preview' | 'right-preview' | 'diff') => {
+    const currentMode = viewModeRef.current
+    if (instanceKey === 'editor') return currentMode === 'edit' || currentMode === 'edit-preview'
+    if (instanceKey === 'left-preview') return currentMode === 'preview' || currentMode === 'edit-preview' || currentMode === 'dual-preview'
+    if (instanceKey === 'right-preview') return currentMode === 'dual-preview'
+    return currentMode === 'diff-preview'
+  }, [])
+
+  const decideHiddenResource = useCallback((
+    instanceKey: 'editor' | 'left-preview' | 'right-preview' | 'diff',
+    instanceType: InstanceType,
+    candidateDocId: string | null,
+    docCharCount: number,
+    draftRef?: React.MutableRefObject<boolean>,
+  ) => {
+    const now = Date.now()
+    return decideResource({
+      policy: resourcePolicyRef.current,
+      docId: candidateDocId,
+      candidateDocId,
+      docCharCount,
+      instanceType,
+      isCurrentlyVisible: false,
+      lastUsedAt: lastInstanceUseRef.current[instanceKey] ?? now,
+      now,
+      hasUncommittedDraft: draftRef?.current ?? false,
+    })
+  }, [])
+
+  const scheduleRelease = useCallback((
+    ttlRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>,
+    instanceKey: 'editor' | 'left-preview' | 'right-preview',
+    instanceType: InstanceType,
+    candidateDocId: string | null,
+    docCharCount: number,
+    releaseFn: () => void,
+    draftRef?: React.MutableRefObject<boolean>
+  ) => {
+    clearTtl(ttlRef)
+    const now = Date.now()
+    const hasDraft = draftRef?.current ?? false
+    const decision = decideHiddenResource(instanceKey, instanceType, candidateDocId, docCharCount, draftRef)
+    if (decision.action === 'release') {
+      if (!hasDraft && !isInstanceVisible(instanceKey) && instanceDocumentRef.current[instanceKey] === candidateDocId) {
+        releaseFn()
+      }
+    } else if (decision.action === 'keepUntil') {
+      const timer = setTimeout(() => {
+        if (ttlRef.current !== timer) return
+        ttlRef.current = null
+        if (isInstanceVisible(instanceKey)) return
+        if (instanceDocumentRef.current[instanceKey] !== candidateDocId) return
+        const currentDecision = decideResource({
+          policy: resourcePolicyRef.current,
+          docId: candidateDocId,
+          candidateDocId,
+          docCharCount,
+          instanceType,
+          isCurrentlyVisible: false,
+          lastUsedAt: lastInstanceUseRef.current[instanceKey] ?? now,
+          now: Date.now(),
+          hasUncommittedDraft: draftRef?.current ?? false,
+        })
+        if (currentDecision.action === 'release') releaseFn()
+      }, Math.max(0, decision.deadline - now))
+      ttlRef.current = timer
+    }
+  }, [clearTtl, decideHiddenResource, isInstanceVisible])
+
+  const previousModePrewarmRef = useRef(modePrewarm)
+  useEffect(() => {
+    const previous = previousModePrewarmRef.current
+    previousModePrewarmRef.current = modePrewarm
+    if (previous !== 'off' && modePrewarm === 'off') {
+      prewarmCancelRef.current += 1
+      if (idlePrewarmCancelRef.current) {
+        idlePrewarmCancelRef.current()
+        idlePrewarmCancelRef.current = null
+      }
+      clearAllTtls()
+      if (!editorVisible) {
+        setResourceMounted('editor', false)
+      }
+      if (!leftPreviewVisible) {
+        if (leftPreviewDraftRef.current) forceDraftReleaseRef.current.left = true
+        else {
+          leftPreviewRenderRef.current = { content: '', filePath: undefined }
+          setResourceMounted('left-preview', false)
+        }
+      }
+      if (viewMode !== 'dual-preview') {
+        if (rightPreviewDraftRef.current) forceDraftReleaseRef.current.right = true
+        else {
+          retainedRightTabRef.current = null
+          setResourceMounted('right-preview', false)
+        }
+      }
+      if (diffReleaseFrameRef.current !== null) {
+        window.cancelAnimationFrame(diffReleaseFrameRef.current)
+        diffReleaseFrameRef.current = null
+      }
+      if (viewMode !== 'diff-preview') {
+        setResourceMounted('diff', false)
+      }
+      setPrewarmedModeKeys({})
+    }
+  }, [modePrewarm, editorVisible, leftPreviewVisible, viewMode, clearAllTtls, setResourceMounted])
+
+  const handlePreviewDraftStateChange = useCallback((pane: 'left' | 'right', hasDraft: boolean) => {
+    const draftRef = pane === 'left' ? leftPreviewDraftRef : rightPreviewDraftRef
+    draftRef.current = hasDraft
+    if (hasDraft) {
+      if (pane === 'right') {
+        retainedRightTabRef.current = !useEditorStore.getState().rightPaneUserSelected
+          ? useEditorStore.getState().tabs.find((tab) => tab.id === activeTabIdRef.current) ?? null
+          : useEditorStore.getState().tabs.find((tab) => tab.id === useEditorStore.getState().rightPaneTabId) ?? null
+      }
+    } else {
+      if (pane === 'right' && viewModeRef.current === 'dual-preview') {
+        retainedRightTabRef.current = !useEditorStore.getState().rightPaneUserSelected
+          ? useEditorStore.getState().tabs.find((tab) => tab.id === activeTabIdRef.current) ?? null
+          : useEditorStore.getState().tabs.find((tab) => tab.id === useEditorStore.getState().rightPaneTabId) ?? null
+      }
+      setDraftDecisionVersion((version) => version + 1)
+    }
+  }, [])
+
+  const handleLeftDraftStateChange = useCallback(
+    (hasDraft: boolean) => handlePreviewDraftStateChange('left', hasDraft),
+    [handlePreviewDraftStateChange],
+  )
+  const handleRightDraftStateChange = useCallback(
+    (hasDraft: boolean) => handlePreviewDraftStateChange('right', hasDraft),
+    [handlePreviewDraftStateChange],
+  )
+
+  // Visible, retained, and draft-blocked instances share the same policy decision.
+  useEffect(() => {
+    const now = Date.now()
+    const previousVisibility = previousVisibilityRef.current
+    if (previousVisibility.left && !leftPreviewVisible) lastInstanceUseRef.current['left-preview'] = now
+    if (previousVisibility.right && viewMode !== 'dual-preview') lastInstanceUseRef.current['right-preview'] = now
+    if (previousVisibility.editor && !editorVisible) lastInstanceUseRef.current.editor = now
+    previousVisibilityRef.current = {
+      editor: editorVisible,
+      left: leftPreviewVisible,
+      right: viewMode === 'dual-preview',
+    }
+    if (leftPreviewVisible) {
+      clearTtl(leftPreviewTtlRef)
+      lastInstanceUseRef.current['left-preview'] = now
+      setResourceMounted('left-preview', true, activeTab?.id ?? null)
+      forceDraftReleaseRef.current.left = false
+    } else if (leftPreviewMountedRef.current) {
+      if (forceDraftReleaseRef.current.left && !leftPreviewDraftRef.current) {
+        forceDraftReleaseRef.current.left = false
+        leftPreviewRenderRef.current = { content: '', filePath: undefined }
+        setResourceMounted('left-preview', false)
+      } else {
+        scheduleRelease(leftPreviewTtlRef, 'left-preview', 'preview', instanceDocumentRef.current['left-preview'] ?? activeTab?.id ?? null, activeTab?.content.length ?? 0, () => {
+          leftPreviewRenderRef.current = { content: '', filePath: undefined }
+          setResourceMounted('left-preview', false)
+        }, leftPreviewDraftRef)
+      }
+    }
+
+    if (viewMode === 'dual-preview') {
+      clearTtl(rightPreviewTtlRef)
+      lastInstanceUseRef.current['right-preview'] = now
+      setResourceMounted('right-preview', true, rightTab?.id ?? null)
+      forceDraftReleaseRef.current.right = false
+    } else if (rightPreviewMountedRef.current) {
+      const retained = retainedRightTabRef.current
+      if (forceDraftReleaseRef.current.right && !rightPreviewDraftRef.current) {
+        forceDraftReleaseRef.current.right = false
+        retainedRightTabRef.current = null
+        setResourceMounted('right-preview', false)
+      } else {
+        scheduleRelease(rightPreviewTtlRef, 'right-preview', 'preview', retained?.id ?? null, retained?.content.length ?? 0, () => {
+          retainedRightTabRef.current = null
+          setResourceMounted('right-preview', false)
+        }, rightPreviewDraftRef)
+      }
+    }
+
+    if (editorVisible) {
+      clearTtl(editorTtlRef)
+      lastInstanceUseRef.current.editor = now
+      setResourceMounted('editor', true, activeTab?.id ?? null)
+    } else if (editorMountedRef.current) {
+      instanceDocumentRef.current.editor = activeTab?.id ?? null
+      scheduleRelease(editorTtlRef, 'editor', 'editor', instanceDocumentRef.current.editor, activeTab?.content.length ?? 0, () => {
+          setResourceMounted('editor', false)
+      })
+    }
+
+    if (viewMode === 'diff-preview') {
+      if (diffReleaseFrameRef.current !== null) window.cancelAnimationFrame(diffReleaseFrameRef.current)
+      diffReleaseFrameRef.current = null
+      lastInstanceUseRef.current.diff = now
+      setResourceMounted('diff', true, activeTab?.id ?? null)
+    } else if (diffMountedRef.current) {
+      setResourceMounted('diff', false)
+    }
+  }, [viewMode, modeResourcePolicy, leftPreviewVisible, editorVisible, activeTab?.id, draftDecisionVersion, editorMounted, leftPreviewMounted, rightPreviewMounted]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Document switch: always release old document instances
+  const prevActiveTabIdRef = useRef(activeTabId)
+  useEffect(() => {
+    const prev = prevActiveTabIdRef.current
+    prevActiveTabIdRef.current = activeTabId
+    if (prev && activeTabId && prev !== activeTabId) {
+      // Cancel all TTLs before switching
+      clearAllTtls()
+      // Clear strong references
+      if (!rightPreviewDraftRef.current) retainedRightTabRef.current = null
+      leftPreviewRenderRef.current = { content: '', filePath: undefined }
+      restoredPreviewKeysRef.current = { left: null, right: null }
+      setPrewarmedModeKeys({})
+      warmedModeKeysRef.current.clear()
+      // Re-mount visible instances for new doc
+      setResourceMounted('editor', editorVisible, activeTabId)
+      setResourceMounted('left-preview', leftPreviewVisible, activeTabId)
+      if (!rightPreviewDraftRef.current) setResourceMounted('right-preview', viewMode === 'dual-preview', rightTab?.id ?? null)
+    }
+  }, [activeTabId, editorVisible, leftPreviewVisible, viewMode, clearAllTtls, rightTab?.id, setResourceMounted])
+
+  const leftPreviewWorkEnabled = leftPreviewVisible || leftPreviewMounted
+  const rightPreviewWorkEnabled = viewMode === 'dual-preview' || rightPreviewMounted
+  const activePreview = useScheduledPreviewContent(activeTab?.content || '', activeTab?.id, leftPreviewWorkEnabled)
   const rightPreview = useScheduledPreviewContent(rightTab?.content || '', rightTab?.id, rightPreviewWorkEnabled)
   const leftPreviewRenderRef = useRef({
     content: activePreview.content,
@@ -227,6 +517,13 @@ export function EditorArea() {
       filePath: activeTab?.filePath,
     }
   }
+
+  useEffect(() => {
+    if (!leftPreviewMounted && !leftPreviewVisible) {
+      leftPreviewRenderRef.current = { content: '', filePath: undefined }
+    }
+  }, [leftPreviewMounted, leftPreviewVisible])
+
   const toc = useMemo(() => extractToc(activePreview.content), [activePreview.content])
   const rightToc = useMemo(() => extractToc(rightPreview.content), [rightPreview.content])
   const modeDerivationsEnabled = viewMode !== 'edit'
@@ -325,13 +622,12 @@ export function EditorArea() {
   }, [modePrewarm])
 
   useEffect(() => {
-    if (viewMode === 'edit') return
     cancelModePrewarm()
     setPrewarmedModeKeys({})
-  }, [activeTab?.id, activePreview.content, activeTab?.originalContent, cancelModePrewarm, viewMode])
+  }, [activeTab?.id, activeTab?.content, activeTab?.originalContent, cancelModePrewarm, viewMode])
 
   useEffect(() => {
-    if (!activeTab?.id || modePrewarm === 'off' || viewMode === 'edit') return
+    if (!activeTab?.id || modePrewarm === 'off') return
     if (activePreview.pending || rightPreview.pending) return
 
     const target = getNextPrewarmTarget({
@@ -352,7 +648,13 @@ export function EditorArea() {
     const timer = window.setTimeout(() => {
       const idleSince = Date.now() - lastUserActivityAtRef.current
       if (prewarmCancelRef.current !== token || idleSince < MODE_PREWARM_ACTIVITY_PAUSE) return
-      scheduleIdlePrewarm(() => {
+      // Cancel previous idle callback before scheduling new one
+      if (idlePrewarmCancelRef.current) {
+        idlePrewarmCancelRef.current()
+        idlePrewarmCancelRef.current = null
+      }
+      idlePrewarmCancelRef.current = scheduleIdlePrewarm(() => {
+        idlePrewarmCancelRef.current = null
         if (prewarmCancelRef.current !== token) return
         const key = getModeRenderKey(target)
         if (!key) return
@@ -362,7 +664,7 @@ export function EditorArea() {
             : { ...current, [target]: key }
         ))
       })
-    }, MODE_PREWARM_IDLE_DELAY)
+    }, Math.max(MODE_PREWARM_IDLE_DELAY, MODE_PREWARM_ACTIVITY_PAUSE))
 
     return () => window.clearTimeout(timer)
   }, [
@@ -378,19 +680,56 @@ export function EditorArea() {
     viewModeUsage,
   ])
 
-  const getStoredPreviewTop = useCallback((tabId: string | null | undefined) => {
+  useEffect(() => {
+    if (!activeTab?.id || modePrewarm === 'off') return
+    const requestedModes = Object.keys(prewarmedModeKeys) as PrewarmTargetMode[]
+    if (requestedModes.length === 0) return
+    const now = Date.now()
+    const wantsLeft = requestedModes.some((mode) => mode === 'preview' || mode === 'edit-preview' || mode === 'dual-preview')
+    const wantsEditor = requestedModes.includes('edit-preview')
+    const wantsRight = requestedModes.includes('dual-preview')
+    const wantsDiff = requestedModes.includes('diff-preview')
+
+    if (wantsLeft && !leftPreviewVisible && !leftPreviewMountedRef.current) {
+      lastInstanceUseRef.current['left-preview'] = now
+      setResourceMounted('left-preview', true, activeTab.id)
+    }
+
+    if (wantsEditor && !editorVisible && !editorMountedRef.current) {
+      lastInstanceUseRef.current.editor = now
+      setResourceMounted('editor', true, activeTab.id)
+    }
+
+    if (wantsRight && viewMode !== 'dual-preview' && !rightPreviewMountedRef.current) {
+      const candidate = dualRightTab ?? activeTab
+      retainedRightTabRef.current = candidate
+      lastInstanceUseRef.current['right-preview'] = now
+      setResourceMounted('right-preview', true, candidate.id)
+    }
+
+    if (wantsDiff && viewMode !== 'diff-preview' && !diffMountedRef.current) {
+      lastInstanceUseRef.current.diff = now
+      setResourceMounted('diff', true, activeTab.id)
+      const decision = decideHiddenResource('diff', 'diff', activeTab.id, activeTab.content.length)
+      if (decision.action !== 'release') return
+      if (diffReleaseFrameRef.current !== null) window.cancelAnimationFrame(diffReleaseFrameRef.current)
+      diffReleaseFrameRef.current = window.requestAnimationFrame(() => {
+        diffReleaseFrameRef.current = null
+        if (viewModeRef.current === 'diff-preview' || instanceDocumentRef.current.diff !== activeTab.id) return
+        setResourceMounted('diff', false)
+      })
+    }
+  }, [activeTab?.id, modePrewarm, prewarmedModeKeys, decideHiddenResource, setResourceMounted]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const getStoredPreviewTop = useCallback((tabId: string | null | undefined, pane: 'left' | 'right' = 'left') => {
     if (!tabId) return 0
-    const position = readingPositionsRef.current.get(tabId)
+    const position = readingPositionsRef.current.getForPane(tabId, pane)
     return position?.previewScrollTop ?? 0
   }, [])
 
   const getStoredEditorTop = useCallback((tabId: string | null | undefined) => {
     if (!tabId) return 0
     return readingPositionsRef.current.get(tabId)?.editorScrollTop ?? 0
-  }, [])
-
-  const saveReadingPosition = useCallback((tabId: string, position: ReadingPosition) => {
-    readingPositionsRef.current.save(tabId, position)
   }, [])
 
   const leftPreviewMasked = Boolean(
@@ -406,30 +745,39 @@ export function EditorArea() {
   const rightPreviewMasked = Boolean(
     rightTab?.id
     && restoredPreviewKeysRef.current.right !== rightTab.id
-    && getStoredPreviewTop(rightTab.id) > 0
+    && getStoredPreviewTop(rightTab.id, 'right') > 0
   )
 
-  const saveEditorReadingPosition = useCallback((tabId: string) => {
-    const view = editorViewRef.current
-    if (!view) return
-    saveReadingPosition(tabId, {
+  const saveEditorPositionForTab = useCallback((tabId: string | null | undefined, view = editorViewRef.current) => {
+    if (!tabId || !view) return
+    const mainIndex = view.state.selection.ranges.indexOf(view.state.selection.main)
+    const ranges = view.state.selection.ranges.map((r) => ({
+      anchor: r.anchor,
+      head: r.head,
+    }))
+    readingPositionsRef.current.save(tabId, {
       editorScrollTop: view.scrollDOM.scrollTop,
       topLine: getEditorTopLine(view),
+      cursor: view.state.selection.main.head,
+      selection: { anchor: view.state.selection.main.anchor, head: view.state.selection.main.head },
+      ranges: ranges.length > 1 ? ranges : undefined,
+      mainIndex: ranges.length > 1 ? mainIndex : undefined,
     })
-  }, [saveReadingPosition])
+  }, [])
 
   const savePreviewReadingPosition = useCallback((
     tabId: string,
     container: HTMLElement | null,
-    previewVersion: number
+    previewVersion: number,
+    pane: 'left' | 'right' = 'left'
   ) => {
     if (isRestoringScrollRef.current) return
     if (!container) return
-    saveReadingPosition(tabId, {
+    readingPositionsRef.current.saveForPane(tabId, pane, {
       previewScrollTop: container.scrollTop,
       topLine: getPreviewLineAtTop(container, previewVersion, previewAnchorCacheRef.current),
     })
-  }, [saveReadingPosition])
+  }, [])
 
   const withRestoreLock = useCallback((restore: () => void) => {
     isRestoringScrollRef.current = true
@@ -476,7 +824,7 @@ export function EditorArea() {
     container: HTMLElement | null,
     pane: 'left' | 'right'
   ) => {
-    const position = readingPositionsRef.current.get(tabId)
+    const position = readingPositionsRef.current.getForPane(tabId, pane)
     if (!container) return
     const lineTop = position?.previewScrollTop === undefined && position?.topLine
       ? getPreviewTopForLine(container, position.topLine)
@@ -496,7 +844,7 @@ export function EditorArea() {
     const handleScroll = () => {
       const currentMode = useEditorStore.getState().viewMode
       if (currentMode !== 'edit' && currentMode !== 'edit-preview') return
-      saveEditorReadingPosition(activeTab.id)
+      saveEditorPositionForTab(activeTab.id)
       setTocFocus('editor')
       if (editorTocFrameRef.current !== null || !view) return
       editorTocFrameRef.current = window.requestAnimationFrame(() => {
@@ -521,7 +869,7 @@ export function EditorArea() {
         editorTocFrameRef.current = null
       }
     }
-  }, [activeTab?.id, saveEditorReadingPosition, updateEditorHeading, viewMode])
+  }, [activeTab?.id, saveEditorPositionForTab, updateEditorHeading, viewMode])
 
   useLayoutEffect(() => {
     if (!activeTab?.id) return
@@ -590,6 +938,15 @@ export function EditorArea() {
 
   useEffect(() => () => {
     scrollSyncSessionRef.current.dispose()
+    clearAllTtls()
+    if (idlePrewarmCancelRef.current) {
+      idlePrewarmCancelRef.current()
+      idlePrewarmCancelRef.current = null
+    }
+    if (diffReleaseFrameRef.current !== null) {
+      window.cancelAnimationFrame(diffReleaseFrameRef.current)
+      diffReleaseFrameRef.current = null
+    }
     if (restoreScrollFrameRef.current !== null) {
       window.cancelAnimationFrame(restoreScrollFrameRef.current)
       restoreScrollFrameRef.current = null
@@ -598,7 +955,24 @@ export function EditorArea() {
       window.cancelAnimationFrame(editorRestoreFrameRef.current)
       editorRestoreFrameRef.current = null
     }
-  }, [])
+    if (editorScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(editorScrollFrameRef.current)
+      editorScrollFrameRef.current = null
+    }
+    if (previewScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(previewScrollFrameRef.current)
+      previewScrollFrameRef.current = null
+    }
+    if (editorTocFrameRef.current !== null) {
+      window.cancelAnimationFrame(editorTocFrameRef.current)
+      editorTocFrameRef.current = null
+    }
+    retainedRightTabRef.current = null
+    leftPreviewRenderRef.current = { content: '', filePath: undefined }
+    instanceDocumentRef.current = {}
+    prewarmedModeKeysRef.current = {}
+    warmedModeKeysRef.current.clear()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleEditorChange = useCallback(
     (content: string) => {
@@ -742,9 +1116,19 @@ export function EditorArea() {
     const tab = useEditorStore.getState().tabs.find((item) => item.id === request.documentKey)
     if (!tab) {
       toast.warning('文档已关闭，块修改未写入；可复制修改内容后重新打开文档。')
-      return { status: 'conflict' as const, currentSource: '' }
+      return Promise.resolve({ status: 'conflict' as const, currentSource: '' })
     }
     const result = replaceMarkdownBlock(tab.content, request.block, request.draft)
+    if (result instanceof Promise) {
+      return result.then((resolved) => {
+        if (resolved.status === 'conflict') {
+          toast.warning('该 Markdown 块已被其他操作修改，当前草稿未覆盖原文。')
+          return resolved
+        }
+        if (resolved.content !== tab.content) updateTabContent(tab.id, resolved.content)
+        return { status: 'applied' as const, content: resolved.content }
+      })
+    }
     if (result.status === 'conflict') {
       toast.warning('该 Markdown 块已被其他操作修改，当前草稿未覆盖原文。')
       return result
@@ -762,12 +1146,12 @@ export function EditorArea() {
   const handleLeftPreviewScroll = useCallback(() => {
     if (!activeTab?.id) return
     if (viewModeRef.current === 'edit-preview') setTocFocus('preview')
-    savePreviewReadingPosition(activeTab.id, leftPreviewRef.current, activePreview.version)
+    savePreviewReadingPosition(activeTab.id, leftPreviewRef.current, activePreview.version, 'left')
   }, [activePreview.version, activeTab?.id, savePreviewReadingPosition])
 
   const handleRightPreviewScroll = useCallback(() => {
     if (!rightTab?.id) return
-    savePreviewReadingPosition(rightTab.id, rightPreviewRef.current, rightPreview.version)
+    savePreviewReadingPosition(rightTab.id, rightPreviewRef.current, rightPreview.version, 'right')
   }, [rightPreview.version, rightTab?.id, savePreviewReadingPosition])
 
   const jumpToLine = useCallback((line: number) => {
@@ -1168,7 +1552,7 @@ export function EditorArea() {
           <WelcomeScreen />
         ) : (
           <>
-            {(viewMode === 'diff-preview' || prewarmDiffPreview) && (
+            {(viewMode === 'diff-preview' || diffMounted) && (
               <div className={viewMode === 'diff-preview' ? 'flex min-w-0 flex-1' : 'hidden'}>
                 <MarkdownDiffView
                   original={activeTab?.originalContent || ''}
@@ -1178,10 +1562,13 @@ export function EditorArea() {
                   fontFamily={editorFontFamily}
                   wordWrap={editorWordWrap}
                   lineNumbers={editorLineNumbers}
+                  documentKey={activeTab?.id}
+                  resource="diff"
                 />
               </div>
             )}
             <div className={`${viewMode === 'diff-preview' ? 'hidden' : 'flex'} flex-1 overflow-hidden bg-gm-surface`}>
+            {(editorMounted || editorVisible) && (
             <div className={`${editorVisible ? (viewMode === 'edit-preview' ? 'min-w-0 flex-1 border-r border-gm-border-subtle' : 'flex-1') : 'hidden'} ${isFullscreen ? 'gm-fullscreen-editor-content' : ''} ${fullscreenTocExpanded && viewMode === 'edit' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-hidden relative`}>
               {activeTab && (
                 <CodeMirrorEditor
@@ -1193,6 +1580,12 @@ export function EditorArea() {
                   documentKey={activeTab.id}
                   tabId={activeTab.id}
                   initialScrollTop={getStoredEditorTop(activeTab.id)}
+                  initialCursor={readingPositionsRef.current.get(activeTab.id)?.cursor}
+                  initialSelection={readingPositionsRef.current.get(activeTab.id)?.selection}
+                  initialRanges={readingPositionsRef.current.get(activeTab.id)?.ranges}
+                  initialMainIndex={readingPositionsRef.current.get(activeTab.id)?.mainIndex}
+                  onBeforeDestroy={saveEditorPositionForTab}
+                  resource="editor"
                 />
               )}
               {activeTab && (
@@ -1211,9 +1604,11 @@ export function EditorArea() {
               )}
               <EditorContextMenu viewRef={editorViewRef} />
             </div>
+            )}
 
-            {leftPreviewMountedRef.current && (
+            {(leftPreviewMounted || leftPreviewVisible) && (
               <div
+                key={`left-${activeTab?.id ?? 'none'}`}
                 ref={leftPreviewRef}
                 className={`${leftPreviewVisible ? 'min-w-0 flex-1' : 'hidden'} ${viewMode === 'dual-preview' ? 'border-r border-gm-border-subtle' : ''} ${viewMode === 'edit-preview' ? 'gm-preview-heading-clickable' : ''} ${isFullscreen ? 'gm-fullscreen-preview-content py-6' : 'p-6'} ${fullscreenTocExpanded && viewMode !== 'dual-preview' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-auto select-text bg-gm-surface relative`}
                 style={leftPreviewMasked ? { visibility: 'hidden' } : undefined}
@@ -1235,12 +1630,15 @@ export function EditorArea() {
                   onBlockCommit={handlePreviewBlockCommit}
                   onHeadingClick={handleLeftPreviewHeadingClick}
                   onTaskToggle={activeTab ? handleActiveTaskToggle : undefined}
+                  onDraftStateChange={handleLeftDraftStateChange}
+                  resource="left-preview"
                 />
               </div>
             )}
 
-            {rightPreviewMountedRef.current && (
+            {(rightPreviewMounted || viewMode === 'dual-preview') && (
             <div
+              key={`right-${rightTab?.id ?? 'none'}`}
               ref={rightPreviewRef}
               className={`${viewMode === 'dual-preview' ? 'min-w-0 flex-1' : 'hidden'} ${isFullscreen ? 'gm-fullscreen-preview-content py-6' : 'p-6'} ${fullscreenTocExpanded && viewMode === 'dual-preview' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-auto select-text bg-gm-surface relative ${rightPaneDragOver ? 'ring-2 ring-inset ring-gm-primary/40' : ''}`}
               style={rightPreviewMasked ? { visibility: 'hidden' } : undefined}
@@ -1276,6 +1674,8 @@ export function EditorArea() {
                   inlineEditEnabled={inlinePreviewEdit}
                   onBlockCommit={handlePreviewBlockCommit}
                   onTaskToggle={handleRightTaskToggle}
+                  onDraftStateChange={handleRightDraftStateChange}
+                  resource="right-preview"
                 />
               ) : (
                 <div className="flex items-center justify-center h-full text-gm-text-tertiary text-caption">
