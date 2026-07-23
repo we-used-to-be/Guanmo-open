@@ -51,6 +51,10 @@ interface ActiveBlockEdit {
   contentSnapshot: string
   initialCursor: number
   conflict: boolean
+  previewHeight: number
+  scrollAnchor: {
+    scrollTop: number
+  }
 }
 
 interface AltPointerIntent {
@@ -109,7 +113,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   const handledAltClickRef = useRef(false)
   const mountedRef = useRef(true)
   const onBlockCommitRef = useRef(onBlockCommit)
-  const scrollRestoreRef = useRef<{ line: number; top: number; container: HTMLElement } | null>(null)
+  const scrollRestoreRef = useRef<{ scrollTop: number; container: HTMLElement } | null>(null)
   const displayedContent = activeEdit?.contentSnapshot ?? optimisticContent?.content ?? content
   const blocks = useMemo(() => parseMarkdownBlocks(displayedContent), [displayedContent])
   const normalizedContent = useMemo(() => getNormalizedMarkdown(displayedContent), [displayedContent])
@@ -145,23 +149,22 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   }, [content, optimisticContent])
 
   useLayoutEffect(() => {
-    if (activeEdit || !scrollRestoreRef.current || !rootRef.current) return
+    if (activeEdit || !scrollRestoreRef.current) return
     const pending = scrollRestoreRef.current
-    const target = rootRef.current.querySelector<HTMLElement>(`[data-md-line="${pending.line}"]`)
-    if (target) {
-      pending.container.scrollTop += target.getBoundingClientRect().top - pending.top
+    // 直接恢复进入编辑前的滚动位置
+    if (pending.container) {
+      pending.container.scrollTop = pending.scrollTop
     }
     scrollRestoreRef.current = null
   }, [activeEdit, displayedContent])
 
   const closeActiveEdit = useCallback((edit: ActiveBlockEdit) => {
     if (!mountedRef.current) return
-    const editor = rootRef.current?.querySelector<HTMLElement>('.gm-inline-markdown-editor')
     const scrollContainer = rootRef.current?.parentElement
-    if (editor && scrollContainer) {
+    if (scrollContainer) {
+      // 退出编辑时记录当前滚动位置，退出后恢复
       scrollRestoreRef.current = {
-        line: edit.block.startLine,
-        top: editor.getBoundingClientRect().top,
+        scrollTop: edit.scrollAnchor.scrollTop,
         container: scrollContainer,
       }
     }
@@ -254,6 +257,16 @@ export const MarkdownPreview = memo(function MarkdownPreview({
     const clickedLine = Number(lineElement?.dataset.mdLine)
     if (current?.block.renderKey === requestedBlock.renderKey && current.documentKey === documentKey) return
 
+    // 读取目标预览块的实际高度和进入编辑时的滚动位置
+    const blockWrapper = target.closest<HTMLElement>('[data-md-block-index]')
+    const previewHeight = blockWrapper
+      ? blockWrapper.getBoundingClientRect().height
+      : 200
+    const scrollContainer = rootRef.current?.parentElement
+    const scrollTop = scrollContainer
+      ? scrollContainer.scrollTop
+      : 0
+
     let contentSnapshot = displayedContent
     let block = requestedBlock
     if (current) {
@@ -281,6 +294,10 @@ export const MarkdownPreview = memo(function MarkdownPreview({
       contentSnapshot,
       initialCursor,
       conflict: false,
+      previewHeight,
+      scrollAnchor: {
+        scrollTop,
+      },
     }
     draftRef.current = block.rawSource
     activeEditRef.current = edit
@@ -367,6 +384,7 @@ export const MarkdownPreview = memo(function MarkdownPreview({
                   fontFamily={fontFamily}
                   wordWrap={wordWrap}
                   conflict={activeEdit.conflict}
+                  previewHeight={activeEdit.previewHeight}
                   onDraftChange={(draft) => { draftRef.current = draft }}
                   onSubmit={(draft) => {
                     draftRef.current = draft

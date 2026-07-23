@@ -13,6 +13,7 @@ interface InlineMarkdownBlockEditorProps {
   fontFamily: string
   wordWrap: boolean
   conflict: boolean
+  previewHeight: number
   onDraftChange: (draft: string) => void
   onSubmit: (draft: string) => void
   onCopyDraft: (draft: string) => void
@@ -26,6 +27,7 @@ export function InlineMarkdownBlockEditor({
   fontFamily,
   wordWrap,
   conflict,
+  previewHeight,
   onDraftChange,
   onSubmit,
   onCopyDraft,
@@ -38,9 +40,13 @@ export function InlineMarkdownBlockEditor({
   onDraftChangeRef.current = onDraftChange
   onSubmitRef.current = onSubmit
 
+  // 计算编辑器高度：减去 border (2px) 后 clamp 到合理范围
+  // 编辑器外壳有 border: 1px，所以实际内容高度 = previewHeight - 2
+  const contentHeight = Math.max(0, previewHeight - 2)
+  const editorHeight = Math.max(96, Math.min(contentHeight, Math.min(window.innerHeight * 0.7, 720)))
+
   useLayoutEffect(() => {
     if (!hostRef.current) return
-    const maxHeight = isLongBlock(block) ? 480 : 360
     const submit = (view: EditorView) => {
       if (view.composing || composingRef.current) return false
       onSubmitRef.current(view.state.doc.toString())
@@ -53,9 +59,9 @@ export function InlineMarkdownBlockEditor({
         history(),
         buildMarkdownEditorTheme(fontSize, lineHeight, fontFamily),
         EditorView.theme({
-          '&': { height: 'auto', minHeight: '44px' },
-          '.cm-scroller': { maxHeight: `${maxHeight}px`, overflow: 'auto' },
-          '.cm-content': { padding: '10px 12px', minHeight: '44px' },
+          '&': { height: `${editorHeight}px` },
+          '.cm-scroller': { height: '100%', overflow: 'auto' },
+          '.cm-content': { padding: '10px 12px', minHeight: '100%' },
           '.cm-gutters': { display: 'none' },
           '.cm-activeLine': { backgroundColor: 'transparent' },
         }),
@@ -114,7 +120,11 @@ export function InlineMarkdownBlockEditor({
           </>
         )}
       </div>
-      <div ref={hostRef} />
+      <div
+        ref={hostRef}
+        className="gm-inline-markdown-editor__host"
+        style={{ height: `${editorHeight}px` }}
+      />
     </div>
   )
 }

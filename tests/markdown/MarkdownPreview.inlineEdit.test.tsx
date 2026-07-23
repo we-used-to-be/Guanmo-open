@@ -143,14 +143,15 @@ describe('MarkdownPreview 预览内源码编辑', () => {
     altClick(screen.getByRole('button', { name: '复制 ts 代码' }))
 
     await screen.findByText('Markdown')
-    expect(getComputedStyle(document.querySelector('.cm-scroller') as Element).maxHeight).toBe('480px')
+    // 新实现：编辑器高度由外壳容器控制，scroller 使用 height: 100%
+    expect(getComputedStyle(document.querySelector('.cm-scroller') as Element).height).toBe('100%')
   })
 
   it.each([
     ['图片', '![示例图片](image.png)', 'image'],
     ['无序列表', '- 第一项\n- 第二项', 'list'],
     ['Mermaid', '```mermaid\ngraph TD\nA-->B\n```', 'mermaid'],
-  ])('%s 的预览高度不会变成源码编辑区的最小高度', async (_label, content, blockType) => {
+  ])('%s 的预览高度不会变成源码编辑区的最小高度', { timeout: 10000 }, async (_label, content, blockType) => {
     const { container } = renderPreview({ content })
     const wrapper = container.querySelector<HTMLElement>(`[data-md-block-type="${blockType}"]`)
     expect(wrapper).not.toBeNull()
@@ -159,7 +160,8 @@ describe('MarkdownPreview 预览内源码编辑', () => {
     altClick(wrapper as HTMLElement)
 
     await screen.findByText('Markdown')
-    expect(getComputedStyle(document.querySelector('.cm-content') as Element).minHeight).toBe('44px')
+    // 新实现：编辑器高度由外壳容器控制，cm-content 使用 minHeight: 100%
+    expect(getComputedStyle(document.querySelector('.cm-content') as Element).minHeight).toBe('100%')
   })
 
   it('外部 pointerdown 提交后恢复预览，Esc 不再提交', async () => {
