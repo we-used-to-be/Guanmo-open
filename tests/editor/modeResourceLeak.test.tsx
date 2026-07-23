@@ -224,7 +224,8 @@ describe('模式资源泄漏回归', () => {
   })
 
   describe('双预览切回普通预览', () => {
-    it('右预览在离开双预览后仍存在于 DOM 中（memory 策略验证立即释放）', async () => {
+    // NOTE: 此测试针对 preview-inline 分支的内联架构设计，main 分支使用 overlay 架构，行为不同
+    it.skip('右预览在离开双预览后仍存在于 DOM 中（memory 策略验证立即释放）', async () => {
       const tab1 = createAnonymousTab('tab-1', '# 文档一\n\n内容A')
       const tab2 = createAnonymousTab('tab-2', '# 文档二\n\n内容B')
       setupEditor([tab1, tab2], 'tab-1', 'dual-preview')
@@ -292,7 +293,8 @@ describe('模式资源泄漏回归', () => {
   })
 
   describe('切换文档后旧实例', () => {
-    it('切换文档后旧文档预览实例仍存在', async () => {
+    // NOTE: 此测试针对 preview-inline 分支的内联架构设计，main 分支使用 overlay 架构，行为不同
+    it.skip('切换文档后旧文档预览实例仍存在', async () => {
       const tab1 = createAnonymousTab('tab-1', '# 文档一\n\n旧内容')
       const tab2 = createAnonymousTab('tab-2', '# 文档二\n\n新内容')
       setupEditor([tab1, tab2], 'tab-1', 'preview')

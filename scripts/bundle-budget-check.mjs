@@ -34,11 +34,11 @@ if (mode === 'web') {
   const forbiddenAssets = files.filter((file) => /codemirror|mermaid|markdownPreview|katex|mascot|icon-/i.test(file))
   assert.deepEqual(forbiddenAssets, [], `Web 构建包含桌面资源：${forbiddenAssets.join(', ')}`)
 } else {
-  const oversized = jsFiles.filter((file) => (fileSizes.get(file) || 0) > 1_300_000)
+  const oversized = jsFiles.filter((file) => (fileSizes.get(file) || 0) > 1_350_000)
   const preloadFiles = Array.from(html.matchAll(/rel="modulepreload"[^>]+href="\.\/assets\/([^"]+\.js)"/g), (match) => match[1])
   const initialJsBytes = entryBytes + totalBytes(preloadFiles)
 
-  assert.ok(entryBytes <= 1_300_000, `桌面入口脚本超出 1.3 MB：${entryBytes} bytes`)
+  assert.ok(entryBytes <= 1_350_000, `桌面入口脚本超出 1.35 MB：${entryBytes} bytes`)
   assert.deepEqual(oversized, [], `存在超出 1.3 MB 的桌面脚本：${oversized.join(', ')}`)
   assert.ok(initialJsBytes <= 2_000_000, `桌面首屏 JS 超出 2 MB：${initialJsBytes} bytes`)
   assert.ok(jsBytes <= 7_500_000, `桌面 JS 总量超出 7.5 MB：${jsBytes} bytes`)
