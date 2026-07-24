@@ -955,7 +955,14 @@ export function EditorArea() {
 
   const restoreEditorReadingPosition = useCallback((tabId: string) => {
     const view = editorViewRef.current
-    const position = readingPositionsRef.current.get(tabId)
+    // 优先读取编辑器 key，无数据时 fallback 到左预览的 topLine
+    let position = readingPositionsRef.current.get(tabId)
+    if (!position?.topLine && typeof position?.editorScrollTop !== 'number') {
+      const previewPos = readingPositionsRef.current.getForPane(tabId, 'left')
+      if (previewPos?.topLine) {
+        position = { ...position, topLine: previewPos.topLine }
+      }
+    }
     if (!view || !position) return
 
     if (editorRestoreFrameRef.current !== null) {
@@ -981,7 +988,14 @@ export function EditorArea() {
     container: HTMLElement | null,
     pane: 'left' | 'right'
   ) => {
-    const position = readingPositionsRef.current.getForPane(tabId, pane)
+    // 优先读取预览 key，无数据时 fallback 到编辑器的 topLine
+    let position = readingPositionsRef.current.getForPane(tabId, pane)
+    if (!position?.previewScrollTop && !position?.topLine) {
+      const editorPos = readingPositionsRef.current.get(tabId)
+      if (editorPos?.topLine) {
+        position = { ...position, topLine: editorPos.topLine }
+      }
+    }
     if (!container) return
     const lineTop = position?.previewScrollTop === undefined && position?.topLine
       ? getPreviewTopForLine(container, position.topLine)

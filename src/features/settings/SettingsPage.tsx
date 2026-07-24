@@ -405,6 +405,8 @@ function AiSettings() {
   const [chatTesting, setChatTesting] = useState(false)
   const [embTestResult, setEmbTestResult] = useState<ValidateResult | null>(null)
   const [embTesting, setEmbTesting] = useState(false)
+  const [webSearchTestResult, setWebSearchTestResult] = useState<WebSearchTestResult | null>(null)
+  const [webSearchTesting, setWebSearchTesting] = useState(false)
   // 保存预设弹窗
   const [showChatSavePreset, setShowChatSavePreset] = useState(false)
   const [chatPresetName, setChatPresetName] = useState('')
@@ -484,6 +486,19 @@ function AiSettings() {
       setEmbTestResult({ ok: false, error: 'unknown', message: (err as Error).message || String(err) })
     } finally {
       setEmbTesting(false)
+    }
+  }
+
+  const handleWebSearchTest = async () => {
+    setWebSearchTesting(true)
+    setWebSearchTestResult(null)
+    try {
+      const result = await testWebSearchConnection(webSearch)
+      setWebSearchTestResult(result)
+    } catch (err) {
+      setWebSearchTestResult({ ok: false, message: (err as Error).message || String(err) })
+    } finally {
+      setWebSearchTesting(false)
     }
   }
 
@@ -826,6 +841,30 @@ function AiSettings() {
             disabled={!isTauri()}
           />
         </SettingField>
+      )}
+
+      {/* 测试连接 */}
+      <div className="py-1 flex items-center gap-2">
+        <Button type="default" size="small" loading={webSearchTesting} onClick={handleWebSearchTest}>
+          测试连接
+        </Button>
+      </div>
+
+      {/* 测试结果 */}
+      {webSearchTesting && (
+        <p className="text-caption text-gm-text-secondary py-1">连接中…</p>
+      )}
+      {webSearchTestResult && !webSearchTesting && (
+        <div className={`rounded-lg border px-3 py-2 mb-1 text-caption ${
+          webSearchTestResult.ok
+            ? 'border-gm-success/30 bg-gm-success/5 text-gm-success'
+            : 'border-gm-error/30 bg-gm-error/5 text-gm-error'
+        }`}>
+          <div className="flex items-center gap-1.5 font-semibold">
+            <span>{webSearchTestResult.ok ? '✓' : '✗'}</span>
+            <span>{webSearchTestResult.ok ? '连接成功' : webSearchTestResult.message || '连接失败'}</span>
+          </div>
+        </div>
       )}
 
       {isTauri() && <AuthorizedApiOrigins />}
