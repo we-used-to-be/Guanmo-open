@@ -16,6 +16,15 @@ import { toast } from '@/services/toast'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useFullscreen } from '@/hooks/useFullscreen'
 import { OPEN_SETTINGS_SECTION_EVENT } from '@/services/settingsNavigation'
+import { FeatureIntroModal } from '@/features/featureIntro/FeatureIntroModal'
+import {
+  OPEN_FEATURE_INTRO_EVENT,
+  type FeatureIntroEventDetail,
+} from '@/features/featureIntro/featureIntroEvents'
+import {
+  OVERVIEW_FEATURES,
+  getVersionFeatures,
+} from '@/features/featureIntro/featureIntroContent'
 
 const AiPanel = lazy(() => import('../ai/AiPanel').then((module) => ({ default: module.AiPanel })))
 const SettingsPage = lazy(() => import('@/features/settings/SettingsPage').then((module) => ({ default: module.SettingsPage })))
@@ -38,6 +47,9 @@ export function AppLayout() {
   const [commandPaletteMode, setCommandPaletteMode] = useState<'commands' | 'files'>('commands')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsSection, setSettingsSection] = useState<string | null>(null)
+  const [featureIntroOpen, setFeatureIntroOpen] = useState(false)
+  const [featureIntroMode, setFeatureIntroMode] = useState<'overview' | 'version'>('overview')
+  const [featureIntroVersion, setFeatureIntroVersion] = useState<string | undefined>()
   const [fullscreenFileDrawerOpen, setFullscreenFileDrawerOpen] = useState(false)
   const [fullscreenAiPosition, setFullscreenAiPosition] = useState(() => getDefaultFullscreenAiPosition())
   const fullscreenAiDragRef = useRef<{
@@ -201,6 +213,17 @@ export function AppLayout() {
     window.addEventListener(OPEN_SETTINGS_SECTION_EVENT, handleOpenSettingsSection)
     return () => window.removeEventListener(OPEN_SETTINGS_SECTION_EVENT, handleOpenSettingsSection)
   }, [runAfterNormalLayout])
+
+  useEffect(() => {
+    const handleOpenFeatureIntro = (event: Event) => {
+      const detail = (event as CustomEvent<FeatureIntroEventDetail>).detail
+      setFeatureIntroMode(detail.mode)
+      setFeatureIntroVersion(detail.version)
+      setFeatureIntroOpen(true)
+    }
+    window.addEventListener(OPEN_FEATURE_INTRO_EVENT, handleOpenFeatureIntro)
+    return () => window.removeEventListener(OPEN_FEATURE_INTRO_EVENT, handleOpenFeatureIntro)
+  }, [])
 
   const openCommandPalette = useCallback((mode: 'commands' | 'files') => {
     void runAfterNormalLayout(() => {
@@ -368,6 +391,19 @@ export function AppLayout() {
           <Suspense fallback={null}><SettingsPage initialSection={settingsSection} /></Suspense>
         </div>
       </Modal>
+
+      {/* Feature Intro Modal */}
+      <FeatureIntroModal
+        open={featureIntroOpen}
+        features={
+          featureIntroMode === 'overview'
+            ? OVERVIEW_FEATURES
+            : featureIntroVersion
+              ? (getVersionFeatures(featureIntroVersion) ?? [])
+              : []
+        }
+        onClose={() => setFeatureIntroOpen(false)}
+      />
 
       {/* Search highlight styles (CSS Highlight API) */}
       <style>{`

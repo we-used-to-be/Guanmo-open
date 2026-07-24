@@ -137,8 +137,9 @@ VITE_GUANMO_WEB_SEARCH_API_KEY_SECRET=guanmo.web-search.api-key
 
 ### 📝 编辑、预览与导出
 
-- CodeMirror 6 编辑器，支持多标签页、搜索替换、自动保存和会话恢复。
+- CodeMirror 6 编辑器，支持多标签页、搜索替换、自动保存、会话恢复和标签页状态持久化。
 - 编辑、预览、并排、双文档与 Diff 视图；编辑和预览共用阅读位置并支持同步滚动。
+- 预览内原地编辑：`Alt + 左键` 点击预览中的 Markdown 块即可进入源码编辑，无需手动定位。
 - 全屏专注模式提供独立控制栏，鼠标移至顶部唤起，可快速切换编辑 / 预览 / Diff 视图，并通过"标签 / 文件"或 `Ctrl+B` 打开全屏文件侧边栏。全屏模式下 AI 助手改为小窗模式，拖动顶部调节位置，点击外部关闭弹窗，实现即用即走。
 - 支持 GFM、代码高亮、可交互任务列表、目录导航和 Mermaid 图表。
 - KaTeX 统一处理行内公式、独立公式块及常见 LaTeX 定界符，并保持预览、选区和 HTML 导出的格式一致。
@@ -170,7 +171,9 @@ VITE_GUANMO_WEB_SEARCH_API_KEY_SECRET=guanmo.web-search.api-key
 ### ⚙️ 配置与数据
 
 - AI 与 Embedding 模型独立配置，支持暖色 / 浅色 / 深色主题及编辑器显示设置。新增 AI 吉祥物头像选项和模式闲时预热设置。
+- 联网搜索 API 连接测试，可在设置页一键验证搜索服务可用性。
 - 支持记忆管理、知识库状态查看，以及应用数据的导出和导入。
+- 首次启动展示特性介绍弹窗，以轮播形式呈现软件核心功能与亮点。
 
 ---
 
@@ -326,6 +329,7 @@ guanmo/
 | `Ctrl + Shift + E` | 导出为 HTML |
 | `F11` | 切换全屏专注模式 |
 | `Ctrl + Shift + 1 ~ 5` | 快速切换编辑视图模式 |
+| `Alt + 左键` | 预览内编辑（点击预览中的 Markdown 块进入源码编辑） |
 | `Ctrl + 滚轮` | 调整编辑器字号 |
 | `Ctrl + Tab` | 切换标签页 |
 
@@ -350,8 +354,8 @@ Contributions are welcome! Feel free to open issues and submit pull requests.
 推送 `v*` 格式的 tag 会触发 GitHub Actions，在 Windows 上构建 Tauri 应用、创建 GitHub Release，并上传 NSIS `.exe` 与 WiX `.msi` 安装包。安装包不会提交到 Git 仓库。
 
 ```bash
-git tag -a v1.2.3
-git push origin v1.2.3
+git tag -a v1.3.0
+git push origin v1.3.0
 ```
 
 发布 tag 应与 `package.json`、`src-tauri/Cargo.toml` 和 `src-tauri/tauri.conf.json` 中的版本号保持一致。
