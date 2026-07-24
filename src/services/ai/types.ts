@@ -234,7 +234,7 @@ export const AI_CHAT_PRESETS: AiPreset[] = [
 
   // ── OpenAI Chat Completions ──
   { key: 'openai', label: 'OpenAI', protocol: 'openai-chat', provider: 'openai', baseUrl: 'https://api.openai.com/v1', chatModel: 'gpt-4o-mini' },
-  { key: 'deepseek', label: 'DeepSeek', protocol: 'openai-chat', provider: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', chatModel: 'deepseek-chat' },
+  { key: 'deepseek', label: 'DeepSeek', protocol: 'openai-chat', provider: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', chatModel: 'deepseek-v4-flash' },
   { key: 'zhipu', label: '智谱 GLM', protocol: 'openai-chat', provider: 'zhipu', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', chatModel: 'glm-4-flash' },
   { key: 'moonshot', label: '月之暗面 Moonshot', protocol: 'openai-chat', provider: 'moonshot', baseUrl: 'https://api.moonshot.cn/v1', chatModel: 'moonshot-v1-8k' },
   { key: 'mimo', label: 'MiMo (小米)', protocol: 'openai-chat', provider: 'mimo', baseUrl: 'https://api.xiaomimimo.com/v1', chatModel: 'mimo-v2.5' },

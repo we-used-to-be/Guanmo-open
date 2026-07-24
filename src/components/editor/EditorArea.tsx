@@ -966,13 +966,14 @@ export function EditorArea() {
       editorRestoreFrameRef.current = null
       const currentMode = useEditorStore.getState().viewMode
       if (editorViewRef.current !== view || (currentMode !== 'edit' && currentMode !== 'edit-preview')) return
-      if (typeof position.topLine === 'number' && position.topLine <= view.state.doc.lines) {
+      // 优先使用 editorScrollTop 直接恢复，比 topLine + scrollIntoView 更精确
+      if (typeof position.editorScrollTop === 'number') {
+        view.scrollDOM.scrollTop = position.editorScrollTop
+      } else if (typeof position.topLine === 'number' && position.topLine <= view.state.doc.lines) {
         const pos = view.state.doc.line(position.topLine).from
         view.dispatch({
           effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: SCROLL_SYNC_TOP_OFFSET }),
         })
-      } else if (typeof position.editorScrollTop === 'number') {
-        view.scrollDOM.scrollTop = position.editorScrollTop
       }
     })
   }, [])
