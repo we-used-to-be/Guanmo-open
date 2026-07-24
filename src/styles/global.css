@@ -1088,6 +1088,59 @@ body {
   z-index: 20;
 }
 
+/* === Select 下拉选项框样式 === */
+.gm-settings-tabs .gm-setting-control [class*="dropdown"] {
+  border: 1px solid var(--gm-border);
+  border-radius: 16px;
+  box-shadow: 0 8px 24px rgba(121, 79, 39, 0.1);
+  padding: 8px 0;
+}
+
+.gm-settings-tabs .gm-setting-control [class*="option"] {
+  margin: 1px 6px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  color: var(--gm-text-secondary);
+  font-weight: 500;
+  transition: background-color 120ms var(--gm-ease), color 120ms var(--gm-ease);
+}
+
+.gm-settings-tabs .gm-setting-control [class*="option"]:hover,
+.gm-settings-tabs .gm-setting-control [class*="hovered"] {
+  color: var(--gm-text);
+  background: var(--gm-surface-hover);
+  font-weight: 600;
+}
+
+.gm-settings-tabs .gm-setting-control [class*="active"] {
+  color: var(--gm-primary);
+  font-weight: 700;
+}
+
+.gm-settings-tabs .gm-setting-control [class*="pillBar"] {
+  background: var(--gm-primary);
+  opacity: 0.12;
+  border-radius: 7px;
+}
+
+/* 隐藏 animal-island-ui 的 hover 光标动画 */
+.gm-settings-tabs .gm-setting-control [class*="hovered"]::before {
+  display: none !important;
+}
+
+/* 选中项前添加勾选标记 */
+.gm-settings-tabs .gm-setting-control [class*="active"] [class*="optionDot"]::after {
+  content: '✓';
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--gm-primary);
+}
+
+/* 浅色(plain)主题下拉框阴影弱化 */
+:root[data-light-palette='plain']:not([data-theme='dark']) .gm-settings-tabs .gm-setting-control [class*="dropdown"] {
+  box-shadow: 0 8px 24px rgba(31, 41, 55, 0.08);
+}
+
 .gm-settings-mask {
   background: var(--gm-settings-mask-bg) !important;
   backdrop-filter: blur(2px);
@@ -1201,7 +1254,8 @@ body {
 [data-theme='dark'] .gm-settings-tabs .gm-setting-control [class*="dropdown"] {
   color: var(--gm-text) !important;
   background: var(--gm-surface-elevated) !important;
-  border-color: var(--gm-border) !important;
+  border: 1px solid var(--gm-border) !important;
+  border-radius: 16px;
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.36) !important;
 }
 
@@ -1210,10 +1264,23 @@ body {
 }
 
 [data-theme='dark'] .gm-settings-tabs .gm-setting-control [class*="option"]:hover,
-[data-theme='dark'] .gm-settings-tabs .gm-setting-control [class*="hovered"],
-[data-theme='dark'] .gm-settings-tabs .gm-setting-control [class*="active"] {
+[data-theme='dark'] .gm-settings-tabs .gm-setting-control [class*="hovered"] {
   color: var(--gm-text) !important;
   background: var(--gm-surface-hover) !important;
+}
+
+[data-theme='dark'] .gm-settings-tabs .gm-setting-control [class*="active"] {
+  color: var(--gm-primary) !important;
+  font-weight: 700;
+}
+
+[data-theme='dark'] .gm-settings-tabs .gm-setting-control [class*="pillBar"] {
+  background: var(--gm-primary);
+  opacity: 0.15;
+}
+
+[data-theme='dark'] .gm-settings-tabs .gm-setting-control [class*="active"] [class*="optionDot"]::after {
+  color: var(--gm-primary);
 }
 
 [data-theme='dark'] .gm-animal-table {
@@ -1298,6 +1365,17 @@ body {
 .gm-fullscreen-preview-content {
   padding-left: var(--gm-fullscreen-content-padding, 88px);
   padding-right: var(--gm-fullscreen-content-padding, 88px);
+}
+
+/* 分屏模式：内侧边距固定 10px，外侧保持全量 */
+.gm-fullscreen-content-split-left.gm-fullscreen-editor-content .cm-content,
+.gm-fullscreen-content-split-left.gm-fullscreen-preview-content {
+  padding-right: 15px;
+}
+
+.gm-fullscreen-content-split-right.gm-fullscreen-editor-content .cm-content,
+.gm-fullscreen-content-split-right.gm-fullscreen-preview-content {
+  padding-left: 15px;
 }
 
 .gm-markdown-toc,

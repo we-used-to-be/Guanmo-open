@@ -32,6 +32,7 @@ import {
   scheduleIdlePrewarm,
   decideResource,
   mapPerformancePolicy,
+  type ReadingPosition,
   type PrewarmTargetMode,
   type PrewarmedModeKeys,
   type InstanceType,
@@ -135,6 +136,20 @@ function useScheduledPreviewContent(
     : visiblePreview
 }
 
+function seedReadingPositionsFromStore(): ReadingPositionSession {
+  const session = new ReadingPositionSession()
+  const stored = useEditorStore.getState().readingPositions
+  for (const [key, pos] of Object.entries(stored)) {
+    if (key.includes(':')) {
+      const [tabId, pane] = key.split(':') as [string, 'left' | 'right']
+      session.saveForPane(tabId, pane, pos)
+    } else {
+      session.save(key, pos)
+    }
+  }
+  return session
+}
+
 export function EditorArea() {
   const tabs = useEditorStore((s) => s.tabs)
   const activeTabId = useEditorStore((s) => s.activeTabId)
@@ -146,6 +161,7 @@ export function EditorArea() {
   const setRightPaneTabId = useEditorStore((s) => s.setRightPaneTabId)
   const previewSwitchingTabId = useEditorStore((s) => s.previewSwitchingTabId)
   const clearPreviewSwitching = useEditorStore((s) => s.clearPreviewSwitching)
+  const flushReadingPositions = useEditorStore((s) => s.flushReadingPositions)
   const editorFontSize = useSettingsStore((s) => s.editor.fontSize)
   const editorLineHeight = useSettingsStore((s) => s.editor.lineHeight)
   const editorFontFamily = useSettingsStore((s) => s.editor.fontFamily)
@@ -162,7 +178,7 @@ export function EditorArea() {
   const viewModeUsage = useEditorStore((s) => s.viewModeUsage)
   const isFullscreen = useAppStore((s) => s.isFullscreen)
   const editorViewRef = useRef<EditorView | null>(null)
-  const readingPositionsRef = useRef(new ReadingPositionSession())
+  const readingPositionsRef = useRef<ReadingPositionSession>(seedReadingPositionsFromStore())
   const leftPreviewRef = useRef<HTMLDivElement>(null)
   const rightPreviewRef = useRef<HTMLDivElement>(null)
   const previewAnchorCacheRef = useRef<WeakMap<HTMLElement, PreviewAnchorCache>>(new WeakMap())
@@ -194,6 +210,8 @@ export function EditorArea() {
   const prewarmScheduleSequenceRef = useRef(0)
   const requestedPrewarmScheduleIdsRef = useRef<Partial<Record<PrewarmTargetMode, string>>>({})
   const lastUserActivityAtRef = useRef(Date.now())
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const previousActiveTabIdRef = useRef<string | null>(activeTabId)
 
   useEffect(() => {
     if (isFullscreen) setTocCollapsed(true)
@@ -906,6 +924,30 @@ export function EditorArea() {
     })
   }, [])
 
+  const scheduleFlush = useCallback(() => {
+    if (isRestoringScrollRef.current) return
+    if (flushTimerRef.current !== null) clearTimeout(flushTimerRef.current)
+    flushTimerRef.current = setTimeout(() => {
+      flushTimerRef.current = null
+      if (isRestoringScrollRef.current) return
+      const positions = readingPositionsRef.current
+      // 从 ReadingPositionSession 提取所有位置
+      const all: Record<string, ReadingPosition> = {}
+      const activeId = activeTab?.id
+      if (activeId) {
+        const editorPos = positions.get(activeId)
+        if (editorPos) all[activeId] = editorPos
+        const leftPos = positions.getForPane(activeId, 'left')
+        if (leftPos) all[`${activeId}:left`] = leftPos
+        const rightPos = positions.getForPane(activeId, 'right')
+        if (rightPos) all[`${activeId}:right`] = rightPos
+      }
+      if (Object.keys(all).length > 0) {
+        flushReadingPositions(all)
+      }
+    }, 500)
+  }, [activeTab?.id, flushReadingPositions])
+
   const schedulePreviewReveal = useCallback((tabId?: string) => {
     if (tabId) { clearPreviewSwitching(tabId) }
     setPreviewRestoreTick((tick) => tick + 1)
@@ -960,6 +1002,7 @@ export function EditorArea() {
       const currentMode = useEditorStore.getState().viewMode
       if (currentMode !== 'edit' && currentMode !== 'edit-preview') return
       saveEditorPositionForTab(activeTab.id)
+      scheduleFlush()
       setTocFocus('editor')
       if (editorTocFrameRef.current !== null || !view) return
       editorTocFrameRef.current = window.requestAnimationFrame(() => {
@@ -984,7 +1027,7 @@ export function EditorArea() {
         editorTocFrameRef.current = null
       }
     }
-  }, [activeTab?.id, saveEditorPositionForTab, updateEditorHeading, viewMode])
+  }, [activeTab?.id, saveEditorPositionForTab, scheduleFlush, updateEditorHeading, viewMode])
 
   useLayoutEffect(() => {
     if (!activeTab?.id) return
@@ -1011,6 +1054,62 @@ export function EditorArea() {
     rightTab?.id,
     viewMode,
   ])
+
+  // 切换标签页时立即 flush 上一个标签页的位置
+  useEffect(() => {
+    const prevId = previousActiveTabIdRef.current
+    previousActiveTabIdRef.current = activeTabId ?? null
+    if (!prevId || prevId === activeTabId) return
+    // 取消 debounce，立即 flush
+    if (flushTimerRef.current !== null) {
+      clearTimeout(flushTimerRef.current)
+      flushTimerRef.current = null
+    }
+    const positions = readingPositionsRef.current
+    const all: Record<string, ReadingPosition> = {}
+    const editorPos = positions.get(prevId)
+    if (editorPos) all[prevId] = editorPos
+    const leftPos = positions.getForPane(prevId, 'left')
+    if (leftPos) all[`${prevId}:left`] = leftPos
+    const rightPos = positions.getForPane(prevId, 'right')
+    if (rightPos) all[`${prevId}:right`] = rightPos
+    if (Object.keys(all).length > 0) {
+      flushReadingPositions(all)
+    }
+  }, [activeTabId, flushReadingPositions])
+
+  // 退出/隐藏时 flush 所有位置
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (flushTimerRef.current !== null) {
+        clearTimeout(flushTimerRef.current)
+        flushTimerRef.current = null
+      }
+      const positions = readingPositionsRef.current
+      const all: Record<string, ReadingPosition> = {}
+      const activeId = activeTab?.id
+      if (activeId) {
+        const editorPos = positions.get(activeId)
+        if (editorPos) all[activeId] = editorPos
+        const leftPos = positions.getForPane(activeId, 'left')
+        if (leftPos) all[`${activeId}:left`] = leftPos
+        const rightPos = positions.getForPane(activeId, 'right')
+        if (rightPos) all[`${activeId}:right`] = rightPos
+      }
+      if (Object.keys(all).length > 0) {
+        flushReadingPositions(all)
+      }
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') handleBeforeUnload()
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+      document.removeEventListener('visibilitychange', handleVisibility)
+    }
+  }, [activeTab?.id, flushReadingPositions])
 
   const clearPreviewContextHighlight = useCallback(() => {
     if (typeof CSS !== 'undefined' && CSS.highlights) {
@@ -1262,12 +1361,14 @@ export function EditorArea() {
     if (!activeTab?.id) return
     if (viewModeRef.current === 'edit-preview') setTocFocus('preview')
     savePreviewReadingPosition(activeTab.id, leftPreviewRef.current, activePreview.version, 'left')
-  }, [activePreview.version, activeTab?.id, savePreviewReadingPosition])
+    scheduleFlush()
+  }, [activePreview.version, activeTab?.id, savePreviewReadingPosition, scheduleFlush])
 
   const handleRightPreviewScroll = useCallback(() => {
     if (!rightTab?.id) return
     savePreviewReadingPosition(rightTab.id, rightPreviewRef.current, rightPreview.version, 'right')
-  }, [rightPreview.version, rightTab?.id, savePreviewReadingPosition])
+    scheduleFlush()
+  }, [rightPreview.version, rightTab?.id, savePreviewReadingPosition, scheduleFlush])
 
   const jumpToLine = useCallback((line: number) => {
     const view = editorViewRef.current
@@ -1684,7 +1785,7 @@ export function EditorArea() {
             )}
             <div className={`${viewMode === 'diff-preview' ? 'hidden' : 'flex'} flex-1 overflow-hidden bg-gm-surface`}>
             {(editorMounted || editorVisible) && (
-            <div className={`${editorVisible ? (viewMode === 'edit-preview' ? 'min-w-0 flex-1 border-r border-gm-border-subtle' : 'flex-1') : 'hidden'} ${isFullscreen ? 'gm-fullscreen-editor-content' : ''} ${fullscreenTocExpanded && viewMode === 'edit' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-hidden relative`}>
+            <div className={`${editorVisible ? (viewMode === 'edit-preview' ? 'min-w-0 flex-1 border-r border-gm-border-subtle' : 'flex-1') : 'hidden'} ${isFullscreen ? 'gm-fullscreen-editor-content' : ''} ${isFullscreen && viewMode === 'edit-preview' ? 'gm-fullscreen-content-split-left' : ''} ${fullscreenTocExpanded && viewMode === 'edit' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-hidden relative`}>
               {activeTab && (
                 <CodeMirrorEditor
                   content={activeTab.content}
@@ -1725,7 +1826,7 @@ export function EditorArea() {
               <div
                 key={`left-${activeTab?.id ?? 'none'}`}
                 ref={leftPreviewRef}
-                className={`${leftPreviewVisible ? 'min-w-0 flex-1' : 'hidden'} ${viewMode === 'dual-preview' ? 'border-r border-gm-border-subtle' : ''} ${viewMode === 'edit-preview' ? 'gm-preview-heading-clickable' : ''} ${isFullscreen ? 'gm-fullscreen-preview-content py-6' : 'p-6'} ${fullscreenTocExpanded && viewMode !== 'dual-preview' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-auto select-text bg-gm-surface relative`}
+                className={`${leftPreviewVisible ? 'min-w-0 flex-1' : 'hidden'} ${viewMode === 'dual-preview' ? 'border-r border-gm-border-subtle' : ''} ${viewMode === 'edit-preview' ? 'gm-preview-heading-clickable' : ''} ${isFullscreen ? 'gm-fullscreen-preview-content py-6' : 'p-6'} ${isFullscreen && viewMode === 'edit-preview' ? 'gm-fullscreen-content-split-right' : isFullscreen && viewMode === 'dual-preview' ? 'gm-fullscreen-content-split-left' : ''} ${fullscreenTocExpanded && viewMode !== 'dual-preview' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-auto select-text bg-gm-surface relative`}
                 style={leftPreviewMasked ? { visibility: 'hidden' } : undefined}
                 aria-hidden={!leftPreviewVisible}
                 onScroll={handleLeftPreviewScroll}
@@ -1755,7 +1856,7 @@ export function EditorArea() {
             <div
               key={`right-${rightTab?.id ?? 'none'}`}
               ref={rightPreviewRef}
-              className={`${viewMode === 'dual-preview' ? 'min-w-0 flex-1' : 'hidden'} ${isFullscreen ? 'gm-fullscreen-preview-content py-6' : 'p-6'} ${fullscreenTocExpanded && viewMode === 'dual-preview' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-auto select-text bg-gm-surface relative ${rightPaneDragOver ? 'ring-2 ring-inset ring-gm-primary/40' : ''}`}
+              className={`${viewMode === 'dual-preview' ? 'min-w-0 flex-1' : 'hidden'} ${isFullscreen ? 'gm-fullscreen-preview-content py-6' : 'p-6'} ${isFullscreen && viewMode === 'dual-preview' ? 'gm-fullscreen-content-split-right' : ''} ${fullscreenTocExpanded && viewMode === 'dual-preview' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-auto select-text bg-gm-surface relative ${rightPaneDragOver ? 'ring-2 ring-inset ring-gm-primary/40' : ''}`}
               style={rightPreviewMasked ? { visibility: 'hidden' } : undefined}
               aria-hidden={viewMode !== 'dual-preview'}
               onScroll={handleRightPreviewScroll}

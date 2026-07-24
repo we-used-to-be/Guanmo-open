@@ -107,8 +107,8 @@
   --animal-select-trigger-border: #e8dcc8;
   --animal-select-trigger-hover-bg: #fffdf7;
   --animal-select-trigger-hover-border: #d4c4a8;
-  --animal-select-dropdown-bg: #ffeea0;
-  --animal-select-pill-bg: #ffcc00;
+  --animal-select-dropdown-bg: #fdf8ec;
+  --animal-select-pill-bg: rgba(58, 175, 164, 0.22);
   --animal-select-disabled-bg: #f5f5f0;
   --animal-switch-bg: #d4c9b4;
   --animal-switch-border: #c4b89e;
