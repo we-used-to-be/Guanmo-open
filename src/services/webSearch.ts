@@ -368,6 +368,108 @@ export async function webSearch(query: string, signal?: AbortSignal): Promise<Se
   }
 }
 
+export interface WebSearchTestResult {
+  ok: boolean
+  message?: string
+}
+
+/**
+ * 测试联网搜索 API 连接。
+ * 发送一个轻量测试请求，验证 API Key 和网络连通性。
+ */
+export async function testWebSearchConnection(config: WebSearchConfig): Promise<WebSearchTestResult> {
+  try {
+    if (config.provider === 'duckduckgo') {
+      const res = await externalFetch(
+        `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent('test')}`,
+      )
+      if (!res.ok) {
+        return { ok: false, message: `DuckDuckGo 连接失败 (${res.status})` }
+      }
+      return { ok: true }
+    }
+
+    if (config.provider === 'custom') {
+      if (!config.customUrl) {
+        return { ok: false, message: '自定义搜索引擎 URL 未配置' }
+      }
+      const url = new URL(config.customUrl)
+      url.searchParams.set('q', 'test')
+      url.searchParams.set('count', '1')
+      const headers: Record<string, string> = { 'Accept': 'application/json' }
+      if (config.apiKey) {
+        headers['Authorization'] = `Bearer ${config.apiKey}`
+      }
+      const res = await externalFetch(url.toString(), { headers })
+      if (!res.ok) {
+        return { ok: false, message: `自定义搜索连接失败 (${res.status})` }
+      }
+      return { ok: true }
+    }
+
+    if (!config.apiKey) {
+      return { ok: false, message: 'API Key 未配置' }
+    }
+
+    if (config.provider === 'tavily') {
+      const res = await externalFetch('https://api.tavily.com/search', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${config.apiKey}`,
+        },
+        body: JSON.stringify({ query: 'test', max_results: 1 }),
+      })
+      if (!res.ok) {
+        let detail = ''
+        try { const errData = await res.json(); detail = errData.error || errData.message || '' } catch { /* ignore */ }
+        return { ok: false, message: `Tavily 连接失败 (${res.status}): ${detail || res.statusText}` }
+      }
+      return { ok: true }
+    }
+
+    if (config.provider === 'serper') {
+      const res = await externalFetch('https://google.serper.dev/search', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-KEY': config.apiKey,
+        },
+        body: JSON.stringify({ q: 'test', num: 1 }),
+      })
+      if (!res.ok) {
+        let detail = ''
+        try { const errData = await res.json(); detail = errData.message || '' } catch { /* ignore */ }
+        return { ok: false, message: `Serper 连接失败 (${res.status}): ${detail || res.statusText}` }
+      }
+      return { ok: true }
+    }
+
+    if (config.provider === 'brave') {
+      const res = await externalFetch(
+        `https://api.search.brave.com/res/v1/web/search?q=test&count=1`,
+        {
+          headers: {
+            'Accept': 'application/json',
+            'Accept-Encoding': 'gzip',
+            'X-Subscription-Token': config.apiKey,
+          },
+        },
+      )
+      if (!res.ok) {
+        let detail = ''
+        try { const errData = await res.json(); detail = errData.message || errData.error || '' } catch { /* ignore */ }
+        return { ok: false, message: `Brave 连接失败 (${res.status}): ${detail || res.statusText}` }
+      }
+      return { ok: true }
+    }
+
+    return { ok: false, message: `未知的搜索引擎: ${(config as WebSearchConfig).provider}` }
+  } catch (err) {
+    return { ok: false, message: (err as Error).message || String(err) }
+  }
+}
+
 /**
  * Build context string from web search results for AI prompt.
  */
