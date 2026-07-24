@@ -3,6 +3,7 @@ import { persist, type PersistStorage, type StorageValue } from 'zustand/middlew
 import { isSameFilePath, normalizeFilePath } from '@/services/pathIdentity'
 import { mergeBackgroundRestoredTab } from '@/services/sessionRestorePolicy'
 import { eventMarker } from '@/services/eventMarker'
+import type { ReadingPosition } from '@/services/editorSession'
 
 export interface Tab {
   id: string
@@ -39,6 +40,7 @@ interface PersistedEditorState {
   rightPaneTabId: string | null
   rightPaneUserSelected: boolean
   viewModeUsage: Partial<Record<PrewarmableViewMode, ViewModeUsageStat>>
+  readingPositions: Record<string, ReadingPosition>
   pendingReveal: null
 }
 
@@ -52,6 +54,7 @@ interface EditorState {
   viewModeUsage: Partial<Record<PrewarmableViewMode, ViewModeUsageStat>>
   recentFiles: RecentFile[]
   favorites: string[]
+  readingPositions: Record<string, ReadingPosition>
   pendingReveal: { tabId: string; startLine: number; endLine?: number } | null
   previewSwitchingTabId: string | null
 
@@ -80,6 +83,7 @@ interface EditorState {
   saveTabAs: (id: string, filePath: string, title: string, content: string) => void
   requestReveal: (tabId: string, startLine: number, endLine?: number) => void
   clearPendingReveal: () => void
+  flushReadingPositions: (positions: Record<string, ReadingPosition>) => void
 }
 
 function dedupeRecentFiles(files: RecentFile[] = []) {
@@ -213,6 +217,7 @@ export const useEditorStore = create<EditorState>()(
       viewModeUsage: {},
       recentFiles: [],
       favorites: [],
+      readingPositions: {},
       pendingReveal: null,
       previewSwitchingTabId: null,
 
@@ -540,6 +545,10 @@ export const useEditorStore = create<EditorState>()(
       }),
 
       clearPendingReveal: () => set({ pendingReveal: null }),
+
+      flushReadingPositions: (positions) => set((s) => ({
+        readingPositions: { ...s.readingPositions, ...positions },
+      })),
     }),
     {
       name: 'guanmo-editor',
@@ -553,6 +562,7 @@ export const useEditorStore = create<EditorState>()(
         rightPaneTabId: state.rightPaneTabId,
         rightPaneUserSelected: state.rightPaneUserSelected,
         viewModeUsage: state.viewModeUsage,
+        readingPositions: state.readingPositions,
         pendingReveal: null,
       }),
       merge: (persisted, current) => {
@@ -574,6 +584,7 @@ export const useEditorStore = create<EditorState>()(
           rightPaneTabId,
           rightPaneUserSelected,
           viewModeUsage: saved.viewModeUsage ?? current.viewModeUsage,
+          readingPositions: saved.readingPositions ?? current.readingPositions,
           recentFiles: dedupeRecentFiles(saved.recentFiles ?? current.recentFiles),
           pendingReveal: null,
           previewSwitchingTabId: null,
