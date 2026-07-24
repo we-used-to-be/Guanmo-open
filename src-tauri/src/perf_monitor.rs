@@ -104,7 +104,9 @@ fn classify_webview_process(command: &[String]) -> String {
     if command.contains("--type=gpu-process") {
         return "gpu-process".into();
     }
-    if command.contains("network.mojom.networkservice") || command.contains("--type=network-service") {
+    if command.contains("network.mojom.networkservice")
+        || command.contains("--type=network-service")
+    {
         return "network-service".into();
     }
     if command.contains("--type=utility") {
@@ -121,7 +123,9 @@ fn classify_webview_process(command: &[String]) -> String {
 #[cfg(windows)]
 mod win32_cmdline {
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
+    };
 
     #[repr(C)]
     #[allow(dead_code)]
@@ -182,7 +186,7 @@ mod win32_cmdline {
         let mut current = String::new();
         let mut in_quotes = false;
         let mut chars = raw.chars().peekable();
-        while let Some(ch) = chars.next() {
+        for ch in chars.by_ref() {
             match ch {
                 '"' => {
                     // Count consecutive backslashes before this quote
@@ -227,13 +231,7 @@ mod win32_cmdline {
 
             // ProcessCommandLineInformation (class 60) avoids relying on remote PEB layout.
             let mut required_length = 0u32;
-            NtQueryInformationProcess(
-                handle,
-                60,
-                std::ptr::null_mut(),
-                0,
-                &mut required_length,
-            );
+            NtQueryInformationProcess(handle, 60, std::ptr::null_mut(), 0, &mut required_length);
             if required_length >= std::mem::size_of::<UnicodeString>() as u32 {
                 let mut query_buffer = vec![0u8; required_length as usize];
                 let status = NtQueryInformationProcess(
@@ -244,9 +242,8 @@ mod win32_cmdline {
                     &mut required_length,
                 );
                 if status == 0 {
-                    let command = std::ptr::read_unaligned(
-                        query_buffer.as_ptr().cast::<UnicodeString>(),
-                    );
+                    let command =
+                        std::ptr::read_unaligned(query_buffer.as_ptr().cast::<UnicodeString>());
                     let buffer_start = query_buffer.as_ptr() as usize;
                     let buffer_end = buffer_start.saturating_add(query_buffer.len());
                     let command_start = command.buffer as usize;
@@ -256,10 +253,8 @@ mod win32_cmdline {
                         && command_start >= buffer_start
                         && command_end <= buffer_end
                     {
-                        let utf16 = std::slice::from_raw_parts(
-                            command.buffer,
-                            command.length as usize / 2,
-                        );
+                        let utf16 =
+                            std::slice::from_raw_parts(command.buffer, command.length as usize / 2);
                         let args = parse_windows_cmdline(&String::from_utf16_lossy(utf16));
                         CloseHandle(handle);
                         return (!args.is_empty()).then_some(args);
@@ -334,7 +329,6 @@ mod win32_cmdline {
             }
         }
     }
-
 }
 
 #[cfg(not(windows))]
@@ -444,7 +438,10 @@ fn windows_process_counters(_pid: u32) -> (u64, u64, u64, u32) {
     (0, 0, 0, 0)
 }
 
-fn collect_snapshot(system: &mut System, cache: &mut HashMap<u32, CachedProcessInfo>) -> PerfSnapshot {
+fn collect_snapshot(
+    system: &mut System,
+    cache: &mut HashMap<u32, CachedProcessInfo>,
+) -> PerfSnapshot {
     system.refresh_processes();
     system.refresh_cpu();
     let current_pid = sysinfo::get_current_pid().unwrap_or(Pid::from_u32(0));
@@ -567,7 +564,10 @@ fn collect_snapshot(system: &mut System, cache: &mut HashMap<u32, CachedProcessI
 #[tauri::command]
 pub fn get_perf_snapshot(state: State<'_, PerfMonitorState>) -> Result<PerfSnapshot, String> {
     let mut system = state.system.lock().map_err(|error| error.to_string())?;
-    let mut cache = state.process_cache.lock().map_err(|error| error.to_string())?;
+    let mut cache = state
+        .process_cache
+        .lock()
+        .map_err(|error| error.to_string())?;
     Ok(collect_snapshot(&mut system, &mut cache))
 }
 
@@ -581,11 +581,26 @@ mod tests {
 
     #[test]
     fn classifies_webview_process_types_without_browser_fallback() {
-        assert_eq!(classify_webview_process(&command("msedgewebview2.exe")), "browser");
-        assert_eq!(classify_webview_process(&command("--type=renderer")), "renderer");
-        assert_eq!(classify_webview_process(&command("--type=gpu-process")), "gpu-process");
-        assert_eq!(classify_webview_process(&command("--type=utility")), "utility");
-        assert_eq!(classify_webview_process(&command("--type=other")), "unknown");
+        assert_eq!(
+            classify_webview_process(&command("msedgewebview2.exe")),
+            "browser"
+        );
+        assert_eq!(
+            classify_webview_process(&command("--type=renderer")),
+            "renderer"
+        );
+        assert_eq!(
+            classify_webview_process(&command("--type=gpu-process")),
+            "gpu-process"
+        );
+        assert_eq!(
+            classify_webview_process(&command("--type=utility")),
+            "utility"
+        );
+        assert_eq!(
+            classify_webview_process(&command("--type=other")),
+            "unknown"
+        );
         assert_eq!(classify_webview_process(&[]), "unknown");
     }
 }
