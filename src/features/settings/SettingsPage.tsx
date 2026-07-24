@@ -8,7 +8,9 @@ import type { WebSearchConfig } from '@/services/webSearch'
 import { initAiClient, initEmbeddingClient, isLocalApi, testAiConnection, validateAiStatus } from '@/services/ai/aiClient'
 import { AI_CHAT_PRESETS, AI_EMBEDDING_PRESETS } from '@/services/ai/types'
 import type { AiConfig, ChatProtocol, CustomPreset, EmbeddingProtocol, ValidateResult } from '@/services/ai/types'
-import { updateSearchConfig } from '@/services/webSearch'
+import { testWebSearchConnection, updateSearchConfig } from '@/services/webSearch'
+import { externalFetch } from '@/services/externalHttp'
+import type { WebSearchTestResult } from '@/services/webSearch'
 import {
   embedPendingChunks,
   getEmbeddingJobStats,
@@ -458,14 +460,26 @@ function AiSettings() {
     setEmbTesting(true)
     setEmbTestResult(null)
     try {
-      const embConfig: AiConfig = {
-        ...ai,
-        baseUrl: ai.embedding.baseUrl,
-        apiKey: ai.embedding.apiKey,
-        chatModel: ai.embedding.embeddingModel,
+      const { baseUrl, apiKey, embeddingModel } = ai.embedding
+      if (!baseUrl) {
+        setEmbTestResult({ ok: false, error: 'config', message: 'Embedding Base URL 未配置' })
+        return
       }
-      const result = await testAiConnection(embConfig)
-      setEmbTestResult(result)
+      const url = `${baseUrl.replace(/\/+$/, '')}/embeddings`
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
+      const res = await externalFetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ model: embeddingModel, input: 'test' }),
+      })
+      if (res.ok) {
+        setEmbTestResult({ ok: true })
+      } else {
+        const body = await res.text().catch(() => '')
+        const hint = body ? `（${body.slice(0, 200)}）` : ''
+        setEmbTestResult({ ok: false, error: 'http', message: `Embedding 服务连接失败 (${res.status})${hint}` })
+      }
     } catch (err) {
       setEmbTestResult({ ok: false, error: 'unknown', message: (err as Error).message || String(err) })
     } finally {

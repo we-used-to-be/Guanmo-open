@@ -177,8 +177,11 @@ async function validateSearchApi(provider: string, apiKey: string): Promise<bool
     if (provider === 'tavily') {
       const res = await externalFetch('https://api.tavily.com/search', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api_key: apiKey, query: 'test', max_results: 1 }),
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({ query: 'test', max_results: 1 }),
       })
       return res.ok
     }
