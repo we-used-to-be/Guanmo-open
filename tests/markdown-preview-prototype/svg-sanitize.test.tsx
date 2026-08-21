@@ -191,6 +191,17 @@ describe('sanitizeAndScopeSvgCss', () => {
     expect(out).toContain('width: 10px')
   })
 
+  it('阻止 CSS 转义和 image-set 形式的外部资源', () => {
+    const out = sanitizeAndScopeSvgCss(
+      '.escaped{background-image:u\\72 l(https://x.svg)}.set{background-image:image-set("https://x.png" 1x)}.c{fill:url(#grad)}',
+      scope,
+    )
+    expect(out).not.toContain('https://x.svg')
+    expect(out).not.toContain('https://x.png')
+    expect(out).not.toContain('image-set')
+    expect(out).toContain('url(#user-content-grad)')
+  })
+
   it('作用域化多个逗号选择器', () => {
     const out = sanitizeAndScopeSvgCss('.a,.b g,.c > path{stroke:#333}', scope)
     expect(out).toContain('[data-gm-svg-scope="00000000"] .a, [data-gm-svg-scope="00000000"] .b g, [data-gm-svg-scope="00000000"] .c > path')

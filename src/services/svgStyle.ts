@@ -191,6 +191,9 @@ function parseQualifiedRules(css: string): QualifiedRule[] {
 }
 
 const DANGEROUS_VALUE_PATTERN = /expression\s*\(|-moz-binding|behavior\s*:|javascript\s*:|vbscript\s*:|@import/i
+// CSS escapes can spell `url(` without containing that literal; these
+// resource-producing functions can also load URLs without a `url()` token.
+const UNSAFE_EXTERNAL_FUNCTION_PATTERN = /(?:^|[^a-z0-9_-])(?:-[\w-]+-)?(?:image|image-set|cross-fade|element|paint|src)\s*\(/i
 const LOCAL_FRAGMENT_PATTERN = /^#[A-Za-z0-9_.:-]+$/
 const SVG_VARIABLE_FALLBACKS: Record<string, string> = {
   '--font-sans': 'var(--gm-font-family)',
@@ -213,6 +216,7 @@ function addSvgVariableFallbacks(value: string): string {
 /** 校验并重写单条声明值；不安全时返回 null。 */
 function sanitizeDeclarationValue(value: string): string | null {
   if (DANGEROUS_VALUE_PATTERN.test(value)) return null
+  if (value.includes('\\') || UNSAFE_EXTERNAL_FUNCTION_PATTERN.test(value)) return null
   if (/[<>]/.test(value)) return null
   let output = ''
   let i = 0
