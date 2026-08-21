@@ -36,6 +36,41 @@ describe('MarkdownPreview 内嵌 HTML', () => {
     expect(container.querySelector('.katex')).toBeInTheDocument()
   })
 
+  it('完整渲染带空行、defs、style、marker 和文字节点的内联 SVG', async () => {
+    const { container } = render(
+      <MarkdownPreview
+        content={`<svg viewBox="0 0 680 320" width="100%" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>payment-info 阶段两个支付插件的前端 JS 行为</title>
+<desc>StripeDirect 和 PayPalStandardPro 在 payment-info 阶段都需要前端 JS 与支付网关交互</desc>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+<style>.lane{font:500 12px var(--font-sans);fill:var(--color-text-primary)}</style>
+</defs>
+<text class="lane" x="86" y="30">payment-info</text>
+
+<rect x="40" y="50" width="92" height="22" rx="11" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="lane" x="86" y="61" text-anchor="middle" dominant-baseline="central">StripeDirect</text>
+<line x1="86" y1="72" x2="86" y2="120" stroke="#185FA5" stroke-width="1.5" marker-end="url(#arrow)"/>
+</svg>`}
+      />,
+    )
+
+    await waitFor(() => expect(container.querySelector('svg')).toBeInTheDocument())
+    expect(container.querySelector('svg')).toHaveAttribute('width', '100%')
+    expect(container.querySelector('svg title')).toHaveTextContent('payment-info 阶段两个支付插件')
+    expect(container.querySelector('svg desc')).toHaveTextContent('StripeDirect 和 PayPalStandardPro')
+    expect(container.querySelector('svg style')).toBeInTheDocument()
+    expect(container.querySelector('svg marker')).toBeInTheDocument()
+    expect(container.querySelector('svg path')).toBeInTheDocument()
+    expect(container.querySelector('svg rect')).toBeInTheDocument()
+    expect(container.querySelector('svg text')).toHaveTextContent('payment-info')
+    expect(container.querySelector('svg text > span')).toBeNull()
+    expect(screen.getByText('StripeDirect')).toBeInTheDocument()
+    expect(container.querySelector('svg line')).toHaveAttribute('marker-end', 'url(#user-content-arrow)')
+  })
+
   it('以隐私友好的方式加载 HTTPS 图片', async () => {
     render(
       <MarkdownPreview

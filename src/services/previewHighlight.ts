@@ -150,6 +150,9 @@ export function createSourceOffsetAnnotator(baseOffset: number) {
               children: [child],
             }
           } else {
+            // SVG 的文字必须保持为 SVG 原生文本节点；HTML `<span>` 会被
+            // WebView 当作 SVG 子元素，放在 `<text>`/`<tspan>` 中后不再绘制。
+            if (child.type === 'element' && child.tagName === 'svg') continue
             visit(child)
           }
         }

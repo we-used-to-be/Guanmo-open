@@ -2,12 +2,14 @@ import type { Options } from 'react-markdown'
 import type { Element, Root } from 'hast'
 import rehypeRaw from 'rehype-raw'
 import rehypeSanitize, { defaultSchema, type Options as SanitizeSchema } from 'rehype-sanitize'
+import { processSvgStyleElements } from './svgStyle'
 
 const SAFE_SVG_TAGS = [
   'svg',
   'title',
   'desc',
   'defs',
+  'style',
   'g',
   'marker',
   'path',
@@ -29,9 +31,12 @@ const SAFE_SVG_TAGS = [
 
 const SAFE_SVG_ATTRIBUTES = [
   'className',
+  'id',
   'role',
   'viewBox',
   'xmlns',
+  'width',
+  'height',
   'preserveAspectRatio',
   'transform',
   'd',
@@ -52,13 +57,14 @@ const SAFE_SVG_ATTRIBUTES = [
   'fill',
   'fillOpacity',
   'fillRule',
+  'filter',
   'stroke',
   'strokeWidth',
-  'strokeLinecap',
-  'strokeLinejoin',
-  'strokeMiterlimit',
-  'strokeDasharray',
-  'strokeDashoffset',
+  'strokeLineCap',
+  'strokeLineJoin',
+  'strokeMiterLimit',
+  'strokeDashArray',
+  'strokeDashOffset',
   'strokeOpacity',
   'opacity',
   'vectorEffect',
@@ -92,11 +98,65 @@ const SAFE_SVG_ATTRIBUTES = [
 const SAFE_SVG_ATTRIBUTE_SCHEMA = Object.fromEntries(
   SAFE_SVG_TAGS.map((tagName) => [tagName, SAFE_SVG_ATTRIBUTES]),
 ) as NonNullable<SanitizeSchema['attributes']>
+const SAFE_SVG_TAG_SET = new Set(SAFE_SVG_TAGS)
+const SVG_REFERENCE_PROPERTIES = ['fill', 'stroke', 'filter', 'clipPath', 'mask', 'markerStart', 'markerMid', 'markerEnd']
+const SVG_EXTERNAL_RESOURCE_PROPERTIES = ['href', 'xLinkHref', 'src', 'srcSet']
+
+interface SourceRange {
+  start: number
+  end: number
+}
+
+function collectSvgSourceRanges(source: string): SourceRange[] {
+  const ranges: SourceRange[] = []
+  const openTags: number[] = []
+  let index = 0
+
+  while (index < source.length) {
+    const start = source.indexOf('<', index)
+    if (start < 0) break
+    if (source.startsWith('<!--', start)) {
+      const commentEnd = source.indexOf('-->', start + 4)
+      index = commentEnd < 0 ? source.length : commentEnd + 3
+      continue
+    }
+
+    let cursor = start + 1
+    let quote: string | null = null
+    while (cursor < source.length) {
+      const char = source[cursor]
+      if (quote) {
+        if (char === quote) quote = null
+      } else if (char === '"' || char === "'") {
+        quote = char
+      } else if (char === '>') {
+        break
+      }
+      cursor += 1
+    }
+    if (cursor >= source.length) break
+
+    const tag = source.slice(start, cursor + 1)
+    if (/^<svg(?:\s|>)/i.test(tag) && !/\/\s*>$/.test(tag)) {
+      openTags.push(start)
+    } else if (/^<\/svg(?:\s|>)/i.test(tag)) {
+      const svgStart = openTags.pop()
+      if (svgStart !== undefined) ranges.push({ start: svgStart, end: cursor + 1 })
+    }
+    index = cursor + 1
+  }
+
+  return ranges
+}
 
 const MARKDOWN_HTML_SANITIZE_SCHEMA: SanitizeSchema = {
   ...defaultSchema,
   tagNames: [...(defaultSchema.tagNames ?? []), ...SAFE_SVG_TAGS],
   strip: [...(defaultSchema.strip ?? []), 'style', 'foreignObject'],
+  ancestors: {
+    ...defaultSchema.ancestors,
+    style: ['svg'],
+  },
   attributes: {
     ...defaultSchema.attributes,
     ...SAFE_SVG_ATTRIBUTE_SCHEMA,
@@ -112,13 +172,46 @@ function isElement(node: Root['children'][number]): node is Element {
 }
 
 function restoreSanitizedSvgReferences() {
-  return (tree: Root) => {
-    const visit = (node: Root | Element, insideSvg: boolean) => {
+  return (tree: Root, file?: { toString?: () => string }) => {
+    const svgSourceRanges: SourceRange[] = []
+    const svgElementStarts = new Set<number>()
+    const collectTreeSvgSourceRanges = (node: Root | Element) => {
       for (const child of node.children) {
         if (!isElement(child)) continue
-        const childInsideSvg = insideSvg || child.tagName === 'svg'
+        const start = child.position?.start.offset
+        const end = child.position?.end.offset
+        if (child.tagName === 'svg' && typeof start === 'number') {
+          svgElementStarts.add(start)
+          if (typeof end === 'number') svgSourceRanges.push({ start, end })
+        }
+        collectTreeSvgSourceRanges(child)
+      }
+    }
+    collectTreeSvgSourceRanges(tree)
+    if (file?.toString) {
+      for (const range of collectSvgSourceRanges(file.toString())) {
+        if (svgElementStarts.has(range.start)) svgSourceRanges.push(range)
+      }
+    }
+
+    const isInsideSvgSource = (node: Element): boolean => {
+      const start = node.position?.start.offset
+      return typeof start === 'number' && svgSourceRanges.some((range) => start >= range.start && start < range.end)
+    }
+
+    const visit = (node: Root | Element, insideSvg: boolean) => {
+      const safeChildren = []
+      for (const child of node.children) {
+        if (!isElement(child)) {
+          safeChildren.push(child)
+          continue
+        }
+        const childInsideSvg = insideSvg || child.tagName === 'svg' || isInsideSvgSource(child)
+        // rehype-sanitize 的全局 HTML 白名单仍可能允许 <a>/<img> 等元素，
+        // 因此 SVG 子树再做一次纯 SVG 标签边界收紧，避免外部资源或 HTML 混入。
+        if (childInsideSvg && !SAFE_SVG_TAG_SET.has(child.tagName)) continue
         if (childInsideSvg) {
-          for (const property of ['fill', 'stroke', 'clipPath', 'mask', 'markerStart', 'markerMid', 'markerEnd']) {
+          for (const property of SVG_REFERENCE_PROPERTIES) {
             const value = child.properties[property]
             if (typeof value !== 'string' || !value.includes('url(')) continue
             const localReference = /^url\(#([A-Za-z0-9_.:-]+)\)$/.exec(value)
@@ -128,9 +221,12 @@ function restoreSanitizedSvgReferences() {
             }
             child.properties[property] = `url(#user-content-${localReference[1]})`
           }
+          for (const property of SVG_EXTERNAL_RESOURCE_PROPERTIES) delete child.properties[property]
         }
         visit(child, childInsideSvg)
+        safeChildren.push(child)
       }
+      node.children = safeChildren
     }
     visit(tree, false)
   }
@@ -139,5 +235,6 @@ function restoreSanitizedSvgReferences() {
 export const MARKDOWN_HTML_REHYPE_PLUGINS: NonNullable<Options['rehypePlugins']> = [
   rehypeRaw,
   [rehypeSanitize, MARKDOWN_HTML_SANITIZE_SCHEMA],
+  processSvgStyleElements,
   restoreSanitizedSvgReferences,
 ]
