@@ -99,6 +99,44 @@ const SAFE_SVG_ATTRIBUTE_SCHEMA = Object.fromEntries(
   SAFE_SVG_TAGS.map((tagName) => [tagName, SAFE_SVG_ATTRIBUTES]),
 ) as NonNullable<SanitizeSchema['attributes']>
 const SAFE_SVG_TAG_SET = new Set(SAFE_SVG_TAGS)
+const SAFE_SVG_ATTRIBUTE_SET = new Set(SAFE_SVG_ATTRIBUTES)
+
+/**
+ * rehype-raw normalizes attributes parsed inside an SVG, but fragments that
+ * were split out by a blank line are parsed as HTML paragraphs and keep their
+ * source names (`font-size`, `text-anchor`, ...). Normalize only known safe
+ * SVG names before reattaching those fragments so the sanitizer does not drop
+ * their presentation attributes.
+ */
+const SVG_ATTRIBUTE_ALIASES = new Map<string, string>([
+  ['class', 'className'],
+  ['stroke-linecap', 'strokeLineCap'],
+  ['stroke-linejoin', 'strokeLineJoin'],
+  ['stroke-miterlimit', 'strokeMiterLimit'],
+  ['stroke-dasharray', 'strokeDashArray'],
+  ['stroke-dashoffset', 'strokeDashOffset'],
+])
+
+for (const property of SAFE_SVG_ATTRIBUTES) {
+  SVG_ATTRIBUTE_ALIASES.set(property, property)
+  SVG_ATTRIBUTE_ALIASES.set(property.toLowerCase(), property)
+  SVG_ATTRIBUTE_ALIASES.set(property.replace(/[A-Z]/g, (match) => `-${match.toLowerCase()}`), property)
+}
+
+function normalizeSvgFragmentProperties(node: Element): void {
+  const properties = node.properties ?? {}
+  for (const property of Object.keys(properties)) {
+    const canonical = SVG_ATTRIBUTE_ALIASES.get(property) ?? property
+    if (canonical === property || !SAFE_SVG_ATTRIBUTE_SET.has(canonical)) continue
+    const value = properties[property]
+    delete properties[property]
+    if (!(canonical in properties)) properties[canonical] = value
+  }
+  for (const child of node.children) {
+    if (isElement(child)) normalizeSvgFragmentProperties(child)
+  }
+}
+
 const SVG_REFERENCE_PROPERTIES = ['fill', 'stroke', 'filter', 'clipPath', 'mask', 'markerStart', 'markerMid', 'markerEnd']
 const SVG_EXTERNAL_RESOURCE_PROPERTIES = ['href', 'xLinkHref', 'src', 'srcSet']
 
@@ -171,6 +209,101 @@ function isElement(node: Root['children'][number]): node is Element {
   return node.type === 'element'
 }
 
+function getSvgFragment(node: Root['children'][number]): Element[] | null {
+  if (!isElement(node)) return null
+  if (node.tagName !== 'p') {
+    return SAFE_SVG_TAG_SET.has(node.tagName) ? [node] : null
+  }
+  const elements = node.children.filter(isElement)
+  const hasNonWhitespaceText = node.children.some((child) => child.type === 'text' && child.value.trim().length > 0)
+  if (hasNonWhitespaceText || elements.length === 0 || !elements.every((child) => SAFE_SVG_TAG_SET.has(child.tagName))) return null
+  return elements
+}
+
+/**
+ * Blank lines inside an SVG terminate remark's HTML block. rehypeRaw then
+ * leaves the trailing SVG elements in adjacent root nodes; merge only
+ * source-range-confirmed, SVG-safe fragments back into their opening SVG.
+ */
+function mergeSplitSvgFragments() {
+  return (tree: Root, file?: { toString?: () => string }) => {
+    const source = file?.toString?.()
+    if (!source) return
+    const ranges = collectSvgSourceRanges(source)
+    if (ranges.length === 0) return
+
+    const visit = (parent: Root | Element) => {
+      for (let index = 0; index < parent.children.length; index += 1) {
+        const child = parent.children[index]
+        if (!isElement(child)) continue
+        if (child.tagName === 'svg') {
+          const start = child.position?.start?.offset
+          const end = child.position?.end?.offset
+          const range = typeof start === 'number' ? ranges.find((candidate) => candidate.start === start) : undefined
+          if (range && typeof end === 'number' && end < range.end) {
+            const fragments: Element[] = []
+            let nextIndex = index + 1
+            while (nextIndex < parent.children.length) {
+              const next = parent.children[nextIndex]
+              if (next.type === 'text' && next.value.trim().length === 0) {
+                nextIndex += 1
+                continue
+              }
+              const nextStart = isElement(next) ? next.position?.start?.offset : undefined
+              if (typeof nextStart !== 'number' || nextStart >= range.end) break
+              const fragment = getSvgFragment(next)
+              if (!fragment) break
+              for (const element of fragment) {
+                normalizeSvgFragmentProperties(element)
+                fragments.push(element)
+              }
+              nextIndex += 1
+            }
+            if (fragments.length > 0) {
+              child.children.push(...fragments)
+              parent.children.splice(index + 1, nextIndex - index - 1)
+            }
+          }
+        }
+        visit(child)
+      }
+    }
+    visit(tree)
+  }
+}
+
+/**
+ * Markdown parses a single-line SVG as an HTML-bearing paragraph. Keeping the
+ * SVG under <p> makes the sanitizer treat the whole subtree as invalid HTML;
+ * promote a paragraph that contains only one SVG before sanitizing it.
+ */
+function promoteStandaloneSvg() {
+  return (tree: Root) => {
+    const visit = (parent: Root | Element) => {
+      const children = []
+      for (const child of parent.children) {
+        if (isElement(child) && child.tagName === 'p') {
+          const meaningfulChildren = child.children.filter((entry) => (
+            entry.type !== 'text' || entry.value.trim().length > 0
+          ))
+          if (
+            meaningfulChildren.length === 1
+            && isElement(meaningfulChildren[0])
+            && meaningfulChildren[0].tagName === 'svg'
+          ) {
+            children.push(meaningfulChildren[0])
+            continue
+          }
+        }
+        if (isElement(child)) visit(child)
+        children.push(child)
+      }
+      parent.children = children
+    }
+    visit(tree)
+  }
+}
+
 function restoreSanitizedSvgReferences() {
   return (tree: Root, file?: { toString?: () => string }) => {
     const svgSourceRanges: SourceRange[] = []
@@ -234,6 +367,8 @@ function restoreSanitizedSvgReferences() {
 
 export const MARKDOWN_HTML_REHYPE_PLUGINS: NonNullable<Options['rehypePlugins']> = [
   rehypeRaw,
+  mergeSplitSvgFragments,
+  promoteStandaloneSvg,
   [rehypeSanitize, MARKDOWN_HTML_SANITIZE_SCHEMA],
   processSvgStyleElements,
   restoreSanitizedSvgReferences,

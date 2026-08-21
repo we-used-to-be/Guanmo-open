@@ -71,6 +71,48 @@ describe('MarkdownPreview 内嵌 HTML', () => {
     expect(container.querySelector('svg line')).toHaveAttribute('marker-end', 'url(#user-content-arrow)')
   })
 
+  it('完整渲染未换行的内联 SVG（虚拟块边界）', async () => {
+    const { container } = render(
+      <MarkdownPreview
+        content={'<svg viewBox="0 0 100 40"><defs><marker id="arrow"><path d="M0 0L5 5L0 10" /></marker></defs><text x="1" y="3">单行文字</text><line x1="0" y1="5" x2="90" y2="5" marker-end="url(#arrow)" /></svg>'}
+      />,
+    )
+
+    await waitFor(() => expect(container.querySelector('svg')).toBeInTheDocument())
+    expect(container.querySelector('svg text')).toHaveTextContent('单行文字')
+    expect(container.querySelector('svg line')).toHaveAttribute('marker-end', 'url(#user-content-arrow)')
+  })
+
+  it('保留空行分隔 SVG 的文字定位与字号样式', async () => {
+    const { container } = render(
+      <MarkdownPreview
+        content={`<svg width="360" height="180" viewBox="0 0 360 180" xmlns="http://www.w3.org/2000/svg">
+  <rect x="10" y="10" width="340" height="160" rx="12" fill="#F7F9FC" stroke="#3A6EA5" stroke-width="2"/>
+
+  <circle cx="70" cy="90" r="28" fill="#E6F1FB" stroke="#185FA5" stroke-width="2"/>
+
+  <line x1="100" y1="90" x2="230" y2="90" stroke="#185FA5" stroke-width="3"/>
+
+  <path d="M230 90 L215 82 M230 90 L215 98" fill="none" stroke="#185FA5" stroke-width="3"/>
+
+  <text x="70" y="96" text-anchor="middle" font-size="14" fill="#0C447C">开始</text>
+
+  <text x="285" y="96" text-anchor="middle" font-size="16" font-weight="600" fill="#26374A">SVG OK</text>
+</svg>`}
+      />,
+    )
+
+    await waitFor(() => expect(container.querySelector('svg')).toBeInTheDocument())
+    const texts = container.querySelectorAll('svg text')
+    expect(texts).toHaveLength(2)
+    expect(texts[0]).toHaveAttribute('text-anchor', 'middle')
+    expect(texts[0]).toHaveAttribute('font-size', '14')
+    expect(texts[1]).toHaveAttribute('text-anchor', 'middle')
+    expect(texts[1]).toHaveAttribute('font-size', '16')
+    expect(texts[1]).toHaveAttribute('font-weight', '600')
+    expect(container.querySelector('svg line')).toHaveAttribute('stroke-width', '3')
+  })
+
   it('以隐私友好的方式加载 HTTPS 图片', async () => {
     render(
       <MarkdownPreview

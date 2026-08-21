@@ -36,6 +36,66 @@ const SAMPLE_SVG = `<svg viewBox="0 0 680 320" width="100%" role="img" xmlns="ht
 </svg>`
 
 describe('Markdown inline SVG sanitation', () => {
+  it('保留单行 SVG 的内联元素', () => {
+    const html = renderMarkdown('<svg viewBox="0 0 10 10"><text x="1" y="3">单行文字</text><line x1="0" y1="5" x2="9" y2="5" /></svg>')
+
+    expect(html).toContain('<svg viewBox="0 0 10 10">')
+    expect(html).toContain('<text x="1" y="3">单行文字</text>')
+    expect(html).toContain('<line x1="0" y1="5" x2="9" y2="5"></line>')
+  })
+
+  it('保留空行分隔的 SVG 图形、连线和文字', () => {
+    const html = renderMarkdown(`<svg width="360" height="180" viewBox="0 0 360 180" xmlns="http://www.w3.org/2000/svg">
+<rect x="10" y="10" width="340" height="160" rx="12" fill="#F7F9FC" stroke="#3A6EA5" stroke-width="2"/>
+
+<circle cx="70" cy="90" r="28" fill="#E6F1FB" stroke="#185FA5" stroke-width="2"/>
+
+<line x1="100" y1="90" x2="230" y2="90" stroke="#185FA5" stroke-width="3"/>
+
+<path d="M230 90 L215 82 M230 90 L215 98" fill="none" stroke="#185FA5" stroke-width="3"/>
+
+<text x="70" y="96" text-anchor="middle" font-size="14" fill="#0C447C">开始</text>
+</svg>`)
+
+    expect(html).toContain('<rect')
+    expect(html).toContain('<circle')
+    expect(html).toContain('<line')
+    expect(html).toContain('<path')
+    expect(html).toContain('<text')
+    expect(html).toContain('>开始</text>')
+  })
+
+  it('保留空行分隔 SVG 的文字定位与字号样式', () => {
+    const html = renderMarkdown(`<svg width="360" height="180" viewBox="0 0 360 180" xmlns="http://www.w3.org/2000/svg">
+  <rect x="10" y="10" width="340" height="160" rx="12"
+        fill="#F7F9FC" stroke="#3A6EA5" stroke-width="2"/>
+
+  <circle cx="70" cy="90" r="28"
+          fill="#E6F1FB" stroke="#185FA5" stroke-width="2"/>
+
+  <line x1="100" y1="90" x2="230" y2="90"
+        stroke="#185FA5" stroke-width="3"/>
+
+  <path d="M230 90 L215 82 M230 90 L215 98"
+        fill="none" stroke="#185FA5" stroke-width="3"/>
+
+  <text x="70" y="96"
+        text-anchor="middle"
+        font-size="14"
+        fill="#0C447C">开始</text>
+
+  <text x="285" y="96"
+        text-anchor="middle"
+        font-size="16"
+        font-weight="600"
+        fill="#26374A">SVG OK</text>
+</svg>`)
+
+    expect(html).toContain('stroke-width="2"')
+    expect(html).toMatch(/<text[^>]*x="70"[^>]*y="96"[^>]*text-anchor="middle"[^>]*font-size="14"[^>]*>开始<\/text>/)
+    expect(html).toMatch(/<text[^>]*x="285"[^>]*y="96"[^>]*text-anchor="middle"[^>]*font-size="16"[^>]*font-weight="600"[^>]*>SVG OK<\/text>/)
+  })
+
   it('保留静态 SVG 图形和本地 marker 引用', () => {
     const html = renderMarkdown(`
 <svg viewBox="0 0 100 40" width="100%" role="img" xmlns="http://www.w3.org/2000/svg">
