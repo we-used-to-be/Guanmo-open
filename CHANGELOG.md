@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.7.1 (2026-09-04)
+
+### 🐛 修复
+
+- 修复 GitHub Actions 前端质量门禁中的 `isTauri()` 测试契约、AI 头像动态状态和 MarkdownPreview 定位校正失败。
+
 ## v1.7.0 (2026-09-04)
 
 ### GuanMo v1.7.0：更完整的阅读成果、更强的 Markdown 预览与 Web AI 能力
