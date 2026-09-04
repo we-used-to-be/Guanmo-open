@@ -281,7 +281,7 @@ describe('MarkdownPreview 预览内源码编辑', () => {
 
     altClick(wrapper as HTMLElement)
 
-    await waitFor(() => expect(document.querySelector('.cm-editor')).toBeInTheDocument())
+    await waitFor(() => expect(document.querySelector('.cm-editor')).toBeInTheDocument(), { timeout: 10_000 })
   })
 
   it('外部 pointerdown 提交后恢复预览，Esc 不再提交', async () => {

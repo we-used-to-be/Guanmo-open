@@ -398,6 +398,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const onRenderCompleteRef = useRef(onRenderComplete)
   const firstVisibleRef = useRef(false)
   const lifecycleMetadataRef = useRef({ documentKey, resource })
+  const previousDisplayedContentRef = useRef<string | null>(null)
   const previousModelRef = useRef<MarkdownPreviewModel | null>(null)
   const pendingPreviewPatchRef = useRef<PendingPreviewPatch | null>(null)
   const pendingAnchorRestoreRef = useRef<PendingPreviewAnchorRestore | null>(null)
@@ -953,6 +954,9 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
 
   // 文档内容变化：旧 offset 全部失效，清除搜索索引与选区状态
   useEffect(() => {
+    const contentChanged = previousDisplayedContentRef.current !== displayedContent
+    previousDisplayedContentRef.current = displayedContent
+    if (!contentChanged) return
     cancelProgrammaticScroll()
     pendingSearchCorrectionRef.current = null
     searchMatchesByBlockRef.current = null
@@ -1694,9 +1698,6 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     const desired = Math.max(0, targetTop - 24)
     if (Math.abs(container.scrollTop - desired) >= 1) container.scrollTop = desired
     pending.onApplied?.()
-    requestAnimationFrame(() => {
-      if (pendingSearchCorrectionRef.current === appliedPending) pendingSearchCorrectionRef.current = null
-    })
   }, [model, scrollState.scrollTop, visible.blockTops, visible.startIndex, visible.endIndex])
 
   useEffect(() => {

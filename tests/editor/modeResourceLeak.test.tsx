@@ -18,7 +18,7 @@ if (typeof IntersectionObserver === 'undefined') {
 
 // Mock Tauri hooks
 vi.mock('@/hooks/useTauri', () => ({
-  isTauri: false,
+  isTauri: vi.fn(() => false),
   openFileDialog: vi.fn(),
   openUrl: vi.fn(),
 }))

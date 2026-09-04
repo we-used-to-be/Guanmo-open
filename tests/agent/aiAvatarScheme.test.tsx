@@ -79,14 +79,16 @@ describe('AI 头像统一使用小球（AiAvatar）', () => {
     }
   })
 
-  it('只让最新消息的小球播放动态，历史消息保持静态', () => {
+  it('只让当前流式消息的小球播放动态，历史消息保持静态', () => {
     const originalMessages = aiChat.messages
+    const originalStreaming = aiChat.streaming
     aiChat.messages = [
       { id: 'user-1', role: 'user' as const, content: '第一个问题', timestamp: 1 },
       { id: 'assistant-1', parentId: 'user-1', role: 'assistant' as const, content: '历史回答', timestamp: 2 },
       { id: 'user-2', role: 'user' as const, content: '第二个问题', timestamp: 3 },
       { id: 'assistant-2', parentId: 'user-2', role: 'assistant' as const, content: '最新回答', timestamp: 4 },
     ]
+    aiChat.streaming = true
 
     try {
       render(<AiPanel />)
@@ -94,6 +96,7 @@ describe('AI 头像统一使用小球（AiAvatar）', () => {
       expect(sprites.map((sprite) => sprite.getAttribute('data-animated'))).toEqual(['false', 'true'])
     } finally {
       aiChat.messages = originalMessages
+      aiChat.streaming = originalStreaming
     }
   })
 

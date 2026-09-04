@@ -47,7 +47,7 @@ const capturedViews = vi.hoisted(() => {
 const replaceMarkdownBlockMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@/hooks/useActiveHeading', () => ({ useActiveHeading: () => null }))
-vi.mock('@/hooks/useTauri', () => ({ isTauri: false, openFileDialog: vi.fn(), openUrl: vi.fn() }))
+vi.mock('@/hooks/useTauri', () => ({ isTauri: vi.fn(() => false), openFileDialog: vi.fn(), openUrl: vi.fn() }))
 vi.mock('@/services/fileSystem', () => ({ saveFile: vi.fn(), saveFileAs: vi.fn() }))
 vi.mock('@/services/rag/indexer', () => ({ scheduleMarkdownDocumentIndex: vi.fn() }))
 vi.mock('@/services/toast', () => ({
