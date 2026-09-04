@@ -7,11 +7,12 @@ import { useAiChat } from '@/hooks/useAiChat'
 import { Button } from 'animal-island-ui'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { AiSprite } from '@/components/ai/AiSprite'
+import { AssistantVisual } from '@/components/ai/AssistantVisual'
 import { PromptComposer } from '@/components/ai/PromptComposer'
-import { readRememberedFile } from '@/services/persistedFileAccess'
+import { readRememberedMarkdownFileForOpen } from '@/services/markdownFileOpenPolicy'
+import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { useEditorStore } from '@/stores/editorStore'
-import { deleteChatSession } from '@/services/database/persistence'
+import { deleteConversationSession } from '@/services/agent/conversationCommands'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { toast } from '@/services/toast'
 import type {
@@ -23,8 +24,17 @@ import type {
 } from '@/services/ai/types'
 import { resolveStoredSourceReferences, type SourceReferenceId } from '@/services/ai/sourceReferences'
 import { AI_SHORTCUT_SUBMIT_EVENT } from '@/services/aiContext'
+import {
+  consumePendingPanelNavigation,
+  OPEN_AI_CHAT_EVENT,
+  OPEN_READING_ARTIFACTS_EVENT,
+  TOGGLE_AI_CHAT_EVENT,
+  TOGGLE_READING_ARTIFACTS_EVENT,
+} from '@/services/aiPanelNavigation'
 import { applyPendingEditCommand } from '@/services/pendingEditCommand'
 import { saveAssistantMessageAsMarkdown } from '@/services/assistantMessageExport'
+import { ReadingArtifactCenter } from '@/components/reading-artifacts/ReadingArtifactCenter'
+import type { ReadingArtifactDocumentRef } from '@/services/readingArtifactCenter'
 import { useReadingArtifactsStore, type ReadingArtifactFilter } from '@/stores/readingArtifactsStore'
 import {
   type ReadingArtifact,
@@ -36,18 +46,20 @@ import {
   getReadingArtifactQuestion,
   getReadingArtifactReferences,
   resolveAnnotationPosition,
-} from '@/services/database/readingArtifacts'
-import { loadReadingReminders, type ReadingReminder } from '@/services/database/readingReminders'
+} from '@/services/agent/artifactCommands'
 import {
   cancelReadingReminder,
   deleteReadingReminder,
   editReadingReminderTime,
+  loadReadingRemindersCommand,
   retryReadingReminder,
+  type ReadingReminder,
 } from '@/services/readingReminders'
 import {
   READING_REMINDER_DEVELOPMENT_MESSAGE,
   READING_REMINDER_FEATURE_AVAILABLE,
 } from '@/services/readingReminderFeature'
+import { getRuntimeCapabilities } from '@/services/runtimeCapabilities'
 
 type AiPanelProps = {
   fullscreenDragHandleProps?: {
@@ -76,6 +88,8 @@ export function buildUserQuestionMap(messages: ChatMessage[]): Map<string, strin
 export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const toggleAiPanel = useAppStore((s) => s.toggleAiPanel)
   const { messages, streaming, error, timeline, sendMessage, cancelStream } = useAiChat()
+  const databaseEnabled = getRuntimeCapabilities().database
+  const assistantVisualId = useSettingsStore((s) => s.appearance.assistantVisualId)
   const setDraftInput = useChatStore((s) => s.setDraftInput)
   const clearMessages = useChatStore((s) => s.clearMessages)
   const hasMoreHistory = useChatStore((s) => s.hasMoreHistory)
@@ -99,27 +113,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const [panelView, setPanelView] = useState<'chat' | 'artifacts' | 'reminders'>('chat')
   const [reminders, setReminders] = useState<ReadingReminder[]>([])
   const [remindersLoading, setRemindersLoading] = useState(false)
-  const artifacts = useReadingArtifactsStore((s) => s.artifacts)
-  const artifactsLoading = useReadingArtifactsStore((s) => s.loading)
-  const artifactFilter = useReadingArtifactsStore((s) => s.filter)
-  const artifactQuery = useReadingArtifactsStore((s) => s.query)
-  const artifactPage = useReadingArtifactsStore((s) => s.page)
-  const artifactPageSize = useReadingArtifactsStore((s) => s.pageSize)
-  const artifactTotal = useReadingArtifactsStore((s) => s.total)
-  const setArtifactFilter = useReadingArtifactsStore((s) => s.setFilter)
-  const setArtifactQuery = useReadingArtifactsStore((s) => s.setQuery)
-  const setArtifactPage = useReadingArtifactsStore((s) => s.setPage)
-  const loadArtifacts = useReadingArtifactsStore((s) => s.loadArtifacts)
-  const deleteArtifact = useReadingArtifactsStore((s) => s.deleteArtifact)
   const saveArtifactFromMessage = useReadingArtifactsStore((s) => s.saveArtifactFromMessage)
-  const anchorStatuses = useReadingArtifactsStore((s) => s.anchorStatuses)
-  const checkAnchor = useReadingArtifactsStore((s) => s.checkAnchor)
-
-  useEffect(() => {
-    if (panelView === 'artifacts') {
-      void loadArtifacts()
-    }
-  }, [panelView, artifactFilter, artifactQuery, artifactPage, loadArtifacts])
 
   useEffect(() => {
     if (panelView !== 'chat' || !shouldScrollAfterReturnRef.current) return
@@ -142,7 +136,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const refreshReminders = useCallback(async () => {
     setRemindersLoading(true)
     try {
-      setReminders(await loadReadingReminders())
+      setReminders(await loadReadingRemindersCommand())
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '加载提醒失败')
     } finally {
@@ -151,8 +145,44 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   }, [])
 
   useEffect(() => {
-    if (panelView === 'reminders' && READING_REMINDER_FEATURE_AVAILABLE) void refreshReminders()
-  }, [panelView, refreshReminders])
+    if (databaseEnabled && panelView === 'reminders' && READING_REMINDER_FEATURE_AVAILABLE) void refreshReminders()
+  }, [databaseEnabled, panelView, refreshReminders])
+
+  useEffect(() => {
+    if (!databaseEnabled && panelView !== 'chat') setPanelView('chat')
+  }, [databaseEnabled, panelView])
+
+  useEffect(() => {
+    const applyNavigation = (navigation: { mode: 'open' | 'toggle'; view: 'chat' | 'artifacts' }) => {
+      if (navigation.view === 'artifacts' && !databaseEnabled) return
+      if (navigation.mode === 'open') {
+        setPanelView(navigation.view)
+      } else if (panelView === navigation.view) {
+        useAppStore.getState().closeAiPanel()
+      } else {
+        setPanelView(navigation.view)
+      }
+    }
+    const handleNavigation = (fallback: { mode: 'open' | 'toggle'; view: 'chat' | 'artifacts' }) => {
+      applyNavigation(consumePendingPanelNavigation() ?? fallback)
+    }
+    const handleOpenAiChat = () => handleNavigation({ mode: 'open', view: 'chat' })
+    const handleToggleAiChat = () => handleNavigation({ mode: 'toggle', view: 'chat' })
+    const handleOpenReadingArtifacts = () => handleNavigation({ mode: 'open', view: 'artifacts' })
+    const handleToggleReadingArtifacts = () => handleNavigation({ mode: 'toggle', view: 'artifacts' })
+    const pendingNavigation = consumePendingPanelNavigation()
+    if (pendingNavigation) applyNavigation(pendingNavigation)
+    window.addEventListener(OPEN_AI_CHAT_EVENT, handleOpenAiChat)
+    window.addEventListener(TOGGLE_AI_CHAT_EVENT, handleToggleAiChat)
+    window.addEventListener(OPEN_READING_ARTIFACTS_EVENT, handleOpenReadingArtifacts)
+    window.addEventListener(TOGGLE_READING_ARTIFACTS_EVENT, handleToggleReadingArtifacts)
+    return () => {
+      window.removeEventListener(OPEN_AI_CHAT_EVENT, handleOpenAiChat)
+      window.removeEventListener(TOGGLE_AI_CHAT_EVENT, handleToggleAiChat)
+      window.removeEventListener(OPEN_READING_ARTIFACTS_EVENT, handleOpenReadingArtifacts)
+      window.removeEventListener(TOGGLE_READING_ARTIFACTS_EVENT, handleToggleReadingArtifacts)
+    }
+  }, [databaseEnabled, panelView])
 
   const handleCancelReminder = useCallback(async (id: string) => {
     try {
@@ -367,7 +397,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
       const existing = editorState.tabs.find((tab) => isSameFilePath(tab.filePath, source.filePath))
       let tabId = existing?.id
       if (!tabId) {
-        const content = await readRememberedFile(source.filePath)
+        const content = await readRememberedMarkdownFileForOpen(source.filePath)
         const name = source.filePath.split(/[/\\]/).pop() || source.filePath
         editorState.addTab(source.filePath, name, content)
         tabId = useEditorStore.getState().activeTabId || undefined
@@ -375,41 +405,41 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
         editorState.setActiveTab(tabId)
       }
       if (!tabId) return
-      editorState.setViewMode('edit')
-      editorState.requestReveal(tabId, source.startLine, source.endLine)
+      editorState.setViewMode('preview')
+      editorState.requestReveal(tabId, source.startLine, source.endLine, 'preview')
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : '打开来源失败')
+      toast.error(describeFileOperationError(err, '打开来源失败'))
     }
   }, [])
 
-  const handleOpenArtifactSource = useCallback(async (artifact: ReadingArtifact) => {
-    const source = artifact.source
-    if (!source?.filePath) {
+  const handleOpenArtifactSource = useCallback(async (artifact: ReadingArtifact, documentRef: ReadingArtifactDocumentRef) => {
+    const location = documentRef.locations[0]
+    if (!documentRef.filePath) {
       toast.error('该成果未绑定来源文件')
       return
     }
-    const anchorLines = source.startLine && source.endLine
-      ? { startLine: source.startLine, endLine: source.endLine }
+    const source = artifact.source
+    const anchorLines = location?.startLine && location?.endLine
+      ? { startLine: location.startLine, endLine: location.endLine }
       : null
     // 批注按 Markdown model/source offset 定位；其他类型直接用锚点行号。
-    const annotation = artifact.type === 'annotation'
+    const annotation = artifact.type === 'annotation' && source?.filePath && isSameFilePath(source.filePath, documentRef.filePath)
       ? getAnnotationStructuredContent(artifact)
       : null
     try {
       const editorState = useEditorStore.getState()
-      const existing = editorState.tabs.find((tab) => isSameFilePath(tab.filePath, source.filePath))
+      const existing = editorState.tabs.find((tab) => isSameFilePath(tab.filePath, documentRef.filePath))
       let tabId = existing?.id
       let content = existing?.content ?? ''
       if (!tabId) {
-        content = await readRememberedFile(source.filePath)
-        const name = source.filePath.split(/[/\\]/).pop() || source.filePath
-        editorState.addTab(source.filePath, name, content)
+        content = await readRememberedMarkdownFileForOpen(documentRef.filePath)
+        editorState.addTab(documentRef.filePath, documentRef.fileName, content)
         tabId = useEditorStore.getState().activeTabId || undefined
       } else {
         editorState.setActiveTab(tabId)
       }
       if (!tabId) return
-      editorState.setViewMode('edit')
+      editorState.setViewMode('preview')
       // 批注：用当前文档内容解析定位（基于 Markdown model，不遍历 DOM）
       let revealStart = anchorLines?.startLine
       let revealEnd = anchorLines?.endLine
@@ -421,10 +451,10 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
         }
       }
       if (revealStart && revealEnd) {
-        editorState.requestReveal(tabId, revealStart, revealEnd)
+        editorState.requestReveal(tabId, revealStart, revealEnd, 'preview')
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : '打开来源失败')
+      toast.error(describeFileOperationError(err, '打开来源失败'))
     }
   }, [])
 
@@ -451,6 +481,10 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     messageId: string | undefined,
     question: string | undefined,
   ) => {
+    if (!databaseEnabled) {
+      toast.error('阅读成果仅桌面版可用')
+      return
+    }
     const trimmed = content.trim()
     if (!trimmed) return
 
@@ -458,7 +492,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     if (type === 'annotation') {
       const localSource = sources?.find((s): s is LocalChatMessageSource => s.kind !== 'web')
       if (!localSource || !localSource.filePath) {
-        toast.error('批注需要绑定本地来源，请先选择带文件来源的回答')
+        toast.error('AI 解读需要绑定本地来源，请先选择带文件来源的回答')
         return
       }
       const quote = localSource.heading
@@ -478,12 +512,12 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
           structuredContent: structured,
         })
         if (saved) {
-          toast.success('已保存为批注')
+          toast.success('已保存为 AI 解读')
         } else {
-          toast.error('保存批注失败')
+          toast.error('保存 AI 解读失败')
         }
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : '保存批注失败')
+        toast.error(err instanceof Error ? err.message : '保存 AI 解读失败')
       }
       return
     }
@@ -507,19 +541,23 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '保存阅读成果失败')
     }
-  }, [saveArtifactFromMessage])
+  }, [databaseEnabled, saveArtifactFromMessage])
 
   const handleDeleteSession = useCallback(async (sessionId: string) => {
+    if (!databaseEnabled) {
+      toast.error('历史会话仅桌面版可用')
+      return
+    }
     const confirmed = window.confirm('确认删除这组历史会话吗？删除后不可恢复。')
     if (!confirmed) return
     try {
-      await deleteChatSession(sessionId)
+      await deleteConversationSession(sessionId)
       useChatStore.getState().removeSessionMessages(sessionId)
       toast.success('历史会话已删除')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '删除历史会话失败')
     }
-  }, [])
+  }, [databaseEnabled])
 
   return (
     <div className="gm-instant-color h-full min-h-0 flex flex-col relative">
@@ -533,7 +571,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
       >
         <div className="flex items-center gap-2">
           <span className="text-body font-bold text-gm-text">
-            AI 助手
+            {panelView === 'artifacts' ? '阅读成果' : panelView === 'reminders' ? '阅读提醒' : 'AI 助手'}
           </span>
           {streaming && (
             <span className="text-caption text-gm-primary animate-pulse">生成中...</span>
@@ -544,8 +582,9 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
           <Button
             type={panelView === 'artifacts' ? 'default' : 'text'}
             size="small"
-            onClick={() => setPanelView('artifacts')}
-            title="阅读成果"
+            disabled={!databaseEnabled}
+            onClick={() => { if (databaseEnabled) setPanelView('artifacts') }}
+            title={databaseEnabled ? '阅读成果' : '阅读成果仅桌面版可用'}
             icon={
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                 <path d="M4 19.5A2.5 2.5 0 016.5 17H20" />
@@ -556,8 +595,9 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
           <Button
             type={panelView === 'reminders' ? 'default' : 'text'}
             size="small"
-            onClick={() => setPanelView('reminders')}
-            title="阅读提醒（功能开发中）"
+            disabled={!databaseEnabled}
+            onClick={() => { if (databaseEnabled) setPanelView('reminders') }}
+            title={databaseEnabled ? '阅读提醒（功能开发中）' : '阅读提醒仅桌面版可用'}
             icon={
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                 <path d="M18 8a6 6 0 00-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
@@ -604,28 +644,12 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
         </div>
       </div>
 
-      <AgentTimeline timeline={timeline} />
+      {panelView === 'chat' && <AgentTimeline timeline={timeline} />}
 
       {/* Chat Content - 可以滚动到控制栏下面 */}
-      <div ref={chatContainerRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden min-w-0 pb-32 bg-gm-surface">
+      <div ref={chatContainerRef} className={`flex-1 min-h-0 overflow-y-auto overflow-x-hidden min-w-0 bg-gm-surface ${panelView === 'chat' ? 'pb-32' : 'pb-0'}`}>
         {panelView === 'artifacts' ? (
-          <ReadingArtifactsPanel
-            artifacts={artifacts}
-            loading={artifactsLoading}
-            filter={artifactFilter}
-            query={artifactQuery}
-            page={artifactPage}
-            pageSize={artifactPageSize}
-            total={artifactTotal}
-            onFilterChange={setArtifactFilter}
-            onQueryChange={setArtifactQuery}
-            onPageChange={setArtifactPage}
-            onDelete={deleteArtifact}
-            onOpenSource={handleOpenRagSource}
-            onOpenArtifactSource={handleOpenArtifactSource}
-            anchorStatuses={anchorStatuses}
-            onCheckAnchor={checkAnchor}
-          />
+          <ReadingArtifactCenter onOpenAiSource={handleOpenArtifactSource} />
         ) : panelView === 'reminders' ? (
           READING_REMINDER_FEATURE_AVAILABLE ? (
             <ReadingRemindersPanel
@@ -647,13 +671,14 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
             {hasMoreHistory && (
               <button
                 onClick={handleLoadHistory}
-                disabled={loadingHistory}
+                disabled={!databaseEnabled || loadingHistory}
+                title={!databaseEnabled ? '历史会话仅桌面版可用' : undefined}
                 className="mb-4 px-4 py-1.5 rounded-full border border-gm-border text-caption text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover disabled:opacity-50"
               >
                 {loadingHistory ? '加载中...' : '加载历史记录'}
               </button>
             )}
-            <AiAvatar size="empty" />
+            <AiAvatar size="empty" visualId={assistantVisualId} />
             <p className="text-body font-bold text-gm-text mb-1">开始对话</p>
             <p className="text-caption text-gm-text-secondary text-center leading-relaxed">
               选择文档中的文字，或直接提问
@@ -665,7 +690,8 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
               <div className="flex justify-center">
                 <button
                   onClick={handleLoadHistory}
-                  disabled={loadingHistory}
+                  disabled={!databaseEnabled || loadingHistory}
+                  title={!databaseEnabled ? '历史会话仅桌面版可用' : undefined}
                   className="px-4 py-1.5 rounded-full border border-gm-border text-caption text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover disabled:opacity-50"
                 >
                   {loadingHistory ? '加载中...' : '加载更早的记录'}
@@ -697,6 +723,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
                   content={msg.displayContent ?? msg.content}
                   isLast={i === visibleMessages.length - 1}
                   streaming={streaming}
+                  visualId={assistantVisualId}
                   sources={msg.sources}
                   referencedSourceIds={msg.referencedSourceIds}
                   onOpenSource={handleOpenRagSource}
@@ -708,7 +735,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
                       : undefined
                   }
                   onSaveAsArtifact={
-                    msg.role === 'assistant'
+                    databaseEnabled && msg.role === 'assistant'
                       && Boolean((msg.displayContent ?? msg.content).trim())
                       && !(i === visibleMessages.length - 1 && streaming)
                       ? (type) => handleSaveAssistantAsArtifact(
@@ -935,8 +962,8 @@ const ARTIFACT_FILTER_OPTIONS: Array<{ value: ReadingArtifactFilter; label: stri
   { value: 'all', label: '全部' },
   { value: 'summary', label: '摘要' },
   { value: 'question_set', label: '问题集' },
-  { value: 'annotation', label: '批注' },
-  { value: 'note', label: '笔记' },
+  { value: 'annotation', label: 'AI 解读' },
+  { value: 'note', label: '阅读笔记' },
 ]
 
 const READING_ARTIFACT_SEARCH_DEBOUNCE_MS = 180
@@ -1041,7 +1068,7 @@ function ReadingArtifactsPanel({
           <p className="font-bold text-gm-text-secondary mb-1">
             {hasNoArtifacts ? '还没有阅读成果' : '当前条件无匹配结果'}
           </p>
-          <p>{hasNoArtifacts ? '在 AI 回答上点击「摘要 / 问题集 / 批注 / 卡片 / 笔记」即可保存' : '请尝试更换搜索词或筛选条件'}</p>
+          <p>{hasNoArtifacts ? '在 AI 回答上点击「摘要 / 问题集 / AI 解读 / 阅读笔记」即可保存' : '请尝试更换搜索词或筛选条件'}</p>
         </div>
       ) : (
         <div className="space-y-2">
@@ -1431,6 +1458,7 @@ export const ChatBubble = memo(function ChatBubble({
   content,
   isLast,
   streaming,
+  visualId,
   sources,
   referencedSourceIds,
   onOpenSource,
@@ -1441,6 +1469,7 @@ export const ChatBubble = memo(function ChatBubble({
   content: string
   isLast: boolean
   streaming: boolean
+  visualId?: string | null
   sources?: ChatMessageSource[]
   referencedSourceIds?: SourceReferenceId[]
   onOpenSource?: (source: LocalChatMessageSource) => void
@@ -1459,7 +1488,7 @@ export const ChatBubble = memo(function ChatBubble({
   const saveControlsHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [saveMenuOpen, setSaveMenuOpen] = useState(false)
   const [saveControlsVisible, setSaveControlsVisible] = useState(false)
-  // 批注需绑定本地来源范围；仅当存在非 web 来源时显示「批注」按钮
+  // AI 解读需绑定本地来源范围；仅当存在非 web 来源时显示对应入口
   const hasLocalSource = Boolean(sources?.some((s) => s.kind !== 'web'))
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -1538,7 +1567,7 @@ export const ChatBubble = memo(function ChatBubble({
       } : undefined}
     >
       {!isUser && (
-        <AiAvatar size="message" animated={isLast} streaming={isAssistantStreaming} />
+        <AiAvatar size="message" animated={isAssistantStreaming} streaming={isAssistantStreaming} visualId={visualId} />
       )}
       <div className="group relative min-w-0 w-fit max-w-[80%]">
         <div
@@ -1612,7 +1641,7 @@ export const ChatBubble = memo(function ChatBubble({
                     <Button role="menuitem" type="text" size="small" className="w-full justify-start hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover" onClick={() => runSaveAction(() => onSaveAsArtifact('summary'))}>摘要</Button>
                     <Button role="menuitem" type="text" size="small" className="w-full justify-start hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover" onClick={() => runSaveAction(() => onSaveAsArtifact('question_set'))}>问题集</Button>
                     {hasLocalSource && (
-                      <Button role="menuitem" type="text" size="small" className="w-full justify-start hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover" onClick={() => runSaveAction(() => onSaveAsArtifact('annotation'))}>批注</Button>
+                      <Button role="menuitem" type="text" size="small" className="w-full justify-start hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover" onClick={() => runSaveAction(() => onSaveAsArtifact('annotation'))}>AI 解读</Button>
                     )}
                     <Button role="menuitem" type="text" size="small" className="w-full justify-start hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover" onClick={() => runSaveAction(() => onSaveAsArtifact('note'))}>阅读笔记</Button>
                   </>
@@ -1629,7 +1658,7 @@ export const ChatBubble = memo(function ChatBubble({
 const ARTIFACT_TYPE_LABELS: Record<ReadingArtifactType, string> = {
   summary: '摘要',
   question_set: '问题集',
-  annotation: '批注',
+  annotation: 'AI 解读',
   note: '阅读笔记',
 }
 
@@ -1646,10 +1675,12 @@ function AiAvatar({
   size,
   animated = true,
   streaming = false,
+  visualId,
 }: {
   size: 'empty' | 'message'
   animated?: boolean
   streaming?: boolean
+  visualId?: string | null
 }) {
   const className = size === 'empty'
     ? 'gm-ai-empty-icon-shell w-16 h-16 rounded-2xl flex items-center justify-center mb-4'
@@ -1660,7 +1691,12 @@ function AiAvatar({
   const spriteClassName = size === 'message' ? `${className} gm-ai-avatar--sprite` : className
   return (
     <div className={spriteClassName}>
-      <AiSprite size={size === 'empty' ? 56 : 44} state={forceIdle ? 'idle' : undefined} animated={animated} />
+      <AssistantVisual
+        visualId={visualId}
+        size={size === 'empty' ? 56 : 44}
+        state={forceIdle ? 'idle' : undefined}
+        animated={animated}
+      />
     </div>
   )
 }

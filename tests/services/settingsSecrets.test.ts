@@ -10,17 +10,30 @@ const mocks = vi.hoisted(() => {
     loadSecret: vi.fn(),
     saveSecret: vi.fn(),
     updateSearchConfig: vi.fn(),
-    setState: vi.fn((next: typeof state) => {
-      state.ai = next.ai
-      state.webSearch = next.webSearch
+    hydrateSecrets: vi.fn((secrets: {
+      apiKey: string | null
+      embeddingApiKey: string | null
+      webSearchApiKey: string | null
+    }, initial: {
+      apiKey: string
+      embeddingApiKey: string
+      webSearchApiKey: string
+    }) => {
+      if (secrets.apiKey && state.ai.apiKey === initial.apiKey) state.ai.apiKey = secrets.apiKey
+      if (secrets.embeddingApiKey && state.ai.embedding.apiKey === initial.embeddingApiKey) {
+        state.ai.embedding.apiKey = secrets.embeddingApiKey
+      }
+      if (secrets.webSearchApiKey && state.webSearch.apiKey === initial.webSearchApiKey) {
+        state.webSearch.apiKey = secrets.webSearchApiKey
+      }
     }),
   }
 })
 
 vi.mock('@/stores/settingsStore', () => ({
   useSettingsStore: {
-    getState: () => mocks.state,
-    setState: mocks.setState,
+    getState: () => ({ ...mocks.state, hydrateSecrets: mocks.hydrateSecrets }),
+    hydrateSecrets: mocks.hydrateSecrets,
   },
 }))
 
@@ -46,7 +59,7 @@ beforeEach(() => {
   mocks.loadSecret.mockReset()
   mocks.saveSecret.mockReset()
   mocks.updateSearchConfig.mockReset()
-  mocks.setState.mockClear()
+  mocks.hydrateSecrets.mockClear()
   mocks.state.ai = { apiKey: '', embedding: { apiKey: '' } }
   mocks.state.webSearch = { apiKey: '' }
   resetSettingsSecretsHydrationForTest()
@@ -68,6 +81,7 @@ describe('settings secrets hydration', () => {
     pending.get('search')?.('search-key')
     await first
 
+    expect(mocks.hydrateSecrets).toHaveBeenCalledTimes(1)
     expect(mocks.state.ai.apiKey).toBe('chat-key')
     expect(mocks.state.ai.embedding.apiKey).toBe('embedding-key')
     expect(mocks.state.webSearch.apiKey).toBe('search-key')

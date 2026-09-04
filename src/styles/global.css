@@ -230,13 +230,6 @@ body {
   }
 }
 
-.gm-manual-tool-tooltip {
-  color: var(--gm-text);
-  background: var(--gm-tooltip-bg);
-  border: 1px solid var(--gm-tooltip-border);
-  box-shadow: var(--gm-tooltip-shadow);
-}
-
 .gm-manual-tool-toggle {
   gap: 4px !important;
   color: #315F5A !important;
@@ -304,19 +297,6 @@ body {
   max-width: 100% !important;
   overflow-x: auto;
   display: block;
-}
-
-.gm-manual-tool-tooltip::after {
-  content: '';
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  width: 0;
-  height: 0;
-  transform: translateX(-50%);
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-top: 4px solid var(--gm-tooltip-bg);
 }
 
 .gm-setting-slider {
@@ -705,17 +685,6 @@ body {
   background: linear-gradient(90deg, #1f45d4 0%, #7662f5 56%, #6d38f0 100%);
 }
 
-[data-theme='dark'] .gm-manual-tool-tooltip {
-  color: var(--gm-text);
-  background: var(--gm-surface-overlay);
-  border-color: var(--gm-border-strong);
-  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.36);
-}
-
-[data-theme='dark'] .gm-manual-tool-tooltip::after {
-  border-top-color: var(--gm-surface-overlay);
-}
-
 [data-theme='dark'] .gm-ai-empty-icon-shell,
 [data-theme='dark'] .gm-ai-avatar {
   background: rgba(95, 159, 152, 0.10);
@@ -768,6 +737,32 @@ body {
   background: #3F7771 !important;
   border-color: #3F7771 !important;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18) !important;
+}
+
+.gm-manual-tool-toggle--icon,
+.gm-manual-tool-toggle--icon:hover:not(:disabled),
+.gm-manual-tool-toggle--icon:active:not(:disabled),
+.gm-manual-tool-toggle--icon.gm-manual-tool-toggle--active,
+.gm-manual-tool-toggle--icon.gm-manual-tool-toggle--active:hover:not(:disabled),
+.gm-manual-tool-toggle--icon.gm-manual-tool-toggle--active:active:not(:disabled) {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.gm-manual-tool-toggle--icon:not(.gm-manual-tool-toggle--active) {
+  color: var(--gm-text-tertiary) !important;
+}
+
+.gm-manual-tool-toggle--icon:hover:not(:disabled) {
+  color: var(--gm-text-secondary) !important;
+}
+
+.gm-manual-tool-toggle--icon.gm-manual-tool-toggle--active,
+.gm-manual-tool-toggle--icon.gm-manual-tool-toggle--active:hover:not(:disabled),
+.gm-manual-tool-toggle--icon.gm-manual-tool-toggle--active:active:not(:disabled) {
+  color: var(--gm-primary) !important;
 }
 
 .gm-custom-cursor-frame {
@@ -856,6 +851,36 @@ body {
 ::highlight(search-highlight-active) {
   background: rgba(249, 115, 22, 0.55);
 }
+
+::highlight(source-reveal-highlight) {
+  background: rgba(96, 165, 250, 0.42);
+}
+
+::highlight(reading-mark-yellow) { background: rgba(250, 204, 21, 0.35); }
+::highlight(reading-mark-green) { background: rgba(74, 222, 128, 0.30); }
+::highlight(reading-mark-blue) { background: rgba(96, 165, 250, 0.30); }
+::highlight(reading-mark-pink) { background: rgba(244, 114, 182, 0.30); }
+::highlight(reading-mark-focus) { background: rgba(251, 191, 36, 0.60); }
+
+.gm-reading-mark-toolbar { position: fixed; z-index: 40; display: flex; align-items: center; box-sizing: border-box; min-width: 30px; overflow: hidden; font-size: 14px; border: 1px solid var(--gm-border); border-radius: 10px; background: var(--gm-surface); transform: translateX(-50%); }
+.gm-reading-mark-toolbar button { display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; flex: 0 0 30px; padding: 0; border-radius: 7px; color: var(--gm-text-secondary); }
+.gm-reading-mark-toolbar button:hover { background: var(--gm-surface-elevated); }
+.gm-reading-mark-toolbar-view { position: absolute; inset: 0; display: flex; }
+.gm-reading-mark-toolbar-actions { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 3px; opacity: 0; pointer-events: none; }
+.gm-reading-mark-toolbar-actions.is-expanded { opacity: 1; pointer-events: auto; }
+.gm-reading-mark-toolbar-trigger { position: absolute; top: 50%; left: 50%; margin: 0; transform: translate(-50%, -50%); }
+.gm-reading-mark-toolbar.is-expanded .gm-reading-mark-toolbar-trigger { pointer-events: none; visibility: hidden; }
+.gm-reading-mark-toolbar-color-buttons { display: flex; align-items: center; justify-content: center; gap: 3px; }
+.gm-reading-mark-toolbar.is-text { align-items: stretch; }
+.gm-reading-mark-toolbar.is-text .gm-reading-mark-text-view { position: relative; inset: auto; box-sizing: border-box; flex-direction: column; align-items: stretch; width: 100%; height: 100%; min-height: 0; padding: 10px 12px 8px; }
+.gm-reading-mark-toolbar.is-text .gm-reading-mark-editor-input { box-sizing: border-box; flex: 1 1 auto; width: 100%; min-height: 0; height: auto; margin: 0 0 6px; padding: 6px 0; resize: none; overflow-y: auto; border: 0; border-radius: 0; color: var(--gm-text); background: transparent; font: inherit; line-height: 1.5; box-shadow: none; outline: none; }
+.gm-reading-mark-toolbar.is-text .gm-reading-mark-editor-input:focus { border: 0; box-shadow: none; }
+.gm-reading-mark-text-footer { display: flex; align-items: center; justify-content: flex-end; gap: 4px; height: 30px; flex: 0 0 30px; border-top: 1px solid var(--gm-border-subtle); padding-top: 5px; }
+.gm-reading-mark-text-footer .gm-reading-mark-icon-button { width: 28px; height: 28px; flex-basis: 28px; }
+.gm-reading-mark-dot { width: 15px; height: 15px; border-radius: 999px; display: inline-block; }
+.gm-reading-mark-dot.is-selected { box-shadow: 0 0 0 2px var(--gm-surface), 0 0 0 3px var(--gm-primary); }
+.gm-reading-mark-conflict { display: flex; align-items: center; gap: 6px; color: var(--gm-warning); white-space: nowrap; }
+.gm-reading-mark-conflict button { width: auto; }
 
 /* === Focus Ring === */
 :focus-visible {
@@ -1264,6 +1289,15 @@ body {
 .gm-settings-mask {
   background: var(--gm-settings-mask-bg) !important;
   backdrop-filter: blur(2px);
+}
+
+/* Web 设置只保留轻量遮罩和即时切换，桌面端继续使用原有视觉策略。 */
+html[data-gm-runtime='web'] .gm-settings-mask {
+  backdrop-filter: none;
+}
+
+html[data-gm-runtime='web'] .gm-settings-tabs--web > div:nth-child(2) {
+  animation: none !important;
 }
 
 .gm-ai-shortcut-dialog-mask {

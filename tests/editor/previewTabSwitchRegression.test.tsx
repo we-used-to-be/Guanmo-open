@@ -1,4 +1,4 @@
-import { act, fireEvent, render } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { EditorView } from '@codemirror/view'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -40,7 +40,7 @@ const scheduledCallbacks = vi.hoisted(() => ({
 }))
 
 vi.mock('@/hooks/useActiveHeading', () => ({ useActiveHeading: () => null }))
-vi.mock('@/hooks/useTauri', () => ({ isTauri: false, openFileDialog: vi.fn(), openUrl: vi.fn() }))
+vi.mock('@/hooks/useTauri', () => ({ isTauri: () => false, openFileDialog: vi.fn(), openUrl: vi.fn() }))
 vi.mock('@/services/fileSystem', () => ({ saveFile: vi.fn(), saveFileAs: vi.fn() }))
 vi.mock('@/services/rag/indexer', () => ({ scheduleMarkdownDocumentIndex: vi.fn() }))
 vi.mock('@/services/toast', () => ({
@@ -52,7 +52,11 @@ vi.mock('@/services/eventMarker', () => ({
     mark: vi.fn(),
   },
 }))
-vi.mock('@/services/aiContext', () => ({ addSelectionContextTag: vi.fn(), setAiShortcutPrompt: vi.fn() }))
+const aiContextMocks = vi.hoisted(() => ({
+  addSelectionContextTag: vi.fn(),
+  setAiShortcutPrompt: vi.fn(),
+}))
+vi.mock('@/services/aiContext', () => aiContextMocks)
 vi.mock('@/services/editorViewRef', () => ({
   setActiveEditorView: vi.fn(),
   getActiveEditorView: vi.fn(() => null),
@@ -218,6 +222,142 @@ describe('preview horizontal overflow boundary', () => {
       expect(pane).not.toHaveClass('overflow-auto')
     })
     expect(container.querySelectorAll('pre.overflow-x-auto, div.overflow-x-auto').length).toBeGreaterThanOrEqual(4)
+  })
+})
+
+describe('preview source reveal', () => {
+  it('首次从编辑模式切到预览时在阅读位置恢复后消费来源定位', async () => {
+    const content = Array.from({ length: 260 }, (_, index) => `第 ${index + 1} 段独立内容`).join('\n\n')
+    setupEditor([anonymousTab('tab-a', content)], 'tab-a', 'edit', { modePerformancePolicy: 'memory' })
+    useEditorStore.setState({ readingPositions: { 'tab-a': { previewScrollTop: 480 } } })
+    const { container } = render(<EditorArea />)
+    await settleLazyEditorModules()
+
+    act(() => {
+      useEditorStore.getState().setViewMode('preview')
+      useEditorStore.getState().requestReveal('tab-a', 499, 499, 'preview')
+    })
+    await settleLazyEditorModules()
+    const preview = getLeftPreviewContainer(container)!
+    expect(preview.scrollTop).toBe(480)
+    let currentScrollTop = preview.scrollTop
+    Object.defineProperty(preview, 'scrollTop', {
+      configurable: true,
+      get: () => currentScrollTop,
+      set: (value: number) => { currentScrollTop = value },
+    })
+    const scrollTo = vi.fn()
+    Object.defineProperty(preview, 'scrollTo', {
+      configurable: true,
+      value: scrollTo,
+    })
+    act(() => {
+      vi.advanceTimersByTime(0)
+      vi.advanceTimersByTime(100)
+    })
+    expect(preview.style.opacity).toBe('0')
+    act(() => {
+      vi.advanceTimersByTime(0)
+      vi.advanceTimersByTime(0)
+      vi.advanceTimersByTime(0)
+    })
+
+    expect(useEditorStore.getState().pendingReveal).not.toBeNull()
+    act(() => fireEvent.scroll(preview))
+    expect(scrollTo).not.toHaveBeenCalled()
+    expect(preview.scrollTop).not.toBe(480)
+    act(() => {
+      vi.runOnlyPendingTimers()
+    })
+    expect(useEditorStore.getState().pendingReveal).toBeNull()
+  })
+
+  it('不消费非活动标签的预览定位请求', async () => {
+    const content = Array.from({ length: 40 }, (_, index) => `第 ${index + 1} 行`).join('\n')
+    setupEditor([anonymousTab('tab-a', content), anonymousTab('tab-b', content)], 'tab-a', 'preview')
+    render(<EditorArea />)
+    await settleLazyEditorModules()
+
+    act(() => {
+      useEditorStore.getState().requestReveal('tab-b', 30, 31, 'preview')
+      vi.advanceTimersByTime(0)
+    })
+
+    expect(useEditorStore.getState().pendingReveal?.tabId).toBe('tab-b')
+  })
+
+  it('切换到新标签页后不会由旧预览实例消费来源定位', async () => {
+    const shortContent = Array.from({ length: 8 }, (_, index) => `旧文档第 ${index + 1} 段`).join('\n\n')
+    const longContent = Array.from({ length: 260 }, (_, index) => `新文档第 ${index + 1} 段`).join('\n\n')
+    setupEditor([anonymousTab('tab-a', shortContent), anonymousTab('tab-b', longContent)], 'tab-a', 'preview')
+    const { container } = render(<EditorArea />)
+    await settleLazyEditorModules()
+
+    act(() => {
+      useEditorStore.getState().setActiveTab('tab-b')
+      useEditorStore.getState().requestReveal('tab-b', 499, 499, 'preview')
+    })
+    await settleLazyEditorModules()
+    const preview = getLeftPreviewContainer(container)!
+    let currentScrollTop = preview.scrollTop
+    Object.defineProperty(preview, 'scrollTop', {
+      configurable: true,
+      get: () => currentScrollTop,
+      set: (value: number) => { currentScrollTop = value },
+    })
+    const scrollTo = vi.fn()
+    Object.defineProperty(preview, 'scrollTo', { configurable: true, value: scrollTo })
+
+    act(() => {
+      vi.advanceTimersByTime(0)
+      vi.advanceTimersByTime(100)
+      vi.advanceTimersByTime(0)
+      vi.advanceTimersByTime(0)
+    })
+    act(() => fireEvent.scroll(preview))
+    act(() => {
+      vi.runOnlyPendingTimers()
+    })
+
+    expect(container.textContent).toContain('新文档第 249 段')
+    expect(scrollTo).not.toHaveBeenCalled()
+    expect(preview.scrollTop).toBeGreaterThan(0)
+    expect(useEditorStore.getState().pendingReveal).toBeNull()
+  })
+})
+
+describe('preview selection bridge', () => {
+  it('routes a native preview selection through the production context-menu path', async () => {
+    setupEditor([anonymousTab('tab-a', '# 选区桥接\n\n选择内容')], 'tab-a', 'preview')
+    const { container } = render(<EditorArea />)
+    await settleLazyEditorModules()
+
+    const preview = getLeftPreviewContainer(container)!
+    const walker = document.createTreeWalker(preview, NodeFilter.SHOW_TEXT)
+    let textNode: Text | null = null
+    while (walker.nextNode()) {
+      const current = walker.currentNode
+      if (current.textContent?.includes('选择内容')) {
+        textNode = current as Text
+        break
+      }
+    }
+    expect(textNode).toBeTruthy()
+
+    const selection = window.getSelection()!
+    const range = document.createRange()
+    range.setStart(textNode!, 0)
+    range.setEnd(textNode!, textNode!.textContent!.length)
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    fireEvent.contextMenu(preview, { clientX: 20, clientY: 20 })
+    fireEvent.click(screen.getByRole('button', { name: '添加到 AI 上下文' }))
+
+    expect(aiContextMocks.addSelectionContextTag).toHaveBeenCalledWith(expect.objectContaining({
+      title: '匿名文档-tab-a.md',
+      text: expect.stringContaining('选择内容'),
+    }))
   })
 })
 
@@ -417,6 +557,34 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
     })
   })
 
+  describe('scheduled preview content boundary', () => {
+    it('document switch cancels a pending update from the previous document', async () => {
+      const tabA = anonymousTab('tab-a', '# 文档 A\n\n旧内容')
+      const tabB = anonymousTab('tab-b', '# 文档 B\n\n文档 B 内容')
+      setupEditor([tabA, tabB], 'tab-a', 'preview')
+      const { container } = render(<EditorArea />)
+      await settleLazyEditorModules()
+
+      expect(container.textContent).toContain('旧内容')
+
+      act(() => {
+        useEditorStore.getState().updateTabContent('tab-a', '# 文档 A\n\n新内容')
+        vi.advanceTimersByTime(100)
+      })
+      expect(container.textContent).toContain('旧内容')
+
+      act(() => {
+        useEditorStore.getState().setActiveTab('tab-b')
+        vi.advanceTimersByTime(1)
+      })
+      expect(container.textContent).toContain('文档 B 内容')
+
+      act(() => vi.advanceTimersByTime(400))
+      expect(container.textContent).toContain('文档 B 内容')
+      expect(container.textContent).not.toContain('新内容')
+    })
+  })
+
   describe('virtualized preview scroll synchronization', () => {
     it('keeps advancing the editor after the preview scrolls beyond the initially mounted blocks', async () => {
       const scrollIntoViewSpy = vi.spyOn(EditorView, 'scrollIntoView')
@@ -505,6 +673,26 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
       expect(useEditorStore.getState().readingPositions['tab-a']).toMatchObject({
         editorScrollTop: 1_200,
         previewScrollTop: undefined,
+      })
+    })
+
+    it('flushes the previous document reading position immediately when switching tabs', async () => {
+      setupEditor([
+        anonymousTab('tab-a', '# 文档 A\n\n正文 A'),
+        anonymousTab('tab-b', '# 文档 B\n\n正文 B'),
+      ], 'tab-a', 'edit', { syncScroll: false })
+      const { container } = render(<EditorArea />)
+      await settleLazyEditorModules()
+      act(() => vi.advanceTimersByTime(50))
+
+      const editorScroller = container.querySelector<HTMLElement>('.cm-scroller')!
+      editorScroller.scrollTop = 480
+      fireEvent.scroll(editorScroller)
+
+      act(() => useEditorStore.getState().setActiveTab('tab-b'))
+
+      expect(useEditorStore.getState().readingPositions['tab-a']).toMatchObject({
+        editorScrollTop: 480,
       })
     })
 

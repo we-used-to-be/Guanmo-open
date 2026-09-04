@@ -38,8 +38,8 @@ class TestResizeObserver {
     this.targets.clear()
   }
 
-  trigger() {
-    this.callback([], this as unknown as ResizeObserver)
+  trigger(entries: ResizeObserverEntry[] = []) {
+    this.callback(entries, this as unknown as ResizeObserver)
   }
 }
 
@@ -173,6 +173,158 @@ describe('MarkdownPreview Front Matter 布局', () => {
 
     expect(heading?.style.top).toBe('96px')
     expect(host.scrollTop).toBe(104)
+  })
+
+  it('向上滚动挂载新块并完成实测后保持当前视口锚点', async () => {
+    const content = Array.from({ length: 140 }, (_, index) => `第 ${index} 段内容`).join('\n\n')
+    const hostTop = 100
+    const actualBlockHeight = 100
+    const host = createPreviewHost(() => 600)
+
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this === host) return rect(600, 800, hostTop)
+      const blockIndex = this.dataset.mdBlockIndex
+      if (blockIndex !== undefined) {
+        const top = hostTop + Number.parseFloat(this.style.top || '0') - host.scrollTop
+        return rect(600, actualBlockHeight, top)
+      }
+      return rect(600, 0, hostTop)
+    })
+
+    render(<MarkdownPreview content={content} />, { container: host })
+
+    await act(async () => {
+      host.scrollTop = 4200
+      host.dispatchEvent(new Event('scroll'))
+    })
+
+    await act(async () => {
+      host.dispatchEvent(new WheelEvent('wheel', { deltaY: -40, bubbles: true }))
+      host.scrollTop = 3000
+      host.dispatchEvent(new Event('scroll'))
+    })
+
+    // 新挂载块的实测高度大于估算值时，锚点补偿应把 scrollTop 向后校正，
+    // 而不是停在用户刚设置的目标位置并让视口内容额外跳动。
+    expect(host.scrollTop).toBeGreaterThan(3000)
+  })
+
+  it('向上滚动时布局测量与 ResizeObserver 不重复校正同一高度', async () => {
+    const content = Array.from({ length: 140 }, (_, index) => `第 ${index} 段内容`).join('\n\n')
+    const hostTop = 100
+    const host = createPreviewHost(() => 600)
+
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this === host) return rect(600, 800, hostTop)
+      const blockIndex = this.dataset.mdBlockIndex
+      if (blockIndex !== undefined) {
+        const top = hostTop + Number.parseFloat(this.style.top || '0') - host.scrollTop
+        return rect(600, 100, top)
+      }
+      return rect(600, 0, hostTop)
+    })
+
+    render(<MarkdownPreview content={content} />, { container: host })
+    await act(async () => {
+      host.scrollTop = 4200
+      host.dispatchEvent(new Event('scroll'))
+    })
+    await act(async () => {
+      host.dispatchEvent(new WheelEvent('wheel', { deltaY: -80, bubbles: true }))
+      host.scrollTop = 3000
+      host.dispatchEvent(new Event('scroll'))
+    })
+
+    const correctedTop = host.scrollTop
+    const blockObserver = TestResizeObserver.instances.find((observer) => (
+      Array.from(observer.targets).some((target) => target instanceof HTMLElement && target.dataset.mdBlockIndex !== undefined)
+    ))
+    const target = Array.from(blockObserver?.targets ?? [])
+      .filter((element): element is HTMLElement => element instanceof HTMLElement && element.dataset.mdBlockIndex !== undefined)
+      .sort((left, right) => Number(left.dataset.mdBlockIndex) - Number(right.dataset.mdBlockIndex))[0]
+    expect(blockObserver).toBeDefined()
+    expect(target).toBeDefined()
+    if (!target) throw new Error('未找到已挂载的虚拟块')
+
+    await act(async () => {
+      blockObserver?.trigger([{
+        target,
+        borderBoxSize: [{ blockSize: 100.2 }],
+      } as unknown as ResizeObserverEntry])
+      await Promise.resolve()
+    })
+
+    expect(host.scrollTop).toBe(correctedTop)
+  })
+
+  it('向下滚动时不让高度校正抵消用户滚动', async () => {
+    const content = Array.from({ length: 80 }, (_, index) => `第 ${index} 段内容`).join('\n\n')
+    const actualHeights = new Map<number, number>()
+    const host = createPreviewHost(() => 600)
+
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this === host) return rect(600, 800, 100)
+      const blockIndex = this.dataset.mdBlockIndex
+      if (blockIndex !== undefined) {
+        const index = Number(blockIndex)
+        const top = 100 + Number.parseFloat(this.style.top || '0') - host.scrollTop
+        return rect(600, actualHeights.get(index) ?? 100, top)
+      }
+      return rect(600, 0, 100)
+    })
+
+    render(<MarkdownPreview content={content} />, { container: host })
+    actualHeights.set(0, 120)
+
+    await act(async () => {
+      host.dispatchEvent(new WheelEvent('wheel', { deltaY: 40, bubbles: true }))
+      host.scrollTop = 150
+      host.dispatchEvent(new Event('scroll'))
+    })
+
+    // 用户向下滚动期间，高度实测仍更新缓存，但不能把本次滚动抵消回原位置。
+    expect(host.scrollTop).toBe(150)
+  })
+
+  it('向下滚动时 ResizeObserver 高度变化不回写滚动位置', async () => {
+    const content = Array.from({ length: 80 }, (_, index) => `第 ${index} 段内容`).join('\n\n')
+    const actualHeights = new Map<number, number>()
+    const host = createPreviewHost(() => 600)
+
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this === host) return rect(600, 800, 100)
+      const blockIndex = this.dataset.mdBlockIndex
+      if (blockIndex !== undefined) {
+        const index = Number(blockIndex)
+        const top = 100 + Number.parseFloat(this.style.top || '0') - host.scrollTop
+        return rect(600, actualHeights.get(index) ?? 100, top)
+      }
+      return rect(600, 0, 100)
+    })
+
+    render(<MarkdownPreview content={content} />, { container: host })
+    const blockObserver = TestResizeObserver.instances.find((observer) => (
+      Array.from(observer.targets).some((target) => target instanceof HTMLElement && target.dataset.mdBlockIndex !== undefined)
+    ))
+    const target = host.querySelector<HTMLElement>('[data-md-block-index="0"]')
+    expect(blockObserver).toBeDefined()
+    expect(target).not.toBeNull()
+
+    await act(async () => {
+      host.dispatchEvent(new WheelEvent('wheel', { deltaY: 40, bubbles: true }))
+      host.scrollTop = 150
+      host.dispatchEvent(new Event('scroll'))
+    })
+
+    actualHeights.set(0, 120)
+    await act(async () => {
+      blockObserver?.trigger([{
+        target: target as HTMLElement,
+        borderBoxSize: [{ blockSize: 120 }],
+      } as unknown as ResizeObserverEntry])
+    })
+
+    expect(host.scrollTop).toBe(150)
   })
 
   it('搜索跳转到未挂载块后按真实关键词 Range 单次校正', async () => {

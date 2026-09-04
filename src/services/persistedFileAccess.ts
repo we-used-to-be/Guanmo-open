@@ -1,8 +1,10 @@
 import {
   migrateLegacyFileAccessPaths,
   readFile,
+  type ReadFileOptions,
   requestSelectedPathAccess,
   requestWorkspacePathAccess,
+  waitForFileAccessRestore,
 } from '@/hooks/useTauri'
 import { normalizeFilePath } from '@/services/pathIdentity'
 
@@ -42,8 +44,17 @@ export function collectLegacyFileAccessPaths(sources: LegacyFileAccessSources): 
 
 const LEGACY_MIGRATION_DONE_KEY = 'guanmo-legacy-file-access-done'
 
+// 仅兼容旧版本；迁移是否需要执行由 Rust 授权状态决定。
+export function markLegacyFileAccessMigrationDone(): void {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(LEGACY_MIGRATION_DONE_KEY, '1')
+  }
+}
+
 export async function migrateLegacyFileAccess(): Promise<void> {
-  if (typeof localStorage !== 'undefined' && localStorage.getItem(LEGACY_MIGRATION_DONE_KEY) === '1') {
+  const restoreStatus = await waitForFileAccessRestore()
+  if (restoreStatus.restoreSucceeded && restoreStatus.legacyMigrationCompleted) {
+    markLegacyFileAccessMigrationDone()
     return
   }
 
@@ -68,9 +79,7 @@ export async function migrateLegacyFileAccess(): Promise<void> {
   })
   await migrateLegacyFileAccessPaths(paths.workspacePaths, paths.filePaths)
 
-  if (typeof localStorage !== 'undefined') {
-    localStorage.setItem(LEGACY_MIGRATION_DONE_KEY, '1')
-  }
+  markLegacyFileAccessMigrationDone()
 }
 
 export function isFileAccessAuthorizationError(err: unknown): boolean {
@@ -97,13 +106,17 @@ export async function recoverRememberedAccess<T>(
   }
 }
 
-export function readRememberedFile(path: string): Promise<string> {
-  return recoverRememberedAccess(path, () => readFile(path), requestSelectedPathAccess)
+export function readRememberedFile(path: string, options: ReadFileOptions = {}): Promise<string> {
+  return waitForFileAccessRestore().then(() =>
+    recoverRememberedAccess(path, () => readFile(path, options), requestSelectedPathAccess)
+  )
 }
 
 export function recoverRememberedWorkspace<T>(
   path: string,
   operation: () => Promise<T>
 ): Promise<T> {
-  return recoverRememberedAccess(path, operation, requestWorkspacePathAccess)
+  return waitForFileAccessRestore().then(() =>
+    recoverRememberedAccess(path, operation, requestWorkspacePathAccess)
+  )
 }

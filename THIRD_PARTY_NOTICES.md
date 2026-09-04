@@ -18,3 +18,14 @@ upstream repository before commercial distribution.
 
 GuanMo is not an official Nintendo product and has no association,
 authorization, or cooperation with Nintendo Co., Ltd.
+
+## Apache ECharts
+
+- Source: https://github.com/apache/echarts
+- Package: `echarts`
+- License: Apache License 2.0
+- Copyright: Apache Software Foundation and ECharts contributors
+
+Apache ECharts is used as an optional, dynamically loaded Markdown preview
+renderer. Its upstream `LICENSE` and `NOTICE` files are distributed in the
+installed npm package.

@@ -1,4 +1,9 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('@/hooks/useTauri', () => ({
+  isTauri: () => true,
+}))
+
 import {
   BOOT_SNAPSHOT_CONTENT_LIMIT,
   BOOT_SNAPSHOT_STORAGE_KEY,

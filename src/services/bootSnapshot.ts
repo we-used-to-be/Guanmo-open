@@ -1,5 +1,6 @@
 import type { ReadingPosition } from '@/services/editorSession'
 import type { Tab, ViewMode } from '@/stores/editorStore'
+import { isWebRuntime } from '@/services/runtimeCapabilities'
 
 export const BOOT_SNAPSHOT_STORAGE_KEY = 'guanmo-boot-snapshot'
 export const BOOT_SNAPSHOT_VERSION = 1
@@ -104,6 +105,7 @@ export function applyBootSnapshot(tabs: Tab[], activeTabId: string | null, snaps
 }
 
 export function readBootSnapshot(): BootSnapshot | null {
+  if (isWebRuntime()) return null
   if (cachedSnapshot !== undefined) return cachedSnapshot
   if (typeof localStorage === 'undefined') return null
   const raw = localStorage.getItem(BOOT_SNAPSHOT_STORAGE_KEY)
@@ -123,6 +125,10 @@ export function hasBootSnapshotContent(tab: Tab): boolean {
 }
 
 export function flushBootSnapshotWrite(): void {
+  if (isWebRuntime()) {
+    pendingSnapshot = null
+    return
+  }
   if (writeTimer !== null) {
     clearTimeout(writeTimer)
     writeTimer = null
@@ -134,6 +140,7 @@ export function flushBootSnapshotWrite(): void {
 }
 
 export function scheduleBootSnapshotWrite(snapshot: BootSnapshot): void {
+  if (isWebRuntime()) return
   pendingSnapshot = snapshot
   if (writeTimer !== null) clearTimeout(writeTimer)
   writeTimer = setTimeout(flushBootSnapshotWrite, 250)

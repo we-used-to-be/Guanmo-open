@@ -12,11 +12,20 @@ const startupThemeScript = indexHtml.match(
 function resolveStartupTheme(
   settings: unknown,
   webTheme?: 'dark' | 'light',
-): { themeId: string; theme: string; colorScheme: string } {
+): { themeId: string; theme: string; colorScheme: string; startupCanvas: string } {
   const values = new Map<string, string>()
   if (settings !== undefined) values.set('guanmo-settings', JSON.stringify(settings))
   if (webTheme) values.set('guanmo-web-theme', webTheme)
-  const root = { dataset: {} as Record<string, string>, style: {} as Record<string, string> }
+  const style = {
+    colorScheme: '',
+    startupCanvas: '',
+    values: {} as Record<string, string>,
+    setProperty(name: string, value: string) {
+      this.values[name] = value
+      if (name === '--gmss-canvas') this.startupCanvas = value
+    },
+  }
+  const root = { dataset: {} as Record<string, string>, style }
 
   runInNewContext(startupThemeScript!, {
     performance: { mark: () => undefined },
@@ -28,6 +37,7 @@ function resolveStartupTheme(
     themeId: root.dataset.themeId,
     theme: root.dataset.theme,
     colorScheme: root.style.colorScheme,
+    startupCanvas: root.style.startupCanvas,
   }
 }
 
@@ -48,10 +58,11 @@ describe('冷启动主题', () => {
     ['github-light', '#f5f7f9', 'light'],
   ])('在首个模块执行前恢复 %s 主题', (themeId, canvas, colorScheme) => {
     expect(startupThemeScript).toBeTruthy()
-    expect(resolveStartupTheme({ state: { appearance: { themeId } } })).toEqual({
+    expect(resolveStartupTheme({ state: { appearance: { themeId } } })).toMatchObject({
       themeId,
       theme: colorScheme,
       colorScheme,
+      startupCanvas: canvas,
     })
     expect(startupCanvas(themeId)).toBe(canvas)
   })
@@ -61,4 +72,5 @@ describe('冷启动主题', () => {
     expect(resolveStartupTheme({ state: { appearance: { theme: 'light', lightPalette: 'plain' } } }).themeId).toBe('light')
     expect(resolveStartupTheme(undefined, 'dark').themeId).toBe('dark')
   })
+
 })

@@ -80,6 +80,24 @@ async function run() {
   assert.equal(unavailable.content, 'cached', '文件不可读时必须保留当前内容')
   assert.deepEqual(unavailableIssues, ['unavailable'], '文件不可读时必须返回明确状态')
 
+  const tooLargeIssues: Array<{ kind: string; preservedDraft?: boolean }> = []
+  const [skippedTooLarge] = await restorePersistedTabs([tab('too-large')], {
+    readFile: async () => { throw new Error('FILE_TOO_LARGE|1048577|1048576') },
+    onTabRestoreIssue: (issue) => tooLargeIssues.push({ kind: issue.kind }),
+  })
+  assert.equal(skippedTooLarge, undefined, '未修改的超限标签不得恢复')
+  assert.deepEqual(tooLargeIssues, [{ kind: 'too-large' }], '超限恢复应返回明确状态')
+
+  const oversizedDraft = tab('too-large-draft', 'unsaved oversized draft')
+  oversizedDraft.modified = true
+  const draftTooLargeIssues: Array<{ kind: string; preservedDraft?: boolean }> = []
+  const [preservedOversizedDraft] = await restorePersistedTabs([oversizedDraft], {
+    readFile: async () => { throw new Error('FILE_TOO_LARGE|1048577|1048576') },
+    onTabRestoreIssue: (issue) => draftTooLargeIssues.push({ kind: issue.kind, preservedDraft: issue.preservedDraft }),
+  })
+  assert.equal(preservedOversizedDraft.content, 'unsaved oversized draft', '超限草稿必须保留')
+  assert.deepEqual(draftTooLargeIssues, [{ kind: 'too-large', preservedDraft: true }], '超限草稿应标记保留')
+
   const legacy = { ...tab('legacy'), originalContent: undefined } as unknown as Tab
   const [restoredLegacy] = await restorePersistedTabs([legacy], {
     readFile: async () => 'legacy disk',

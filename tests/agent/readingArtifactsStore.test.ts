@@ -74,6 +74,9 @@ describe('readingArtifactsStore 保存消息来源', () => {
     mocks.deleteReadingArtifact.mockReset().mockResolvedValue(undefined)
     useReadingArtifactsStore.setState({
       artifacts: [],
+      allArtifacts: [],
+      allLoaded: false,
+      allLoading: false,
       filter: 'all',
       query: '',
       page: 1,
@@ -237,5 +240,20 @@ describe('readingArtifactsStore 保存消息来源', () => {
     expect(mocks.loadReadingArtifactsPage.mock.calls.map(([options]) => options.offset)).toEqual([20, 20, 0])
     expect(useReadingArtifactsStore.getState()).toMatchObject({ page: 1, total: 20 })
     expect(useReadingArtifactsStore.getState().artifacts).toHaveLength(20)
+  })
+
+  it('分批加载全部 active AI 成果且不设置静默总数上限', async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => createArtifact(`artifact-${index}`))
+    const secondPage = [createArtifact('artifact-100')]
+    mocks.loadReadingArtifactsPage
+      .mockResolvedValueOnce({ artifacts: firstPage, total: 101 })
+      .mockResolvedValueOnce({ artifacts: secondPage, total: 101 })
+
+    await useReadingArtifactsStore.getState().loadAllArtifacts()
+
+    expect(mocks.loadReadingArtifactsPage).toHaveBeenNthCalledWith(1, { status: 'active', limit: 100, offset: 0 })
+    expect(mocks.loadReadingArtifactsPage).toHaveBeenNthCalledWith(2, { status: 'active', limit: 100, offset: 100 })
+    expect(useReadingArtifactsStore.getState()).toMatchObject({ allLoaded: true, allLoading: false })
+    expect(useReadingArtifactsStore.getState().allArtifacts).toHaveLength(101)
   })
 })

@@ -1,6 +1,6 @@
 import type { Tab } from '@/stores/editorStore'
-import { readRememberedFile } from '@/services/persistedFileAccess'
 import { isWorkspaceDisplayFile } from '@/services/fileTree'
+import { parseFileTooLargeError, readRememberedMarkdownFileForOpen } from '@/services/markdownFileOpenPolicy'
 export { mergeBackgroundRestoredTab } from '@/services/sessionRestorePolicy'
 
 interface RestorePersistedTabsOptions {
@@ -13,9 +13,12 @@ interface RestorePersistedTabsOptions {
 }
 
 export interface PersistedTabRestoreIssue {
-  kind: 'external-change' | 'unavailable'
+  kind: 'external-change' | 'unavailable' | 'too-large'
   tabId: string
   title: string
+  actualBytes?: number
+  limitBytes?: number
+  preservedDraft?: boolean
 }
 
 export function getRestorablePersistedTabs(tabs: Tab[]): Tab[] {
@@ -26,7 +29,7 @@ async function restorePersistedTab(
   tab: Tab,
   readFile: (path: string) => Promise<string>,
   detectExternalChanges: boolean,
-): Promise<{ tab: Tab; issue?: PersistedTabRestoreIssue }> {
+): Promise<{ tab: Tab | null; issue?: PersistedTabRestoreIssue }> {
   if (!tab.filePath) {
     return {
       tab: {
@@ -66,6 +69,19 @@ async function restorePersistedTab(
       issue,
     }
   } catch (error) {
+    const tooLarge = parseFileTooLargeError(error)
+    if (tooLarge && !tab.modified) {
+      return {
+        tab: null,
+        issue: {
+          kind: 'too-large',
+          tabId: tab.id,
+          title: tab.title,
+          actualBytes: tooLarge.actualBytes,
+          limitBytes: tooLarge.limitBytes,
+        },
+      }
+    }
     console.warn('[SessionRestore] Failed to read persisted tab', {
       errorType: error instanceof Error ? error.name : typeof error,
     })
@@ -74,7 +90,16 @@ async function restorePersistedTab(
         ...tab,
         originalContent: tab.originalContent ?? tab.savedContent ?? tab.content,
       },
-      issue: { kind: 'unavailable', tabId: tab.id, title: tab.title },
+      issue: tooLarge
+        ? {
+            kind: 'too-large',
+            tabId: tab.id,
+            title: tab.title,
+            actualBytes: tooLarge.actualBytes,
+            limitBytes: tooLarge.limitBytes,
+            preservedDraft: true,
+          }
+        : { kind: 'unavailable', tabId: tab.id, title: tab.title },
     }
   }
 }
@@ -88,8 +113,8 @@ export async function restorePersistedTabs(
   options: RestorePersistedTabsOptions = {}
 ): Promise<Tab[]> {
   const restorableTabs = getRestorablePersistedTabs(tabs)
-  const restored = [...restorableTabs]
-  const readFile = options.readFile ?? readRememberedFile
+  const restored: Array<Tab | undefined> = [...restorableTabs]
+  const readFile = options.readFile ?? readRememberedMarkdownFileForOpen
   const activeIndex = restorableTabs.findIndex((tab) => tab.id === options.activeTabId)
   const pendingIndexes = restorableTabs.map((_, index) => index)
   if (activeIndex > 0) {
@@ -108,11 +133,15 @@ export async function restorePersistedTabs(
         options.detectExternalChanges ?? false,
       )
       const tab = result.tab
-      restored[index] = tab
-      options.onTabRestored?.(tab, index)
+      if (tab) {
+        restored[index] = tab
+        options.onTabRestored?.(tab, index)
+      } else {
+        restored[index] = undefined
+      }
       if (result.issue) options.onTabRestoreIssue?.(result.issue, index)
     }
   }))
 
-  return restored
+  return restored.filter((tab): tab is Tab => Boolean(tab))
 }

@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Button, Collapse, Divider, Footer, Icon, Input, Modal, Select, Switch, Table, Tabs } from 'animal-island-ui'
 import appIcon from '@/assets/icon-settings.png'
 
 import { isTauri } from '@/hooks/useTauri'
+import { SegmentedTabs } from '@/components/common/SegmentedTabs'
 import { useSettingsStore } from '@/stores/settingsStore'
 import type { WebSearchConfig } from '@/services/webSearch'
 import {
@@ -30,17 +31,18 @@ import {
 } from '@/services/rag/pipeline'
 import { SHORTCUTS, findShortcutConflicts } from '@/services/shortcuts'
 import {
-  clearAllChatSessions,
-  clearMemoriesByStatus,
-  confirmMemoryCandidate,
-  loadMemoryCount,
-  loadMemoryPage,
-  removeMemory,
-  toggleMemoryLocked,
-  persistMemory,
-  updateMemoryStatus,
+  archiveSettingsMemory,
+  clearCandidateMemories,
+  clearSavedChatSessions,
+  confirmSettingsMemoryCandidate,
+  deleteSettingsMemory,
+  ignoreSettingsMemoryCandidate,
+  loadSettingsMemoryCount,
+  loadSettingsMemoryPage,
+  persistSettingsMemory,
+  toggleSettingsMemoryLocked,
   type Memory,
-} from '@/services/database/persistence'
+} from '@/services/settings/settingsCommands'
 import { toast } from '@/services/toast'
 import { selectPrimaryWorkspacePath, useAppStore } from '@/stores/appStore'
 import { cleanupMissingWorkspaceDocuments, rebuildWorkspaceDocuments } from '@/services/workspaceIndex'
@@ -65,8 +67,18 @@ import { DEFAULT_REQUEST_TIMEOUT_MS } from '@/services/requestTimeout'
 import { AdvancedTimeoutSettings } from '@/features/settings/AdvancedTimeoutSettings'
 import { ThemePicker } from '@/features/settings/ThemePicker'
 import { requestProductTour } from '@/features/productTour/productTourEvents'
-import { AiSprite } from '@/components/ai/AiSprite'
+import { AssistantVisual } from '@/components/ai/AssistantVisual'
 import type { AssistantState } from '@/services/assistantState'
+import { getRuntimeCapabilities } from '@/services/runtimeCapabilities'
+import {
+  clearWebApiKeys,
+  getWebSecretRuntimeState,
+  persistWebApiKeys,
+  setWebSessionApiKeys,
+  subscribeWebSecretRuntime,
+  unlockWebApiKeys,
+} from '@/web/webSecretRuntime'
+import type { WebApiSecrets } from '@/web/webSecretStorage'
 
 const AI_ROUTING_GUIDE_URL = 'https://github.com/we-used-to-be/Guanmo-open/blob/main/docs/AI_ROUTING_GUIDE.md'
 
@@ -156,11 +168,12 @@ function Sep() {
   return <Divider type="line-brown" className="gm-settings-sep my-3 opacity-45" />
 }
 
-function ApiKeyInput({ value, onChange, placeholder, disabled }: {
+function ApiKeyInput({ value, onChange, placeholder, disabled, ariaLabel }: {
   value: string
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void
   placeholder: string
   disabled?: boolean
+  ariaLabel?: string
 }) {
   const [show, setShow] = useState(false)
   return (
@@ -170,6 +183,7 @@ function ApiKeyInput({ value, onChange, placeholder, disabled }: {
       onChange={onChange}
       placeholder={placeholder}
       disabled={disabled}
+      aria-label={ariaLabel}
       suffix={
         <span
           onClick={() => setShow(!show)}
@@ -221,7 +235,110 @@ function SettingField({
   )
 }
 
-function AiSpritePreviewModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+function WebApiKeySettings() {
+  const runtime = useSyncExternalStore(subscribeWebSecretRuntime, getWebSecretRuntimeState, getWebSecretRuntimeState)
+  const chatApiKey = useSettingsStore((state) => state.ai.apiKey)
+  const webSearchApiKey = useSettingsStore((state) => state.webSearch.apiKey)
+  const [mode, setMode] = useState<'session' | 'plaintext' | 'encrypted'>(runtime.mode)
+  const [password, setPassword] = useState('')
+  const [message, setMessage] = useState('')
+  const [showPlaintextWarning, setShowPlaintextWarning] = useState(false)
+
+  useEffect(() => {
+    if (runtime.unlocked) {
+      useSettingsStore.getState().applyWebRuntimeApiKeys({ chatApiKey: runtime.chatApiKey, webSearchApiKey: runtime.webSearchApiKey })
+    }
+    setMode(runtime.mode)
+  }, [runtime.chatApiKey, runtime.webSearchApiKey, runtime.mode, runtime.unlocked])
+
+  const save = async () => {
+    setMessage('')
+    const secrets: WebApiSecrets = { chatApiKey, webSearchApiKey }
+    try {
+      if (mode === 'session') setWebSessionApiKeys(secrets)
+      else if (mode === 'plaintext') {
+        setShowPlaintextWarning(true)
+        return
+      } else {
+        await persistWebApiKeys(secrets, mode, password)
+        setPassword('')
+      }
+      setMessage('已保存')
+    } catch (error) {
+      setMessage((error as Error).message || '保存失败')
+    }
+  }
+
+  const confirmPlaintextSave = async () => {
+    setShowPlaintextWarning(false)
+    try {
+      await persistWebApiKeys({ chatApiKey, webSearchApiKey }, 'plaintext')
+      setMessage('已保存')
+    } catch (error) {
+      setMessage((error as Error).message || '保存失败')
+    }
+  }
+
+  const unlock = async () => {
+    try {
+      await unlockWebApiKeys(password)
+      setPassword('')
+      setMessage('已解锁')
+    } catch (error) {
+      setMessage((error as Error).message || '解锁失败')
+    }
+  }
+
+  return (
+    <div className="mb-4 rounded-xl border border-gm-border bg-gm-surface-elevated p-3">
+      <div className="mb-2 text-body font-semibold text-gm-text">Web API Key</div>
+      <p className="mb-2 text-caption text-gm-text-tertiary">API Key 仍在下方对话 API / 搜索 API 配置中填写；此处只选择保存方式。文档正文默认不会发送。</p>
+      {!runtime.unlocked && (
+        <div className="mb-2 flex gap-2">
+          <Input aria-label="本地密码" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="输入密码解锁已保存的 Key" />
+          <Button type="primary" size="small" onClick={() => void unlock()} disabled={!password}>解锁</Button>
+        </div>
+      )}
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Select
+          options={[{ key: 'session', label: '仅当前页面内存' }, { key: 'plaintext', label: '明文 LocalStorage（低安全性）' }, { key: 'encrypted', label: '密码加密 LocalStorage' }]}
+          value={mode}
+          onChange={(value) => setMode(value as typeof mode)}
+        />
+        {mode === 'encrypted' && <Input aria-label="本地密码" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="保存密码" style={{ width: 160 }} />}
+        <Button type="primary" size="small" onClick={() => void save()} disabled={!runtime.unlocked || (mode === 'encrypted' && !password)}>保存 Key</Button>
+        {runtime.saved && <Button type="text" size="small" onClick={() => {
+          clearWebApiKeys()
+          useSettingsStore.getState().applyWebRuntimeApiKeys({ chatApiKey: '', webSearchApiKey: '' })
+          setMessage('已清除')
+        }}>清除已保存 Key</Button>}
+        {message && <span className="text-caption text-gm-text-secondary">{message}</span>}
+      </div>
+      {showPlaintextWarning && (
+        <div className="gm-settings-mask fixed inset-0 z-[1200] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="web-key-warning-title">
+          <div className="gm-settings-modal w-full max-w-md rounded-xl border border-gm-border bg-gm-surface p-5 shadow-lg">
+            <h3 id="web-key-warning-title" className="text-body font-semibold text-gm-text">低安全性存储</h3>
+            <p className="mt-2 text-caption text-gm-text-secondary">明文 LocalStorage 可能被同源脚本读取，仅建议用于免费且可随时撤销的 API Key。</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button type="text" size="small" onClick={() => setShowPlaintextWarning(false)}>取消</Button>
+              <Button type="primary" size="small" onClick={() => void confirmPlaintextSave()}>仍然保存</Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function AiSpritePreviewModal({
+  open,
+  onClose,
+  visualId,
+}: {
+  open: boolean
+  onClose: () => void
+  visualId?: string | null
+}) {
   if (!open) return null
 
   return (
@@ -255,7 +372,7 @@ function AiSpritePreviewModal({ open, onClose }: { open: boolean; onClose: () =>
               key={item.state}
               className="flex min-h-[112px] flex-col items-center justify-center rounded-xl border border-gm-border-subtle bg-gm-surface-elevated px-2 py-3"
             >
-              <AiSprite state={item.state} size={56} className="mb-2" />
+              <AssistantVisual visualId={visualId} state={item.state} size={56} className="mb-2" />
               <span className="text-caption font-bold text-gm-text">{item.label}</span>
               <span className="mt-0.5 text-micro text-gm-text-tertiary">{item.description}</span>
             </div>
@@ -463,6 +580,7 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
     addCustomChatPreset, removeCustomChatPreset,
     addCustomEmbeddingPreset, removeCustomEmbeddingPreset,
   } = useSettingsStore()
+  const webRuntimeSecrets = useSyncExternalStore(subscribeWebSecretRuntime, getWebSecretRuntimeState, getWebSecretRuntimeState)
 
   // 测试状态
   const [chatTestResult, setChatTestResult] = useState<ValidateResult | null>(null)
@@ -565,7 +683,7 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
     setWebSearchTesting(true)
     setWebSearchTestResult(null)
     try {
-      const result = await testWebSearchConnection(webSearch)
+      const result = await testWebSearchConnection({ ...webSearch, apiKey: webSearch.apiKey })
       setWebSearchTestResult(result)
     } catch (err) {
       setWebSearchTestResult({ ok: false, message: (err as Error).message || String(err) })
@@ -652,10 +770,11 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
       {!isTauri() && (
         <div className="mb-4 rounded-xl border border-gm-border bg-gm-surface-elevated p-3">
           <p className="text-caption text-gm-text-tertiary">
-            浏览器模式下 AI 功能不可用（防止api key泄露），请下载桌面版使用
+            浏览器模式下 AI 仅支持当前会话对话和联网搜索；Embedding、RAG、长期记忆及持久聊天历史保持禁用。
           </p>
         </div>
       )}
+      {!isTauri() && <WebApiKeySettings />}
       <SettingField label="AI 使用指南" description="查看能力路由关键词和提问示例">
         <Button
           type="default"
@@ -704,15 +823,15 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
         />
       </SettingField>
       <SettingField label="API Base URL" description="OpenAI-compatible API 地址">
-        <Input value={ai.baseUrl} onChange={(e) => updateAiConfig({ baseUrl: e.target.value })} placeholder="https://api.openai.com/v1" />
+        <Input aria-label="对话 API 地址" value={ai.baseUrl} onChange={(e) => updateAiConfig({ baseUrl: e.target.value })} placeholder="https://api.openai.com/v1" />
       </SettingField>
       {!isLocalApi(ai.baseUrl) && (
-        <SettingField label="API Key" description="通过系统安全存储保存，不写入普通设置">
-          <ApiKeyInput value={ai.apiKey} onChange={(e) => updateAiConfig({ apiKey: e.target.value })} placeholder="sk-..." disabled={!isTauri()} />
+        <SettingField label="API Key" description={isTauri() ? '通过系统安全存储保存，不写入普通设置' : '填写后在顶部选择保存方式'}>
+          <ApiKeyInput ariaLabel="对话 API Key" value={ai.apiKey} onChange={(e) => updateAiConfig({ apiKey: e.target.value })} placeholder="sk-..." disabled={!isTauri() && !webRuntimeSecrets.unlocked} />
         </SettingField>
       )}
       <SettingField label="对话模型" description="用于日常对话和 Agent 执行的模型">
-        <Input value={ai.chatModel} onChange={(e) => updateAiConfig({ chatModel: e.target.value })} placeholder="gpt-4o-mini" />
+        <Input aria-label="对话模型" value={ai.chatModel} onChange={(e) => updateAiConfig({ chatModel: e.target.value })} placeholder="gpt-4o-mini" />
       </SettingField>
       {/* 测试连接 */}
       <div className="py-1 flex items-center gap-2">
@@ -777,6 +896,7 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
 
       <Sep />
 
+      <div className={!isTauri() ? 'pointer-events-none opacity-55' : undefined}>
       <SectionTitle>Embedding 配置</SectionTitle>
       <SettingField label="协议类型" description="决定 Embedding 请求格式，目前仅支持 OpenAI Embeddings">
         <Select
@@ -815,7 +935,7 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
         />
       </SettingField>
       <SettingField label="API Base URL" description="Embedding 服务地址">
-        <Input value={ai.embedding.baseUrl} onChange={(e) => updateEmbeddingConfig({ baseUrl: e.target.value })} placeholder="https://api.openai.com/v1" />
+        <Input aria-label="Embedding API 地址" value={ai.embedding.baseUrl} onChange={(e) => updateEmbeddingConfig({ baseUrl: e.target.value })} placeholder="https://api.openai.com/v1" />
       </SettingField>
       {!isLocalApi(ai.embedding.baseUrl) && (
         <SettingField label="API Key" description="通过系统安全存储保存">
@@ -823,7 +943,7 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
         </SettingField>
       )}
       <SettingField label="Embedding 模型" description="将文本转为向量，用于知识库语义检索">
-        <Input value={ai.embedding.embeddingModel} onChange={(e) => updateEmbeddingConfig({ embeddingModel: e.target.value })} placeholder="text-embedding-3-small" />
+        <Input aria-label="Embedding 模型" value={ai.embedding.embeddingModel} onChange={(e) => updateEmbeddingConfig({ embeddingModel: e.target.value })} placeholder="text-embedding-3-small" />
       </SettingField>
 
       {/* Embedding 测试连接 */}
@@ -880,6 +1000,8 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
       )}
 
       <AdvancedTimeoutSettings value={ai.embedding.timeout} onChange={(timeout) => updateEmbeddingConfig({ timeout })} />
+      </div>
+      {!isTauri() && <p className="text-caption text-gm-text-tertiary">Embedding 在 Web 端固定禁用。</p>}
 
       <Sep />
 
@@ -927,12 +1049,13 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
         </SettingField>
       )}
       {webSearch.provider !== 'duckduckgo' && (
-        <SettingField label="搜索 API Key" description="同样通过系统安全存储保存">
+        <SettingField label="搜索 API Key" description={isTauri() ? '同样通过系统安全存储保存' : '填写后在顶部选择保存方式'}>
           <ApiKeyInput
+            ariaLabel="联网搜索 API Key"
             value={webSearch.apiKey}
             onChange={(e) => updateWebSearchConfig({ apiKey: e.target.value })}
             placeholder={webSearch.provider === 'tavily' ? 'tvly-...' : webSearch.provider === 'custom' ? '可选，用于 Authorization 头' : '...'}
-            disabled={!isTauri()}
+            disabled={!isTauri() && !webRuntimeSecrets.unlocked}
           />
         </SettingField>
       )}
@@ -1040,6 +1163,7 @@ function KnowledgeStats({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: ()
   const { ai } = useSettingsStore()
   const workspaceRoots = useAppStore((state) => state.workspaceRoots)
   const workspacePaths = workspaceRoots.map((root) => root.path)
+  const databaseEnabled = getRuntimeCapabilities().database
   const [stats, setStats] = useState({ documents: 0, totalChunks: 0, embeddedChunks: 0, pendingEmbeddings: 0 })
   const [jobStats, setJobStats] = useState({ pending: 0, running: 0, done: 0, failed: 0 })
   const [stateSummary, setStateSummary] = useState({ PENDING: 0, CHUNKED: 0, EMBEDDING: 0, INDEXED: 0, FAILED: 0 })
@@ -1141,22 +1265,22 @@ function KnowledgeStats({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: ()
         {lastIndexedAt ? ` · 最近重建：${new Date(lastIndexedAt).toLocaleString('zh-CN')}` : ''}
       </div>
       <div className="flex items-center gap-2">
-        <Button type="default" size="small" loading={embedding} disabled={stats.pendingEmbeddings === 0 && jobStats.pending === 0} onClick={() => runEmbedding(false)}>
+        <Button type="default" size="small" loading={embedding} disabled={!databaseEnabled || stats.pendingEmbeddings === 0 && jobStats.pending === 0} onClick={() => runEmbedding(false)}>
           处理嵌入队列
         </Button>
         <Button type="default" size="small" disabled={!isTauri()} onClick={onOpenKnowledgeManager}>
           管理文档
         </Button>
-        <Button type="text" size="small" disabled={jobStats.failed === 0} onClick={() => runEmbedding(true)}>
+        <Button type="text" size="small" disabled={!databaseEnabled || jobStats.failed === 0} onClick={() => runEmbedding(true)}>
           重试失败
         </Button>
-        <Button type="text" size="small" onClick={refreshStats}>
+        <Button type="text" size="small" disabled={!databaseEnabled} onClick={refreshStats}>
           刷新统计
         </Button>
-        <Button type="text" size="small" loading={embedding} onClick={handleCleanupWorkspace}>
+        <Button type="text" size="small" disabled={!databaseEnabled} loading={embedding} onClick={handleCleanupWorkspace}>
           清理失效索引
         </Button>
-        <Button type="text" size="small" loading={embedding} onClick={handleRebuildWorkspace}>
+        <Button type="text" size="small" disabled={!databaseEnabled} loading={embedding} onClick={handleRebuildWorkspace}>
           重建当前工作区
         </Button>
         {message && <span className="text-caption text-gm-text-secondary">{message}</span>}
@@ -1206,24 +1330,16 @@ function EditorSettings() {
       <Sep />
       <SectionTitle>行为</SectionTitle>
       <SettingField label="默认打开模式" description="通过文件关联冷启动打开文件时，默认使用编辑或预览模式；已启动时不改变当前模式">
-        <div className="gm-default-mode-segmented" role="radiogroup" aria-label="默认打开模式">
-          {[
-            { key: 'edit', label: '编辑' },
-            { key: 'preview', label: '预览' },
-          ].map((option) => (
-            <button
-              key={option.key}
-              type="button"
-              className="gm-default-mode-segmented__item"
-              data-active={editor.defaultOpenMode === option.key}
-              role="radio"
-              aria-checked={editor.defaultOpenMode === option.key}
-              onClick={() => updateEditorSettings({ defaultOpenMode: option.key as 'edit' | 'preview' })}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
+        <SegmentedTabs
+          ariaLabel="默认打开模式"
+          className="w-[168px]"
+          items={[
+            { value: 'edit', label: '编辑' },
+            { value: 'preview', label: '预览' },
+          ]}
+          value={editor.defaultOpenMode}
+          onChange={(value) => updateEditorSettings({ defaultOpenMode: value })}
+        />
       </SettingField>
       <SettingField label="自动换行" description="长行自动折行显示">
         <Switch checked={editor.wordWrap} onChange={(v) => updateEditorSettings({ wordWrap: v })} />
@@ -1320,6 +1436,7 @@ function GeneralSettings() {
   const [updateCheckFeedback, setUpdateCheckFeedback] = useState<ManualUpdateCheckFeedback | null>(null)
   const [spritePreviewOpen, setSpritePreviewOpen] = useState(false)
   const mountedRef = useRef(true)
+  const databaseEnabled = getRuntimeCapabilities().database
 
   useEffect(() => {
     mountedRef.current = true
@@ -1453,7 +1570,7 @@ function GeneralSettings() {
     if (!window.confirm('确认清空所有已保存会话吗？此操作不可恢复。')) return
     setBusy(true)
     try {
-      await clearAllChatSessions()
+      await clearSavedChatSessions()
       useChatStore.getState().resetHistoryState()
       toast.success('所有已保存会话已清空')
     } catch (err) {
@@ -1467,7 +1584,7 @@ function GeneralSettings() {
     if (!window.confirm('确认清空所有候选记忆吗？此操作不可恢复。')) return
     setBusy(true)
     try {
-      await clearMemoriesByStatus(['candidate'])
+      await clearCandidateMemories()
       toast.success('候选记忆已清空')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '清空候选记忆失败')
@@ -1531,11 +1648,9 @@ function GeneralSettings() {
           <Button type="default" size="small" onClick={handleStarRepository}>
             点亮stars
           </Button>
-          {isTauri() && (
-            <Button type="default" size="small" onClick={requestProductTour}>
-              产品导览
-            </Button>
-          )}
+          <Button type="default" size="small" onClick={requestProductTour}>
+            产品导览
+          </Button>
           <Button
             type="default"
             size="small"
@@ -1579,13 +1694,15 @@ function GeneralSettings() {
       <SectionTitle>数据管理</SectionTitle>
       <div className="space-y-2 rounded-xl border border-gm-border bg-gm-surface-elevated p-3">
         <p className="text-caption text-gm-text-secondary">
-          普通备份只包含会话、消息和长期记忆，不包含 API Key 等敏感密钥；知识库文档索引可在新设备重新打开工作区后重建。
+          {databaseEnabled
+            ? '普通备份只包含会话、消息和长期记忆，不包含 API Key 等敏感密钥；知识库文档索引可在新设备重新打开工作区后重建。'
+            : '浏览器模式不提供数据库备份、迁移或持久聊天历史；刷新页面会清空本页会话与文件状态。'}
         </p>
         <div className="flex flex-wrap gap-2">
-          <Button type="default" size="small" loading={busy} onClick={handleExportBackup}>导出备份</Button>
-          <Button type="default" size="small" loading={busy} onClick={handleImportBackup}>导入备份</Button>
-          <Button type="text" size="small" loading={busy} onClick={handleClearCandidates}>清空候选记忆</Button>
-          <Button type="text" size="small" loading={busy} onClick={handleClearSessions}>清空已保存会话</Button>
+          <Button type="default" size="small" disabled={!databaseEnabled} loading={busy} onClick={handleExportBackup}>导出备份</Button>
+          <Button type="default" size="small" disabled={!databaseEnabled} loading={busy} onClick={handleImportBackup}>导入备份</Button>
+          <Button type="text" size="small" disabled={!databaseEnabled} loading={busy} onClick={handleClearCandidates}>清空候选记忆</Button>
+          <Button type="text" size="small" disabled={!databaseEnabled} loading={busy} onClick={handleClearSessions}>清空已保存会话</Button>
         </div>
       </div>
       <Sep />
@@ -1606,12 +1723,18 @@ function GeneralSettings() {
         question="隐私说明"
         answer={
           <p className="text-caption text-gm-text-secondary py-1">
-            观墨完全在本地运行。AI API Key 和 Web 搜索 API Key 会通过系统加密能力保存，不写入普通设置；Web 预览环境不会持久化 API Key。
+            {databaseEnabled
+              ? '观墨完全在本地运行。AI API Key 和 Web 搜索 API Key 会通过系统加密能力保存，不写入普通设置。'
+              : '观墨网页版不初始化数据库。API Key 可仅保存在当前页面内存，也可在风险确认后明文保存，或使用同一密码加密保存到 LocalStorage；文件、标签页和聊天消息不会跨刷新保留。'}
           </p>
         }
       />
       <Footer type="tree" className="mt-6 opacity-70" />
-      <AiSpritePreviewModal open={spritePreviewOpen} onClose={() => setSpritePreviewOpen(false)} />
+      <AiSpritePreviewModal
+        open={spritePreviewOpen}
+        onClose={() => setSpritePreviewOpen(false)}
+        visualId={appearance.assistantVisualId}
+      />
     </div>
   )
 }
@@ -1637,6 +1760,7 @@ const CANDIDATE_PAGE_SIZE = 10
 
 export function MemorySettings() {
   const workspacePath = useAppStore(selectPrimaryWorkspacePath)
+  const databaseEnabled = getRuntimeCapabilities().database
   const [memories, setMemories] = useState<Memory[]>([])
   const [candidateMemories, setCandidateMemories] = useState<Memory[]>([])
   const [memoryCounts, setMemoryCounts] = useState({ active: 0, candidate: 0, archived: 0 })
@@ -1672,22 +1796,22 @@ export function MemorySettings() {
       setQueryLoading(true)
       try {
         const [activeResult, candidateResult, activeCount, candidateCount, archivedCount] = await Promise.all([
-          loadMemoryPage({
+          loadSettingsMemoryPage({
             statuses: ['active'],
             category: filter === 'all' ? undefined : filter,
             ...scopeOptions,
             limit: MEMORY_PAGE_SIZE,
             offset: activePage * MEMORY_PAGE_SIZE,
           }),
-          loadMemoryPage({
+          loadSettingsMemoryPage({
             statuses: ['candidate'],
             ...scopeOptions,
             limit: CANDIDATE_PAGE_SIZE,
             offset: candidatePage * CANDIDATE_PAGE_SIZE,
           }),
-          loadMemoryCount({ statuses: ['active'] }),
-          loadMemoryCount({ statuses: ['candidate'] }),
-          loadMemoryCount({ statuses: ['archived', 'superseded'] }),
+          loadSettingsMemoryCount({ statuses: ['active'] }),
+          loadSettingsMemoryCount({ statuses: ['candidate'] }),
+          loadSettingsMemoryCount({ statuses: ['archived', 'superseded'] }),
         ])
         if (cancelled) return
 
@@ -1721,7 +1845,7 @@ export function MemorySettings() {
   const handleDelete = async (id: string) => {
     setLoading(true)
     try {
-      await removeMemory(id)
+      await deleteSettingsMemory(id)
       refresh()
       toast.success('记忆已删除')
     } finally {
@@ -1732,7 +1856,7 @@ export function MemorySettings() {
   const handleToggleLock = async (id: string, locked: boolean) => {
     setLoading(true)
     try {
-      await toggleMemoryLocked(id, !locked)
+      await toggleSettingsMemoryLocked(id, !locked)
       refresh()
     } finally {
       setLoading(false)
@@ -1742,7 +1866,7 @@ export function MemorySettings() {
   const handleArchive = async (id: string) => {
     setLoading(true)
     try {
-      await updateMemoryStatus(id, 'archived')
+      await archiveSettingsMemory(id)
       refresh()
       toast.success('记忆已归档')
     } finally {
@@ -1754,7 +1878,7 @@ export function MemorySettings() {
     setLoading(true)
     try {
       const candidate = candidateMemories.find((memory) => memory.id === id)
-      const confirmed = await confirmMemoryCandidate(id)
+      const confirmed = await confirmSettingsMemoryCandidate(id)
       if (!confirmed) {
         refresh()
         toast.error('候选记忆确认失败：数据库中没有可确认的候选记录')
@@ -1775,7 +1899,7 @@ export function MemorySettings() {
   const handleIgnoreCandidate = async (id: string) => {
     setLoading(true)
     try {
-      await updateMemoryStatus(id, 'ignored')
+      await ignoreSettingsMemoryCandidate(id)
       refresh()
       toast.success('候选记忆已忽略')
     } finally {
@@ -1788,7 +1912,7 @@ export function MemorySettings() {
     if (!content) return
     setLoading(true)
     try {
-      await persistMemory({
+      await persistSettingsMemory({
         id: `mem-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         content,
         category: newCategory,
@@ -1831,8 +1955,8 @@ export function MemorySettings() {
           共 {memoryCounts.active} 条已保存记忆，{memoryCounts.candidate} 条候选记忆，{memoryCounts.archived} 条已归档/替代
         </div>
         <div className="flex items-center gap-2">
-          <Button type="text" size="small" onClick={refresh} disabled={queryLoading}>刷新</Button>
-          <Button type="primary" size="small" onClick={() => setShowForm(!showForm)}>
+          <Button type="text" size="small" onClick={refresh} disabled={!databaseEnabled || queryLoading}>刷新</Button>
+          <Button type="primary" size="small" onClick={() => setShowForm(!showForm)} disabled={!databaseEnabled}>
             {showForm ? '取消' : '添加记忆'}
           </Button>
         </div>
@@ -1858,12 +1982,13 @@ export function MemorySettings() {
               ]}
               value={newCategory}
               onChange={setNewCategory}
+              disabled={!databaseEnabled}
             />
             <Button
               type="primary"
               size="small"
               onClick={handleAdd}
-              disabled={!newContent.trim() || loading}
+              disabled={!databaseEnabled || !newContent.trim() || loading}
             >
               保存
             </Button>
@@ -1909,7 +2034,7 @@ export function MemorySettings() {
                       type="primary"
                       size="small"
                       onClick={() => handleConfirmCandidate(memory.id)}
-                      disabled={loading}
+                       disabled={!databaseEnabled || loading}
                     >
                       确认保存
                     </Button>
@@ -1917,7 +2042,7 @@ export function MemorySettings() {
                       type="text"
                       size="small"
                       onClick={() => handleIgnoreCandidate(memory.id)}
-                      disabled={loading}
+                       disabled={!databaseEnabled || loading}
                       className="text-gm-text-tertiary hover:text-gm-error"
                     >
                       忽略
@@ -1932,7 +2057,7 @@ export function MemorySettings() {
               <Button
                 type="default"
                 size="small"
-                disabled={candidatePage === 0 || queryLoading}
+                disabled={!databaseEnabled || candidatePage === 0 || queryLoading}
                 onClick={() => setCandidatePage((page) => Math.max(0, page - 1))}
               >
                 上一页
@@ -1943,7 +2068,7 @@ export function MemorySettings() {
               <Button
                 type="default"
                 size="small"
-                disabled={(candidatePage + 1) * CANDIDATE_PAGE_SIZE >= candidateTotal || queryLoading}
+                disabled={!databaseEnabled || (candidatePage + 1) * CANDIDATE_PAGE_SIZE >= candidateTotal || queryLoading}
                 onClick={() => setCandidatePage((page) => page + 1)}
               >
                 下一页
@@ -1970,8 +2095,8 @@ export function MemorySettings() {
                   setActivePage(0)
                   setCandidatePage(0)
                 }}
-                disabled={scope === 'project' && !workspacePath}
-                className={`min-h-8 rounded-lg border px-3 py-1.5 text-caption font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                 disabled={!databaseEnabled || (scope === 'project' && !workspacePath)}
+                 className={`min-h-8 rounded-lg border px-3 py-1.5 text-caption font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
                   scopeFilter === scope
                     ? 'border-gm-primary bg-gm-primary/10 text-gm-primary'
                     : 'border-gm-border-subtle bg-gm-surface text-gm-text-secondary hover:border-gm-primary/50 hover:text-gm-text'
@@ -1994,10 +2119,11 @@ export function MemorySettings() {
                 type="button"
                 key={cat}
                 aria-pressed={filter === cat}
-                onClick={() => {
-                  setFilter(cat)
-                  setActivePage(0)
-                }}
+                 onClick={() => {
+                   setFilter(cat)
+                   setActivePage(0)
+                 }}
+                 disabled={!databaseEnabled}
                 className={`min-h-8 rounded-lg border px-3 py-1.5 text-caption font-bold transition-colors ${
                   filter === cat
                     ? 'border-gm-primary bg-gm-primary/10 text-gm-primary'
@@ -2075,7 +2201,7 @@ export function MemorySettings() {
                       type="text"
                       size="small"
                       onClick={() => handleToggleLock(memory.id, memory.locked)}
-                      disabled={loading}
+                       disabled={!databaseEnabled || loading}
                       className={memory.locked ? 'text-gm-warning' : 'text-gm-text-tertiary hover:text-gm-warning'}
                     >
                       {memory.locked ? '解锁' : '锁定'}
@@ -2084,7 +2210,7 @@ export function MemorySettings() {
                       type="text"
                       size="small"
                       onClick={() => handleArchive(memory.id)}
-                      disabled={loading}
+                       disabled={!databaseEnabled || loading}
                       className="text-gm-text-tertiary hover:text-gm-primary"
                     >
                       归档
@@ -2093,7 +2219,7 @@ export function MemorySettings() {
                       type="text"
                       size="small"
                       onClick={() => handleDelete(memory.id)}
-                      disabled={loading}
+                       disabled={!databaseEnabled || loading}
                       className="text-gm-text-tertiary hover:text-gm-error"
                     >
                       删除
@@ -2110,7 +2236,7 @@ export function MemorySettings() {
           <Button
             type="default"
             size="small"
-            disabled={activePage === 0 || queryLoading}
+             disabled={!databaseEnabled || activePage === 0 || queryLoading}
             onClick={() => setActivePage((page) => Math.max(0, page - 1))}
           >
             上一页
@@ -2121,7 +2247,7 @@ export function MemorySettings() {
           <Button
             type="default"
             size="small"
-            disabled={(activePage + 1) * MEMORY_PAGE_SIZE >= activeTotal || queryLoading}
+             disabled={!databaseEnabled || (activePage + 1) * MEMORY_PAGE_SIZE >= activeTotal || queryLoading}
             onClick={() => setActivePage((page) => page + 1)}
           >
             下一页

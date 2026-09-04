@@ -15,7 +15,31 @@
  *    虚拟块卸载时仅移除对应 DOM Range，文档级状态不丢失。
  */
 
-import { findBlockIndexByOffset, type MarkdownPreviewModel } from '@/services/markdownPreviewModel'
+import { buildSourceTextBoundaries, findBlockIndexByOffset, type MarkdownPreviewModel } from '@/services/markdownPreviewModel'
+
+function alignTextOffsetToCodePointStart(text: string, offset: number): number {
+  if (
+    offset > 0
+    && offset < text.length
+    && text.charCodeAt(offset) >= 0xdc00
+    && text.charCodeAt(offset) <= 0xdfff
+    && text.charCodeAt(offset - 1) >= 0xd800
+    && text.charCodeAt(offset - 1) <= 0xdbff
+  ) return offset - 1
+  return offset
+}
+
+function alignTextOffsetToCodePointEnd(text: string, offset: number): number {
+  if (
+    offset > 0
+    && offset < text.length
+    && text.charCodeAt(offset - 1) >= 0xd800
+    && text.charCodeAt(offset - 1) <= 0xdbff
+    && text.charCodeAt(offset) >= 0xdc00
+    && text.charCodeAt(offset) <= 0xdfff
+  ) return offset + 1
+  return offset
+}
 
 /** 统一文档 Range：块 ID + 块内局部源码 offset（相对块 startOffset） */
 export interface DocumentRange {
@@ -84,8 +108,16 @@ export function getTextForSourceRange(model: MarkdownPreviewModel, from: number,
     const blockParts: string[] = []
     for (const segment of block.textSegments) {
       if (segment.to <= from || segment.from >= to) continue
-      const localStart = Math.max(0, from - segment.from)
-      const localEnd = Math.min(segment.text.length, to - segment.from)
+      let localStart = Math.max(0, from - segment.from)
+      let localEnd = Math.min(segment.text.length, to - segment.from)
+      if (segment.sourceBoundaries) {
+        localStart = 0
+        while (localStart < segment.text.length && segment.sourceBoundaries[localStart + 1] <= from) localStart += 1
+        localEnd = localStart
+        while (localEnd < segment.text.length && segment.sourceBoundaries[localEnd] < to) localEnd += 1
+      }
+      localStart = alignTextOffsetToCodePointStart(segment.text, localStart)
+      localEnd = alignTextOffsetToCodePointEnd(segment.text, localEnd)
       if (localEnd > localStart) blockParts.push(segment.text.slice(localStart, localEnd))
     }
     parts.push(blockParts.join(''))
@@ -99,9 +131,19 @@ export function findWordRangeAt(model: MarkdownPreviewModel, offset: number): { 
     if (offset < block.startOffset || offset > block.endOffset) continue
     for (const segment of block.textSegments) {
       if (offset < segment.from || offset > segment.to) continue
-      const local = Math.max(0, Math.min(offset - segment.from, segment.text.length))
+      let local = Math.max(0, Math.min(offset - segment.from, segment.text.length))
+      if (segment.sourceBoundaries) {
+        local = 0
+        while (local < segment.text.length && segment.sourceBoundaries[local + 1] <= offset) local += 1
+      }
       const before = /[\p{L}\p{N}_]*$/u.exec(segment.text.slice(0, local))?.[0].length ?? 0
       const after = /^[\p{L}\p{N}_]*/u.exec(segment.text.slice(local))?.[0].length ?? 0
+      if (segment.sourceBoundaries) {
+        return {
+          from: segment.sourceBoundaries[local - before],
+          to: segment.sourceBoundaries[local + after],
+        }
+      }
       return { from: segment.from + local - before, to: segment.from + local + after }
     }
     return null
@@ -129,7 +171,29 @@ interface AnnotatableHastNode {
  * 重建的无 position 子树不标注（避免错位映射），该区域选区/高亮降级。
  * baseOffset 为该块渲染切片在全文中的起始 offset（整篇渲染传 0）。
  */
-export function createSourceOffsetAnnotator(baseOffset: number) {
+function resolveInlineCodeValueRange(
+  source: string,
+  from: number,
+  to: number,
+  value: string,
+): { from: number; to: number } | null {
+  const raw = source.slice(from, to)
+  const fence = /^`+/.exec(raw)?.[0]
+  if (!fence || !raw.endsWith(fence)) return null
+  const contentStart = fence.length
+  const contentEnd = raw.length - fence.length
+  const content = raw.slice(contentStart, contentEnd)
+  const valueStart = content.indexOf(value)
+  if (valueStart >= 0) {
+    const start = from + contentStart + valueStart
+    return { from: start, to: start + value.length }
+  }
+  const boundaries = buildSourceTextBoundaries(source, from + contentStart, from + contentEnd, value)
+  if (!boundaries) return null
+  return { from: boundaries[0], to: boundaries[boundaries.length - 1] }
+}
+
+export function createSourceOffsetAnnotator(baseOffset: number, source?: string) {
   return function annotator() {
     return function transform(tree: AnnotatableHastNode) {
       const visit = (node: AnnotatableHastNode): void => {
@@ -137,15 +201,27 @@ export function createSourceOffsetAnnotator(baseOffset: number) {
         for (let i = 0; i < node.children.length; i += 1) {
           const child = node.children[i]
           if (child.type === 'text' && typeof child.value === 'string' && child.value) {
-            const from = child.position?.start?.offset
-            const to = child.position?.end?.offset
-            if (typeof from !== 'number' || typeof to !== 'number') continue
+            const positionFrom = child.position?.start?.offset
+            const positionTo = child.position?.end?.offset
+            if (typeof positionFrom !== 'number' || typeof positionTo !== 'number') continue
+            const valueRange = node.tagName === 'code' && source
+              ? resolveInlineCodeValueRange(source, positionFrom, positionTo, child.value)
+              : null
+            const from = valueRange?.from ?? positionFrom
+            const to = valueRange?.to ?? positionTo
+            const sourceBoundaries = source
+              ? buildSourceTextBoundaries(source, from, to, child.value)
+              : null
+            if (source && source.slice(from, to) !== child.value && !sourceBoundaries) continue
             node.children[i] = {
               type: 'element',
               tagName: 'span',
               properties: {
                 dataGmSrcFrom: baseOffset + from,
                 dataGmSrcTo: baseOffset + to,
+                ...(sourceBoundaries
+                  ? { dataGmSrcMap: JSON.stringify(sourceBoundaries.map((offset) => baseOffset + offset)) }
+                  : {}),
               },
               children: [child],
             }
@@ -162,12 +238,144 @@ export function createSourceOffsetAnnotator(baseOffset: number) {
   }
 }
 
+export interface ReadingMarkHitRange {
+  id: string
+  from: number
+  to: number
+}
+
+/**
+ * 在已有源码 offset span 内拆出 ReadingMark 命中片段。
+ * 这只增加交互数据属性，视觉仍由 CSS Highlight Registry 负责。
+ */
+export function createReadingMarkHitRegionAnnotator(ranges: ReadingMarkHitRange[]) {
+  const sorted = ranges
+    .filter((range) => range.to > range.from && range.id)
+    .slice()
+    .sort((left, right) => left.from - right.from || left.to - right.to || left.id.localeCompare(right.id))
+  const maxEndPrefix: number[] = []
+  for (let index = 0; index < sorted.length; index += 1) {
+    maxEndPrefix[index] = Math.max(sorted[index].to, maxEndPrefix[index - 1] ?? Number.NEGATIVE_INFINITY)
+  }
+  return function annotator() {
+    return function transform(tree: AnnotatableHastNode) {
+      const visit = (node: AnnotatableHastNode): void => {
+        if (!node.children || node.children.length === 0) return
+        const nextChildren: AnnotatableHastNode[] = []
+        for (const child of node.children) {
+          const properties = child.properties
+          const childFrom = Number(properties?.dataGmSrcFrom)
+          const childTo = Number(properties?.dataGmSrcTo)
+          const textChild = child.children?.length === 1 && child.children[0].type === 'text' ? child.children[0] : null
+          if (child.type !== 'element' || child.tagName !== 'span' || !properties || !textChild
+            || !Number.isFinite(childFrom) || !Number.isFinite(childTo) || childTo <= childFrom
+            || sorted.length === 0) {
+            visit(child)
+            nextChildren.push(child)
+            continue
+          }
+          const text = textChild.value ?? ''
+          if (!text) {
+            nextChildren.push(child)
+            continue
+          }
+          let low = 0
+          let high = sorted.length
+          while (low < high) {
+            const middle = (low + high) >> 1
+            if (maxEndPrefix[middle] <= childFrom) low = middle + 1
+            else high = middle
+          }
+          const first = low
+          const relevant: ReadingMarkHitRange[] = []
+          for (let index = first; index < sorted.length && sorted[index].from < childTo; index += 1) {
+            const range = sorted[index]
+            if (range.to > childFrom) relevant.push(range)
+          }
+          if (relevant.length === 0) {
+            nextChildren.push(child)
+            continue
+          }
+          let boundaries: number[] | undefined
+          const rawMap = properties.dataGmSrcMap
+          if (typeof rawMap === 'string') {
+            try {
+              const parsed = JSON.parse(rawMap) as unknown
+              if (Array.isArray(parsed) && parsed.length === text.length + 1) {
+                const values = parsed.map((value) => Number(value))
+                if (values.every((value) => Number.isFinite(value))) boundaries = values
+              }
+            } catch {
+              boundaries = undefined
+            }
+          }
+          const sourceAt = (index: number) => boundaries?.[index] ?? childFrom + index
+          const cuts = new Set<number>([0, text.length])
+          const boundaryIndexes = new Map<number, number>()
+          for (let index = 0; index <= text.length; index += 1) boundaryIndexes.set(sourceAt(index), index)
+          for (const range of relevant) {
+            const start = boundaryIndexes.get(range.from)
+            const end = boundaryIndexes.get(range.to)
+            if (start !== undefined) cuts.add(start)
+            if (end !== undefined) cuts.add(end)
+          }
+          const orderedCuts = [...cuts].sort((left, right) => left - right)
+          const fragments: AnnotatableHastNode[] = []
+          for (let index = 0; index < orderedCuts.length - 1; index += 1) {
+            const start = orderedCuts[index]
+            const end = orderedCuts[index + 1]
+            if (end <= start) continue
+            const fragmentFrom = sourceAt(start)
+            const fragmentTo = sourceAt(end)
+            const ids = relevant
+              .filter((range) => range.from < fragmentTo && range.to > fragmentFrom)
+              .map((range) => range.id)
+            const fragmentProperties: Record<string, unknown> = { ...properties }
+            fragmentProperties.dataGmSrcFrom = fragmentFrom
+            fragmentProperties.dataGmSrcTo = fragmentTo
+            if (boundaries) fragmentProperties.dataGmSrcMap = JSON.stringify(boundaries.slice(start, end + 1))
+            if (ids.length > 0) fragmentProperties.dataGmReadingMarkId = ids.join(',')
+            else delete fragmentProperties.dataGmReadingMarkId
+            fragments.push({
+              ...child,
+              properties: fragmentProperties,
+              children: [{ ...textChild, value: text.slice(start, end) }],
+            })
+          }
+          if (fragments.length > 0) nextChildren.push(...fragments)
+          else nextChildren.push(child)
+        }
+        node.children = nextChildren
+      }
+      visit(tree)
+    }
+  }
+}
+
 /* ---------------------------- DOM ↔ 源码 offset ---------------------------- */
 
 export interface AnnotatedTextNode {
   node: Text
   from: number
   to: number
+  sourceBoundaries?: number[]
+}
+
+function readSourceBoundaries(span: Element, textLength: number): number[] | undefined {
+  const raw = span.getAttribute('data-gm-src-map')
+  if (!raw) return undefined
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed) || parsed.length !== textLength + 1) return undefined
+    const boundaries = parsed.map((value) => Number(value))
+    if (boundaries.some((value) => !Number.isFinite(value))) return undefined
+    for (let index = 1; index < boundaries.length; index += 1) {
+      if (boundaries[index] < boundaries[index - 1]) return undefined
+    }
+    return boundaries
+  } catch {
+    return undefined
+  }
 }
 
 /** 收集容器内所有带源码标注的 text 节点（文档顺序） */
@@ -181,7 +389,8 @@ export function collectAnnotatedTextNodes(root: Element): AnnotatedTextNode[] {
     const from = parent.getAttribute('data-gm-src-from')
     if (from === null) continue
     const to = Number(parent.getAttribute('data-gm-src-to'))
-    out.push({ node: node as Text, from: Number(from), to })
+    const textLength = node.textContent?.length ?? 0
+    out.push({ node: node as Text, from: Number(from), to, sourceBoundaries: readSourceBoundaries(parent, textLength) })
   }
   return out
 }
@@ -196,6 +405,8 @@ export function domPointToSourceOffset(node: Node, offset: number): number | nul
     const to = Number(span.getAttribute('data-gm-src-to'))
     const textLength = node.textContent?.length ?? 0
     const local = Math.max(0, Math.min(offset, textLength))
+    const sourceBoundaries = readSourceBoundaries(span, textLength)
+    if (sourceBoundaries) return sourceBoundaries[local]
     return Math.max(from, Math.min(from + local, to))
   }
   if (node instanceof Element) {
@@ -233,8 +444,16 @@ export function buildDomRangesForSourceRange(root: Element, from: number, to: nu
   for (const entry of collectAnnotatedTextNodes(root)) {
     if (entry.to <= from || entry.from >= to) continue
     const textLength = entry.node.textContent?.length ?? 0
-    const localStart = Math.max(0, Math.min(from - entry.from, textLength))
-    const localEnd = Math.max(localStart, Math.min(to - entry.from, textLength))
+    let localStart = Math.max(0, Math.min(from - entry.from, textLength))
+    let localEnd = Math.max(localStart, Math.min(to - entry.from, textLength))
+    if (entry.sourceBoundaries) {
+      localStart = 0
+      while (localStart < textLength && entry.sourceBoundaries[localStart + 1] <= from) localStart += 1
+      localEnd = localStart
+      while (localEnd < textLength && entry.sourceBoundaries[localEnd] < to) localEnd += 1
+    }
+    localStart = alignTextOffsetToCodePointStart(entry.node.textContent ?? '', localStart)
+    localEnd = alignTextOffsetToCodePointEnd(entry.node.textContent ?? '', localEnd)
     if (localEnd <= localStart) continue
     const range = document.createRange()
     range.setStart(entry.node, localStart)
@@ -246,20 +465,32 @@ export function buildDomRangesForSourceRange(root: Element, from: number, to: nu
 
 /* ------------------------------ Highlight Registry ------------------------------ */
 
-export type PreviewHighlightKind = 'search' | 'searchActive' | 'selection'
+export type PreviewHighlightKind = 'search' | 'searchActive' | 'selection' | 'sourceReveal' | 'markYellow' | 'markGreen' | 'markBlue' | 'markPink' | 'markFocus'
 
 const HIGHLIGHT_NAMES: Record<PreviewHighlightKind, string> = {
   search: 'search-highlight',
   searchActive: 'search-highlight-active',
   selection: 'preview-selection',
+  sourceReveal: 'source-reveal-highlight',
+  markYellow: 'reading-mark-yellow',
+  markGreen: 'reading-mark-green',
+  markBlue: 'reading-mark-blue',
+  markPink: 'reading-mark-pink',
+  markFocus: 'reading-mark-focus',
 }
 
-const HIGHLIGHT_KINDS: PreviewHighlightKind[] = ['search', 'searchActive', 'selection']
+const HIGHLIGHT_KINDS: PreviewHighlightKind[] = ['search', 'searchActive', 'selection', 'sourceReveal', 'markYellow', 'markGreen', 'markBlue', 'markPink', 'markFocus']
 
 interface BlockHighlightEntry {
   search: globalThis.Range[]
   searchActive: globalThis.Range[]
   selection: globalThis.Range[]
+  sourceReveal: globalThis.Range[]
+  markYellow: globalThis.Range[]
+  markGreen: globalThis.Range[]
+  markBlue: globalThis.Range[]
+  markPink: globalThis.Range[]
+  markFocus: globalThis.Range[]
 }
 
 /**
@@ -285,7 +516,7 @@ class PreviewHighlightRegistry {
 
   syncBlock(resource: string, blockId: string, next: Partial<Record<PreviewHighlightKind, globalThis.Range[]>>): void {
     const key = `${resource}:${blockId}`
-    const entry = this.blocks.get(key) ?? { search: [], searchActive: [], selection: [] }
+    const entry = this.blocks.get(key) ?? { search: [], searchActive: [], selection: [], sourceReveal: [], markYellow: [], markGreen: [], markBlue: [], markPink: [], markFocus: [] }
     let hasContent = false
     for (const kind of HIGHLIGHT_KINDS) {
       const oldRanges = entry[kind]
@@ -307,7 +538,7 @@ class PreviewHighlightRegistry {
   }
 
   removeBlock(resource: string, blockId: string): void {
-    this.syncBlock(resource, blockId, { search: [], searchActive: [], selection: [] })
+    this.syncBlock(resource, blockId, { search: [], searchActive: [], selection: [], sourceReveal: [], markYellow: [], markGreen: [], markBlue: [], markPink: [], markFocus: [] })
   }
 
   /** 移除指定 resource 中不在 blockIds 集合内的块高亮（虚拟化卸载清理） */

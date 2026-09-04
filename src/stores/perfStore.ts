@@ -72,6 +72,7 @@ interface PerfState {
   toggleCollapsed: () => void
   togglePaused: () => void
   setSampleInterval: (interval: SampleIntervalMs) => void
+  publishSample: (data: PerfData | null, testPeaks: Partial<Record<keyof PerfData, number>>) => void
 }
 
 const peakKeys: Array<keyof PerfData> = [
@@ -115,6 +116,10 @@ export const usePerfStore = create<PerfState>((set, get) => ({
   setSampleInterval: (sampleIntervalMs) => set((state) => ({
     settings: { ...state.settings, sampleIntervalMs },
   })),
+  publishSample: (data, testPeaks) => set((state) => ({
+    ...(data ? { current: data } : {}),
+    testPeaks: state.testPeaks === testPeaks ? state.testPeaks : testPeaks,
+  })),
 }))
 
 export function recordPerfSample(data: PerfData) {
@@ -132,9 +137,9 @@ export function recordPerfSample(data: PerfData) {
   const now = performance.now()
   if (state.current === null || now - lastUiPublishAt >= state.settings.uiRefreshIntervalMs) {
     lastUiPublishAt = now
-    usePerfStore.setState({ current: data, testPeaks })
+    state.publishSample(data, testPeaks)
   } else if (testPeaks !== state.testPeaks) {
-    usePerfStore.setState({ testPeaks })
+    state.publishSample(null, testPeaks)
   }
 }
 

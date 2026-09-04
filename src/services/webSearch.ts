@@ -1,4 +1,4 @@
-import { externalFetch } from './externalHttp'
+import { externalFetch } from '@/services/externalHttp'
 import { DEFAULT_REQUEST_TIMEOUT_MS, normalizeRequestTimeoutMs } from './requestTimeout'
 
 export interface SearchResult {

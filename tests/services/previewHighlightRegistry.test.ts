@@ -19,6 +19,12 @@ const HIGHLIGHT_NAME: Record<PreviewHighlightKind, string> = {
   search: 'search-highlight',
   searchActive: 'search-highlight-active',
   selection: 'preview-selection',
+  sourceReveal: 'source-reveal-highlight',
+  markYellow: 'reading-mark-yellow',
+  markGreen: 'reading-mark-green',
+  markBlue: 'reading-mark-blue',
+  markPink: 'reading-mark-pink',
+  markFocus: 'reading-mark-focus',
 }
 
 class FakeHighlight {
@@ -58,6 +64,7 @@ beforeEach(() => {
   previewHighlightRegistry.clearKind('search')
   previewHighlightRegistry.clearKind('searchActive')
   previewHighlightRegistry.clearKind('selection')
+  previewHighlightRegistry.clearKind('sourceReveal')
 })
 
 describe('previewHighlightRegistry 生命周期契约（invariants 见 docs/architecture/state-ownership.md）', () => {
@@ -131,6 +138,17 @@ describe('previewHighlightRegistry 生命周期契约（invariants 见 docs/arch
     previewHighlightRegistry.clearKind('search')
 
     expect(ranges('search').has(search)).toBe(false)
+    expect(ranges('selection').has(selection)).toBe(true)
+  })
+
+  it('来源跳转高亮独立于搜索和选区，并可单独清除', () => {
+    const sourceReveal = document.createRange()
+    const selection = document.createRange()
+
+    previewHighlightRegistry.syncBlock('doc-1', 'block-a', { sourceReveal: [sourceReveal], selection: [selection] })
+    previewHighlightRegistry.clearKind('sourceReveal', 'doc-1')
+
+    expect(ranges('sourceReveal').has(sourceReveal)).toBe(false)
     expect(ranges('selection').has(selection)).toBe(true)
   })
 })

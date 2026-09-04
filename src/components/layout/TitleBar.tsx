@@ -93,7 +93,7 @@ export function TitleBar() {
         <span className="text-caption font-bold text-gm-text tracking-wide">观墨</span>
         {!isTauri() && (
           <span className="text-micro text-gm-text-disabled bg-gm-surface-elevated px-1.5 py-0.5 rounded">
-            浏览器模式，多项功能和样式会有问题，推荐下载桌面版
+            Web 版
           </span>
         )}
       </div>
@@ -179,7 +179,8 @@ export function TitleBar() {
         {/* Window controls */}
         <button
           onClick={handleMinimize}
-          className="h-full w-12 flex items-center justify-center text-gm-text-secondary hover:bg-gm-surface-hover transition-colors"
+          disabled={!isTauri()}
+          className="h-full w-12 flex items-center justify-center text-gm-text-secondary hover:bg-gm-surface-hover transition-colors disabled:cursor-not-allowed disabled:opacity-35"
           title="最小化"
         >
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -188,7 +189,8 @@ export function TitleBar() {
         </button>
         <button
           onClick={handleToggleMaximize}
-          className="h-full w-12 flex items-center justify-center text-gm-text-secondary hover:bg-gm-surface-hover transition-colors"
+          disabled={!isTauri()}
+          className="h-full w-12 flex items-center justify-center text-gm-text-secondary hover:bg-gm-surface-hover transition-colors disabled:cursor-not-allowed disabled:opacity-35"
           title={maximized ? '还原' : '最大化'}
         >
           {maximized ? (
@@ -204,7 +206,8 @@ export function TitleBar() {
         </button>
         <button
           onClick={handleClose}
-          className="h-full w-12 flex items-center justify-center text-gm-text-secondary hover:bg-red-500 hover:text-white transition-colors"
+          disabled={!isTauri()}
+          className="h-full w-12 flex items-center justify-center text-gm-text-secondary hover:bg-red-500 hover:text-white transition-colors disabled:cursor-not-allowed disabled:opacity-35"
           title="关闭"
         >
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

@@ -14,7 +14,6 @@ import { saveExternalImageForMarkdown, saveImageFileForMarkdown } from '@/servic
 import { toast } from '@/services/toast'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { openFileDialog } from '@/hooks/useTauri'
-import { addSelectionContextTag, setAiShortcutPrompt } from '@/services/aiContext'
 import { eventMarker } from '@/services/eventMarker'
 import { markStartupPoint } from '@/services/startupPerformance'
 import { hasBootSnapshotContent } from '@/services/bootSnapshot'
@@ -23,23 +22,24 @@ import { startHeadingScroll } from '@/services/headingScroll'
 import { EditorContextMenu } from './EditorContextMenu'
 import { MarkdownToc } from './MarkdownToc'
 import type { MarkdownBlockCommitRequest, MarkdownPreviewHandle } from './markdownPreviewTypes'
+import type { PreviewSelectionSnapshot } from './markdownPreviewTypes'
+import { readingDocumentId, type ReadingMark, type ReadingMarkColor } from '@/services/readingMarks'
+import { useReadingMarksStore } from '@/stores/readingMarksStore'
 import { CodeMirrorEditor } from './CodeMirrorEditor'
 import { SearchOverlay } from './SearchOverlay'
 import { TabBar } from './TabBar'
+import { useScheduledPreviewContent } from './useScheduledPreviewContent'
+import { useEditorResourceLifecycle } from './useEditorResourceLifecycle'
+import { getPreviewTopForLine, useReadingPositionBridge } from './useReadingPositionBridge'
+import { usePreviewSelectionBridge } from './usePreviewSelectionBridge'
+import { AnnotationHoverOverlay, type AnnotationHoverOverlayHandle } from './AnnotationHoverOverlay'
+import { isSameFilePath } from '@/services/pathIdentity'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
+import { getRuntimeCapabilities } from '@/services/runtimeCapabilities'
 import {
-  MODE_PREWARM_ACTIVITY_PAUSE,
-  MODE_PREWARM_IDLE_DELAY,
-  ReadingPositionSession,
   ScrollSyncSession,
-  getNextPrewarmTarget,
-  scheduleIdlePrewarm,
-  decideResource,
   mapPerformancePolicy,
-  type ReadingPosition,
   type PrewarmTargetMode,
-  type PrewarmedModeKeys,
-  type InstanceType,
 } from '@/services/editorSession'
 
 const LazyMarkdownPreview = lazy(() => import('./MarkdownPreview').then(({ MarkdownPreview }) => ({ default: MarkdownPreview })))
@@ -47,28 +47,6 @@ const LazyMarkdownDiffView = lazy(() => import('./MarkdownDiffView').then(({ Mar
 
 function PreviewSuspenseFallback() {
   return <div className="h-full min-h-0 w-full bg-gm-surface" aria-hidden="true" />
-}
-
-interface PreviewMenuState {
-  x: number
-  y: number
-  selectedText: string
-  startLine?: number
-  endLine?: number
-  pane: 'left' | 'right'
-  /** 统一 Range 快照的精确源码 offset（接管选区时存在） */
-  selectionFrom?: number
-  selectionTo?: number
-}
-
-interface PreviewSelectionSource {
-  title: string
-  filePath?: string | null
-  text: string
-  startLine?: number
-  endLine?: number
-  selectionFrom?: number
-  selectionTo?: number
 }
 
 /** 编辑器被动平滑跟随状态（预览滚动驱动编辑器）。独立于源端 scroll 事件节流 ref。 */
@@ -101,11 +79,7 @@ interface PreviewScrollFollowerState {
   stableFrames: number
 }
 
-const PREVIEW_CONTEXT_HIGHLIGHT = 'preview-context-selection'
 const DROP_IMAGES_EVENT = 'guanmo:drop-image-paths'
-const PREVIEW_UPDATE_DELAY = 300
-const LARGE_PREVIEW_UPDATE_DELAY = 650
-const HUGE_PREVIEW_UPDATE_DELAY = 900
 const SCROLL_SYNC_TOP_OFFSET = 32
 const SCROLL_SYNC_INPUT_PAUSE_MS = 700
 /** 预览→编辑器反向滚动同步只接受“用户主动滚动预览”产生的 scroll 事件；
@@ -123,88 +97,7 @@ const SCROLL_SYNC_FOLLOW_STABLE_FRAMES = 2
 /** 实际 scrollTop 与上一次写入值偏差超过该值视为外部修改（渲染补偿 / CodeMirror 测量校正） */
 const SCROLL_SYNC_EXTERNAL_DRIFT_PX = 1
 const PREVIEW_SWITCH_MARK_PREFIX = 'guanmo:preview-switch'
-
-interface ScheduledPreviewContent {
-  content: string
-  version: number
-  pending: boolean
-}
-
-function getPreviewUpdateDelay(content: string) {
-  if (content.length >= 80000) return HUGE_PREVIEW_UPDATE_DELAY
-  if (content.length >= 30000) return LARGE_PREVIEW_UPDATE_DELAY
-  return PREVIEW_UPDATE_DELAY
-}
-
-function useScheduledPreviewContent(
-  content: string,
-  documentKey: string | null | undefined,
-  enabled = true
-) {
-  const [preview, setPreview] = useState<ScheduledPreviewContent>({
-    content,
-    version: 0,
-    pending: false,
-  })
-  const previousKeyRef = useRef(documentKey)
-  const previousEnabledRef = useRef(enabled)
-  const versionRef = useRef(0)
-  const switchedDocument = previousKeyRef.current !== documentKey
-  const becameEnabled = enabled && !previousEnabledRef.current
-  let visiblePreview = preview
-
-  if (switchedDocument || becameEnabled) {
-    previousKeyRef.current = documentKey
-    previousEnabledRef.current = enabled
-    versionRef.current += 1
-    visiblePreview = { content, version: versionRef.current, pending: false }
-  }
-
-  useLayoutEffect(() => {
-    previousEnabledRef.current = enabled
-    if (!enabled) {
-      if (preview.content) {
-        versionRef.current += 1
-        setPreview({ content: '', version: versionRef.current, pending: false })
-      }
-      return
-    }
-    if (switchedDocument || becameEnabled) {
-      setPreview({ content, version: versionRef.current, pending: false })
-      return
-    }
-
-    if (preview.content === content) {
-      return
-    }
-
-    const version = versionRef.current + 1
-    const timer = setTimeout(() => {
-      versionRef.current = version
-      setPreview({ content, version, pending: false })
-    }, getPreviewUpdateDelay(content))
-
-    return () => clearTimeout(timer)
-  }, [becameEnabled, content, documentKey, enabled, preview.content, switchedDocument])
-
-  return enabled
-    ? { ...visiblePreview, pending: visiblePreview.content !== content }
-    : visiblePreview
-}
-
-function seedReadingPositionsFromStore(): ReadingPositionSession {
-  const session = new ReadingPositionSession()
-  const stored = useEditorStore.getState().readingPositions
-  for (const [key, pos] of Object.entries(stored)) {
-    if (key.includes(':')) {
-      const [tabId, pane] = key.split(':') as [string, 'left' | 'right']
-      session.saveForPane(tabId, pane, pos)
-    } else {
-      session.save(key, pos)
-    }
-  }
-  return session
-}
+const EMPTY_READING_MARKS: ReadingMark[] = []
 
 export function EditorArea() {
   const tabs = useEditorStore((s) => s.tabs)
@@ -217,6 +110,8 @@ export function EditorArea() {
   const setRightPaneTabId = useEditorStore((s) => s.setRightPaneTabId)
   const previewSwitchingTabId = useEditorStore((s) => s.previewSwitchingTabId)
   const clearPreviewSwitching = useEditorStore((s) => s.clearPreviewSwitching)
+  const pendingReveal = useEditorStore((s) => s.pendingReveal)
+  const clearPendingReveal = useEditorStore((s) => s.clearPendingReveal)
   const flushReadingPositions = useEditorStore((s) => s.flushReadingPositions)
   const editorFontSize = useSettingsStore((s) => s.editor.fontSize)
   const editorLineHeight = useSettingsStore((s) => s.editor.lineHeight)
@@ -234,19 +129,15 @@ export function EditorArea() {
   const viewModeUsage = useEditorStore((s) => s.viewModeUsage)
   const isFullscreen = useAppStore((s) => s.isFullscreen)
   const editorViewRef = useRef<EditorView | null>(null)
-  const readingPositionsRef = useRef<ReadingPositionSession>(seedReadingPositionsFromStore())
   const leftPreviewRef = useRef<HTMLDivElement>(null)
   const rightPreviewRef = useRef<HTMLDivElement>(null)
   const leftMarkdownPreviewRef = useRef<MarkdownPreviewHandle>(null)
   const rightMarkdownPreviewRef = useRef<MarkdownPreviewHandle>(null)
-  const isRestoringScrollRef = useRef(false)
-  const restoreScrollFrameRef = useRef<number | null>(null)
-  const editorRestoreFrameRef = useRef<number | null>(null)
-
+  const annotationOverlayRef = useRef<AnnotationHoverOverlayHandle>(null)
   const restoredPreviewKeysRef = useRef<{ left: string | null; right: string | null }>({ left: null, right: null })
+
   const scrollSyncSessionRef = useRef(new ScrollSyncSession())
   const editorScrollFrameRef = useRef<number | null>(null)
-  const editorTocFrameRef = useRef<number | null>(null)
   const editorHeadingJumpCancelRef = useRef<(() => void) | null>(null)
   const previewScrollFrameRef = useRef<number | null>(null)
   const lastEditorInputAtRef = useRef(0)
@@ -284,23 +175,9 @@ export function EditorArea() {
   const [tocCollapsed, setTocCollapsed] = useState(false)
   const [activeEditorHeading, setActiveEditorHeading] = useState<string | null>(null)
   const [tocFocus, setTocFocus] = useState<'editor' | 'preview'>('editor')
-  const [previewMenu, setPreviewMenu] = useState<PreviewMenuState | null>(null)
-  const [prewarmedModeKeys, setPrewarmedModeKeys] = useState<PrewarmedModeKeys>({})
   const [activeDocumentFirstScreenReady, setActiveDocumentFirstScreenReady] = useState(false)
   const activeDocumentFirstScreenReadyRef = useRef(false)
   const firstScreenDocumentIdRef = useRef<string | null>(activeTabId)
-  const prewarmedModeKeysRef = useRef<PrewarmedModeKeys>({})
-  prewarmedModeKeysRef.current = prewarmedModeKeys
-  const warmedModeKeysRef = useRef<Set<string>>(new Set())
-  const warmScopeRef = useRef<string | null>(null)
-  const prewarmCancelRef = useRef(0)
-  const idlePrewarmCancelRef = useRef<(() => void) | null>(null)
-  const pendingPrewarmRef = useRef<{ scheduleId: string; target: PrewarmTargetMode } | null>(null)
-  const prewarmScheduleSequenceRef = useRef(0)
-  const requestedPrewarmScheduleIdsRef = useRef<Partial<Record<PrewarmTargetMode, string>>>({})
-  const lastUserActivityAtRef = useRef(Date.now())
-  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const previousActiveTabIdRef = useRef<string | null>(activeTabId)
 
   useEffect(() => {
     if (isFullscreen) setTocCollapsed(true)
@@ -320,225 +197,75 @@ export function EditorArea() {
     }
   }
   const rightTab = retainedRightTabRef.current
+  const activeReadingMarks = useReadingMarksStore((state) => activeTab?.filePath ? state.byDocumentId[readingDocumentId(activeTab.filePath)] ?? EMPTY_READING_MARKS : EMPTY_READING_MARKS)
+  const rightReadingMarks = useReadingMarksStore((state) => rightTab?.filePath ? state.byDocumentId[readingDocumentId(rightTab.filePath)] ?? EMPTY_READING_MARKS : EMPTY_READING_MARKS)
+  const loadReadingMarksForDocument = useReadingMarksStore((state) => state.load)
+  const createReadingMarkInStore = useReadingMarksStore((state) => state.create)
+  const updateReadingMarkInStore = useReadingMarksStore((state) => state.update)
+  const removeReadingMarkInStore = useReadingMarksStore((state) => state.remove)
+  const pendingMarkNavigation = useReadingMarksStore((state) => state.pendingNavigation)
+  const clearMarkNavigation = useReadingMarksStore((state) => state.clearNavigation)
+  const readingMarksEnabled = getRuntimeCapabilities().database
   const leftPreviewVisible = viewMode === 'preview' || viewMode === 'edit-preview' || viewMode === 'dual-preview'
   const editorVisible = viewMode === 'edit' || viewMode === 'edit-preview'
   const previewContentReady = Boolean(activeTab && (
     !activeTab.filePath || activeTab.modified || activeTab.content.length > 0 || hasBootSnapshotContent(activeTab)
   ))
 
+  useEffect(() => {
+    if (!readingMarksEnabled || !leftPreviewVisible || !activeTab?.filePath) return
+    void loadReadingMarksForDocument(activeTab.filePath)
+  }, [activeTab?.filePath, leftPreviewVisible, loadReadingMarksForDocument, readingMarksEnabled])
+
+  useEffect(() => {
+    if (!readingMarksEnabled || viewMode !== 'dual-preview' || !rightTab?.filePath) return
+    void loadReadingMarksForDocument(rightTab.filePath)
+  }, [loadReadingMarksForDocument, readingMarksEnabled, rightTab?.filePath, viewMode])
+
+  const handleCreateReadingMark = useCallback(async (selection: PreviewSelectionSnapshot, color: ReadingMarkColor, note: string | undefined, model: import('@/services/markdownPreviewModel').MarkdownPreviewModel) => {
+    if (!activeTab?.filePath) throw new Error('批注仅支持已保存的 Markdown 文件')
+    return createReadingMarkInStore({ documentPath: activeTab.filePath, selection, color, note }, model)
+  }, [activeTab?.filePath, createReadingMarkInStore])
+
+  const handleUpdateReadingMark = useCallback((id: string, patch: import('@/services/readingMarks').UpdateReadingMarkPatch) => {
+    if (!activeTab?.filePath) return Promise.reject(new Error('文档路径不存在'))
+    return updateReadingMarkInStore(id, activeTab.filePath, patch)
+  }, [activeTab?.filePath, updateReadingMarkInStore])
+
+  const handleDeleteReadingMark = useCallback((id: string) => {
+    if (!activeTab?.filePath) return Promise.reject(new Error('文档路径不存在'))
+    return removeReadingMarkInStore(id, activeTab.filePath)
+  }, [activeTab?.filePath, removeReadingMarkInStore])
+
+  const handleCreateRightReadingMark = useCallback(async (selection: PreviewSelectionSnapshot, color: ReadingMarkColor, note: string | undefined, model: import('@/services/markdownPreviewModel').MarkdownPreviewModel) => {
+    if (!rightTab?.filePath) throw new Error('批注仅支持已保存的 Markdown 文件')
+    return createReadingMarkInStore({ documentPath: rightTab.filePath, selection, color, note }, model)
+  }, [createReadingMarkInStore, rightTab?.filePath])
+  const handleUpdateRightReadingMark = useCallback((id: string, patch: import('@/services/readingMarks').UpdateReadingMarkPatch) => {
+    if (!rightTab?.filePath) return Promise.reject(new Error('文档路径不存在'))
+    return updateReadingMarkInStore(id, rightTab.filePath, patch)
+  }, [rightTab?.filePath, updateReadingMarkInStore])
+  const handleDeleteRightReadingMark = useCallback((id: string) => {
+    if (!rightTab?.filePath) return Promise.reject(new Error('文档路径不存在'))
+    return removeReadingMarkInStore(id, rightTab.filePath)
+  }, [removeReadingMarkInStore, rightTab?.filePath])
+
+  const handleOverlayUpdate = useCallback((mark: ReadingMark, patch: import('@/services/readingMarks').UpdateReadingMarkPatch) => (
+    updateReadingMarkInStore(mark.id, mark.documentPath, patch)
+  ), [updateReadingMarkInStore])
+  const handleOverlayDelete = useCallback((mark: ReadingMark) => (
+    removeReadingMarkInStore(mark.id, mark.documentPath)
+  ), [removeReadingMarkInStore])
+
   const [leftPreviewMounted, setLeftPreviewMounted] = useState(false)
   const [rightPreviewMounted, setRightPreviewMounted] = useState(false)
   const [editorMounted, setEditorMounted] = useState(false)
   const [diffMounted, setDiffMounted] = useState(false)
   const [draftDecisionVersion, setDraftDecisionVersion] = useState(0)
-  const leftPreviewMountedRef = useRef(leftPreviewMounted)
-  const rightPreviewMountedRef = useRef(rightPreviewMounted)
-  const editorMountedRef = useRef(editorMounted)
-  const diffMountedRef = useRef(diffMounted)
-  leftPreviewMountedRef.current = leftPreviewMounted
-  rightPreviewMountedRef.current = rightPreviewMounted
-  editorMountedRef.current = editorMounted
-  diffMountedRef.current = diffMounted
-  const leftPreviewTtlRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const rightPreviewTtlRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const editorTtlRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const diffReleaseFrameRef = useRef<number | null>(null)
-  const lastInstanceUseRef = useRef<Record<string, number>>({})
-  const instanceDocumentRef = useRef<Record<string, string | null>>({})
-  const forceDraftReleaseRef = useRef({ left: false, right: false })
-  const resourcePolicyRef = useRef(modeResourcePolicy)
-  resourcePolicyRef.current = modeResourcePolicy
   const viewModeRef = useRef(viewMode)
   viewModeRef.current = viewMode
   const activeTabIdRef = useRef(activeTabId)
   activeTabIdRef.current = activeTabId
-  const previousVisibilityRef = useRef({
-    editor: editorVisible,
-    left: leftPreviewVisible,
-    right: viewMode === 'dual-preview',
-  })
-
-  const setResourceMounted = useCallback((
-    resource: 'editor' | 'left-preview' | 'right-preview' | 'diff',
-    mounted: boolean,
-    documentKey: string | null = null,
-  ) => {
-    instanceDocumentRef.current[resource] = mounted ? documentKey : null
-    if (resource === 'editor') {
-      editorMountedRef.current = mounted
-      setEditorMounted(mounted)
-    } else if (resource === 'left-preview') {
-      leftPreviewMountedRef.current = mounted
-      setLeftPreviewMounted(mounted)
-    } else if (resource === 'right-preview') {
-      rightPreviewMountedRef.current = mounted
-      setRightPreviewMounted(mounted)
-    } else {
-      diffMountedRef.current = mounted
-      setDiffMounted(mounted)
-    }
-  }, [])
-
-  // Resource policy: clean up stale TTL timers and manage instance lifecycle
-  const clearTtl = useCallback((ref: React.MutableRefObject<ReturnType<typeof setTimeout> | null>) => {
-    if (ref.current !== null) {
-      clearTimeout(ref.current)
-      ref.current = null
-    }
-  }, [])
-
-  const clearAllTtls = useCallback(() => {
-    clearTtl(leftPreviewTtlRef)
-    clearTtl(rightPreviewTtlRef)
-    clearTtl(editorTtlRef)
-  }, [clearTtl])
-
-  const isInstanceVisible = useCallback((instanceKey: 'editor' | 'left-preview' | 'right-preview' | 'diff') => {
-    const currentMode = viewModeRef.current
-    if (instanceKey === 'editor') return currentMode === 'edit' || currentMode === 'edit-preview'
-    if (instanceKey === 'left-preview') return currentMode === 'preview' || currentMode === 'edit-preview' || currentMode === 'dual-preview'
-    if (instanceKey === 'right-preview') return currentMode === 'dual-preview'
-    return currentMode === 'diff-preview'
-  }, [])
-
-  const decideHiddenResource = useCallback((
-    instanceKey: 'editor' | 'left-preview' | 'right-preview' | 'diff',
-    instanceType: InstanceType,
-    candidateDocId: string | null,
-    docCharCount: number,
-    draftRef?: React.MutableRefObject<boolean>,
-  ) => {
-    const now = Date.now()
-    return decideResource({
-      policy: resourcePolicyRef.current,
-      docId: candidateDocId,
-      candidateDocId,
-      docCharCount,
-      instanceType,
-      isCurrentlyVisible: false,
-      lastUsedAt: lastInstanceUseRef.current[instanceKey] ?? now,
-      now,
-      hasUncommittedDraft: draftRef?.current ?? false,
-    })
-  }, [])
-
-  const scheduleRelease = useCallback((
-    ttlRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>,
-    instanceKey: 'editor' | 'left-preview' | 'right-preview',
-    instanceType: InstanceType,
-    candidateDocId: string | null,
-    docCharCount: number,
-    releaseFn: () => void,
-    draftRef?: React.MutableRefObject<boolean>
-  ) => {
-    clearTtl(ttlRef)
-    const now = Date.now()
-    const hasDraft = draftRef?.current ?? false
-    const decision = decideHiddenResource(instanceKey, instanceType, candidateDocId, docCharCount, draftRef)
-    if (decision.action === 'release') {
-      if (!hasDraft && !isInstanceVisible(instanceKey) && instanceDocumentRef.current[instanceKey] === candidateDocId) {
-        if (import.meta.env.DEV) {
-          eventMarker.mark('resource-release', { resource: instanceKey, reason: 'immediate', phase: 'requested' })
-        }
-        releaseFn()
-      }
-    } else if (decision.action === 'keepUntil') {
-      const timer = setTimeout(() => {
-        if (ttlRef.current !== timer) return
-        ttlRef.current = null
-        if (isInstanceVisible(instanceKey)) return
-        if (instanceDocumentRef.current[instanceKey] !== candidateDocId) return
-        const currentDecision = decideResource({
-          policy: resourcePolicyRef.current,
-          docId: candidateDocId,
-          candidateDocId,
-          docCharCount,
-          instanceType,
-          isCurrentlyVisible: false,
-          lastUsedAt: lastInstanceUseRef.current[instanceKey] ?? now,
-          now: Date.now(),
-          hasUncommittedDraft: draftRef?.current ?? false,
-        })
-        if (currentDecision.action === 'release') {
-          if (import.meta.env.DEV) {
-            eventMarker.mark('resource-release', { resource: instanceKey, reason: 'ttl-expired', phase: 'requested' })
-          }
-          releaseFn()
-        }
-      }, Math.max(0, decision.deadline - now))
-      ttlRef.current = timer
-    }
-  }, [clearTtl, decideHiddenResource, isInstanceVisible])
-
-  const cancelPendingPrewarm = useCallback((reason: 'user-activity' | 'mode-change' | 'context-change' | 'policy-change' | 'schedule-replaced') => {
-    const pending = pendingPrewarmRef.current
-    if (pending) {
-      if (import.meta.env.DEV) {
-        eventMarker.mark('prewarm-cancel', {
-          reason,
-          scheduleId: pending.scheduleId,
-          target: pending.target,
-        })
-      }
-      pendingPrewarmRef.current = null
-    }
-    if (idlePrewarmCancelRef.current) {
-      idlePrewarmCancelRef.current()
-      idlePrewarmCancelRef.current = null
-    }
-  }, [])
-
-  const cancelModePrewarm = useCallback((reason: 'user-activity' | 'mode-change' | 'context-change' | 'policy-change') => {
-    prewarmCancelRef.current += 1
-    lastUserActivityAtRef.current = Date.now()
-    cancelPendingPrewarm(reason)
-  }, [cancelPendingPrewarm])
-
-  const previousModePrewarmRef = useRef(modePrewarm)
-
-  // Detect policy changes for performance monitor
-  const previousPerformancePolicyRef = useRef(modePerformancePolicy)
-  useEffect(() => {
-    const prev = previousPerformancePolicyRef.current
-    previousPerformancePolicyRef.current = modePerformancePolicy
-    if (import.meta.env.DEV && prev !== modePerformancePolicy) {
-      eventMarker.mark('policy-change', { policy: modePerformancePolicy, prewarm: modePrewarm, resource: modeResourcePolicy })
-    }
-  }, [modePerformancePolicy, modePrewarm, modeResourcePolicy])
-
-  useEffect(() => {
-    const previous = previousModePrewarmRef.current
-    previousModePrewarmRef.current = modePrewarm
-    if (previous !== 'off' && modePrewarm === 'off') {
-      cancelModePrewarm('policy-change')
-      clearAllTtls()
-      if (!editorVisible) {
-        setResourceMounted('editor', false)
-      }
-      if (!leftPreviewVisible) {
-        if (leftPreviewDraftRef.current) forceDraftReleaseRef.current.left = true
-        else {
-          leftPreviewRenderRef.current = { content: '', filePath: undefined }
-          setResourceMounted('left-preview', false)
-        }
-      }
-      if (viewMode !== 'dual-preview') {
-        if (rightPreviewDraftRef.current) forceDraftReleaseRef.current.right = true
-        else {
-          retainedRightTabRef.current = null
-          setResourceMounted('right-preview', false)
-        }
-      }
-      if (diffReleaseFrameRef.current !== null) {
-        window.cancelAnimationFrame(diffReleaseFrameRef.current)
-        diffReleaseFrameRef.current = null
-      }
-      if (viewMode !== 'diff-preview') {
-        setResourceMounted('diff', false)
-      }
-      setPrewarmedModeKeys({})
-    }
-  }, [modePrewarm, editorVisible, leftPreviewVisible, viewMode, cancelModePrewarm, clearAllTtls, setResourceMounted])
 
   const handlePreviewDraftStateChange = useCallback((pane: 'left' | 'right', hasDraft: boolean) => {
     const draftRef = pane === 'left' ? leftPreviewDraftRef : rightPreviewDraftRef
@@ -567,76 +294,6 @@ export function EditorArea() {
     (hasDraft: boolean) => handlePreviewDraftStateChange('right', hasDraft),
     [handlePreviewDraftStateChange],
   )
-
-  // Visible, retained, and draft-blocked instances share the same policy decision.
-  useEffect(() => {
-    const now = Date.now()
-    const previousVisibility = previousVisibilityRef.current
-    if (previousVisibility.left && !leftPreviewVisible) lastInstanceUseRef.current['left-preview'] = now
-    if (previousVisibility.right && viewMode !== 'dual-preview') lastInstanceUseRef.current['right-preview'] = now
-    if (previousVisibility.editor && !editorVisible) lastInstanceUseRef.current.editor = now
-    previousVisibilityRef.current = {
-      editor: editorVisible,
-      left: leftPreviewVisible,
-      right: viewMode === 'dual-preview',
-    }
-    if (leftPreviewVisible) {
-      clearTtl(leftPreviewTtlRef)
-      lastInstanceUseRef.current['left-preview'] = now
-      setResourceMounted('left-preview', true, activeTab?.id ?? null)
-      forceDraftReleaseRef.current.left = false
-    } else if (leftPreviewMountedRef.current) {
-      if (forceDraftReleaseRef.current.left && !leftPreviewDraftRef.current) {
-        forceDraftReleaseRef.current.left = false
-        leftPreviewRenderRef.current = { content: '', filePath: undefined }
-        setResourceMounted('left-preview', false)
-      } else {
-        scheduleRelease(leftPreviewTtlRef, 'left-preview', 'preview', instanceDocumentRef.current['left-preview'] ?? activeTab?.id ?? null, activeTab?.content.length ?? 0, () => {
-          leftPreviewRenderRef.current = { content: '', filePath: undefined }
-          setResourceMounted('left-preview', false)
-        }, leftPreviewDraftRef)
-      }
-    }
-
-    if (viewMode === 'dual-preview') {
-      clearTtl(rightPreviewTtlRef)
-      lastInstanceUseRef.current['right-preview'] = now
-      setResourceMounted('right-preview', true, rightTab?.id ?? null)
-      forceDraftReleaseRef.current.right = false
-    } else if (rightPreviewMountedRef.current) {
-      const retained = retainedRightTabRef.current
-      if (forceDraftReleaseRef.current.right && !rightPreviewDraftRef.current) {
-        forceDraftReleaseRef.current.right = false
-        retainedRightTabRef.current = null
-        setResourceMounted('right-preview', false)
-      } else {
-        scheduleRelease(rightPreviewTtlRef, 'right-preview', 'preview', retained?.id ?? null, retained?.content.length ?? 0, () => {
-          retainedRightTabRef.current = null
-          setResourceMounted('right-preview', false)
-        }, rightPreviewDraftRef)
-      }
-    }
-
-    if (editorVisible) {
-      clearTtl(editorTtlRef)
-      lastInstanceUseRef.current.editor = now
-      setResourceMounted('editor', true, activeTab?.id ?? null)
-    } else if (editorMountedRef.current) {
-      instanceDocumentRef.current.editor = activeTab?.id ?? null
-      scheduleRelease(editorTtlRef, 'editor', 'editor', instanceDocumentRef.current.editor, activeTab?.content.length ?? 0, () => {
-          setResourceMounted('editor', false)
-      })
-    }
-
-    if (viewMode === 'diff-preview') {
-      if (diffReleaseFrameRef.current !== null) window.cancelAnimationFrame(diffReleaseFrameRef.current)
-      diffReleaseFrameRef.current = null
-      lastInstanceUseRef.current.diff = now
-      setResourceMounted('diff', true, activeTab?.id ?? null)
-    } else if (diffMountedRef.current) {
-      setResourceMounted('diff', false)
-    }
-  }, [viewMode, modeResourcePolicy, leftPreviewVisible, editorVisible, activeTab?.id, draftDecisionVersion, editorMounted, leftPreviewMounted, rightPreviewMounted]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Emit first-visible events after DOM commit (requestAnimationFrame)
   const editorBecameVisibleRef = useRef(false)
@@ -693,35 +350,6 @@ export function EditorArea() {
     }
   }, [activeTab?.content.length, activeTab?.id, editorMounted, editorVisible, markActiveDocumentFirstScreenReady, modePerformancePolicy, viewMode])
 
-  // Document switch: always release old document instances
-  const prevActiveTabIdRef = useRef(activeTabId)
-  useEffect(() => {
-    const prev = prevActiveTabIdRef.current
-    prevActiveTabIdRef.current = activeTabId
-    if (prev && activeTabId && prev !== activeTabId) {
-      // Cancel all TTLs before switching
-      clearAllTtls()
-      // Clear strong references
-      if (!rightPreviewDraftRef.current) retainedRightTabRef.current = null
-      leftPreviewRenderRef.current = { content: '', filePath: undefined }
-      // Preserve restore marks for visible panes — the restore useLayoutEffect
-      // already set them for the new tab, and clearing would cause
-      // leftPreviewMasked to re-evaluate to true on the next render (if the
-      // target tab has a saved non-zero scroll position) with no mechanism to
-      // unmask, leaving the preview permanently blank.
-      restoredPreviewKeysRef.current = {
-        left: leftPreviewVisible ? restoredPreviewKeysRef.current.left : null,
-        right: viewMode === 'dual-preview' ? restoredPreviewKeysRef.current.right : null,
-      }
-      setPrewarmedModeKeys({})
-      warmedModeKeysRef.current.clear()
-      // Re-mount visible instances for new doc
-      setResourceMounted('editor', editorVisible, activeTabId)
-      setResourceMounted('left-preview', leftPreviewVisible, activeTabId)
-      if (!rightPreviewDraftRef.current) setResourceMounted('right-preview', viewMode === 'dual-preview', rightTab?.id ?? null)
-    }
-  }, [activeTabId, editorVisible, leftPreviewVisible, viewMode, clearAllTtls, rightTab?.id, setResourceMounted])
-
   const leftPreviewWorkEnabled = leftPreviewVisible || leftPreviewMounted
   const rightPreviewWorkEnabled = viewMode === 'dual-preview' || rightPreviewMounted
   const activePreview = useScheduledPreviewContent(activeTab?.content || '', activeTab?.id, leftPreviewWorkEnabled)
@@ -777,23 +405,44 @@ export function EditorArea() {
   const warmScope = modeDerivationsEnabled && activeTab?.id
     ? `${activeTab.id}:${activeContentSignature}:${activeOriginalSignature}`
     : null
-  if (warmScopeRef.current !== warmScope) {
-    warmScopeRef.current = warmScope
-    warmedModeKeysRef.current.clear()
-  }
 
-  const rememberWarmMode = (mode: PrewarmTargetMode) => {
-    const key = getModeRenderKey(mode)
-    if (key) warmedModeKeysRef.current.add(key)
-  }
-  if (leftPreviewVisible) {
-    rememberWarmMode('preview')
-    if (viewMode === 'edit-preview') rememberWarmMode('edit-preview')
-    if (viewMode === 'dual-preview') rememberWarmMode('dual-preview')
-  }
-  if (viewMode === 'diff-preview') {
-    rememberWarmMode('diff-preview')
-  }
+  useEditorResourceLifecycle({
+    activeTab,
+    activeTabId: activeTabId ?? null,
+    dualRightTab,
+    rightTab,
+    viewMode,
+    editorVisible,
+    leftPreviewVisible,
+    activeDocumentFirstScreenReady,
+    activeDocumentFirstScreenReadyRef,
+    activePreviewPending: activePreview.pending,
+    rightPreviewPending: rightPreview.pending,
+    activeDiffLineCount,
+    modePrewarm,
+    modePerformancePolicy,
+    modeResourcePolicy,
+    viewModeUsage,
+    getModeRenderKey,
+    warmScope,
+    leftPreviewMounted,
+    rightPreviewMounted,
+    editorMounted,
+    diffMounted,
+    draftDecisionVersion,
+    setLeftPreviewMounted,
+    setRightPreviewMounted,
+    setEditorMounted,
+    setDiffMounted,
+    retainedRightTabRef,
+    leftPreviewDraftRef,
+    rightPreviewDraftRef,
+    leftPreviewRenderRef,
+    restoredPreviewKeysRef,
+  })
+  const previewRevealTimerRef = useRef<number | null>(null)
+  const activePreviewPendingRef = useRef(activePreview.pending)
+  activePreviewPendingRef.current = activePreview.pending
 
   const updateEditorHeading = useCallback((view: EditorView) => {
     const line = getEditorTopLine(view)
@@ -832,195 +481,49 @@ export function EditorArea() {
     SCROLL_SYNC_TOP_OFFSET,
   )
 
-  useEffect(() => {
-    const handleActivity = () => cancelModePrewarm('user-activity')
-    window.addEventListener('keydown', handleActivity, true)
-    window.addEventListener('pointerdown', handleActivity, true)
-    window.addEventListener('wheel', handleActivity, { capture: true, passive: true })
-    window.addEventListener('scroll', handleActivity, { capture: true, passive: true })
-    return () => {
-      window.removeEventListener('keydown', handleActivity, true)
-      window.removeEventListener('pointerdown', handleActivity, true)
-      window.removeEventListener('wheel', handleActivity, { capture: true })
-      window.removeEventListener('scroll', handleActivity, { capture: true })
-    }
-  }, [cancelModePrewarm])
-
-  useEffect(() => {
-    cancelModePrewarm('mode-change')
-  }, [viewMode, cancelModePrewarm])
-
-  useEffect(() => {
-    if (modePrewarm === 'off') setPrewarmedModeKeys({})
-  }, [modePrewarm])
-
-  useEffect(() => {
-    cancelModePrewarm('context-change')
-    setPrewarmedModeKeys({})
-  }, [activeTab?.id, activeTab?.content, activeTab?.originalContent, cancelModePrewarm, viewMode])
-
-  useEffect(() => {
-    const canPrewarm = modePrewarm !== 'off' && modeResourcePolicy !== 'memory'
-    if (!activeTab?.id || !canPrewarm) return
-    if (!activeDocumentFirstScreenReadyRef.current || !activeDocumentFirstScreenReady) return
-    if (activePreview.pending || rightPreview.pending) return
-
-    const target = getNextPrewarmTarget({
-      activeMode: viewMode,
-      contentLength: activeTab.content.length,
-      diffLineCount: activeDiffLineCount,
-      level: modePrewarm,
-      resolveKey: getModeRenderKey,
-      warmedKeys: new Set([
-        ...warmedModeKeysRef.current,
-        ...Object.values(prewarmedModeKeysRef.current).filter((key): key is string => Boolean(key)),
-      ]),
-      usage: viewModeUsage,
-    })
-    if (!target) return
-
-    cancelPendingPrewarm('schedule-replaced')
-    const scheduleId = `prewarm-${++prewarmScheduleSequenceRef.current}`
-    pendingPrewarmRef.current = { scheduleId, target }
-    const token = prewarmCancelRef.current
-    const timer = window.setTimeout(() => {
-      const idleSince = Date.now() - lastUserActivityAtRef.current
-      if (prewarmCancelRef.current !== token || idleSince < MODE_PREWARM_ACTIVITY_PAUSE) return
-      // Cancel previous idle callback before scheduling new one
-      if (idlePrewarmCancelRef.current) {
-        idlePrewarmCancelRef.current()
-        idlePrewarmCancelRef.current = null
-      }
-      idlePrewarmCancelRef.current = scheduleIdlePrewarm(() => {
-        idlePrewarmCancelRef.current = null
-        if (prewarmCancelRef.current !== token) return
-        const key = getModeRenderKey(target)
-        if (!key) return
-        if (pendingPrewarmRef.current?.scheduleId === scheduleId) {
-          pendingPrewarmRef.current = null
-        }
-        requestedPrewarmScheduleIdsRef.current[target] = scheduleId
-        setPrewarmedModeKeys((current) => (
-          current[target] === key
-            ? current
-            : { ...current, [target]: key }
-        ))
-      })
-    }, Math.max(MODE_PREWARM_IDLE_DELAY, MODE_PREWARM_ACTIVITY_PAUSE))
-
-    if (import.meta.env.DEV) {
-      eventMarker.mark('prewarm-schedule', {
-        target,
-        scheduleId,
-        delayMs: Math.max(MODE_PREWARM_IDLE_DELAY, MODE_PREWARM_ACTIVITY_PAUSE),
-      })
-    }
-
-    return () => window.clearTimeout(timer)
-  }, [
-    activeDiffLineCount,
-    activeDocumentFirstScreenReady,
-    activePreview.pending,
-    activeTab?.content.length,
-    activeTab?.id,
-    getModeRenderKey,
-    modePrewarm,
-    modeResourcePolicy,
-    cancelPendingPrewarm,
-    prewarmedModeKeys,
-    rightPreview.pending,
+  const readingPositionBridge = useReadingPositionBridge({
+    activeTabId,
     viewMode,
-    viewModeUsage,
-  ])
-
-  useEffect(() => {
-    const canPrewarm = modePrewarm !== 'off' && modeResourcePolicy !== 'memory'
-    if (!activeTab?.id || !canPrewarm) return
-    if (!activeDocumentFirstScreenReadyRef.current || !activeDocumentFirstScreenReady) return
-    const requestedModes = Object.keys(prewarmedModeKeys) as PrewarmTargetMode[]
-    if (requestedModes.length === 0) return
-    const now = Date.now()
-    const wantsLeft = requestedModes.some((mode) => mode === 'preview' || mode === 'edit-preview' || mode === 'dual-preview')
-    const wantsEditor = requestedModes.includes('edit-preview')
-    const wantsRight = requestedModes.includes('dual-preview')
-    const wantsDiff = requestedModes.includes('diff-preview')
-
-    if (wantsLeft && !leftPreviewVisible && !leftPreviewMountedRef.current) {
-      lastInstanceUseRef.current['left-preview'] = now
-      setResourceMounted('left-preview', true, activeTab.id)
-      const target = requestedModes.find((mode) => mode === 'preview' || mode === 'edit-preview' || mode === 'dual-preview')
-      if (import.meta.env.DEV) {
-        eventMarker.mark('prewarm-create', {
-          resource: 'left-preview',
-          target: target ?? null,
-          scheduleId: target ? requestedPrewarmScheduleIdsRef.current[target] ?? null : null,
-          phase: 'requested',
-        })
-      }
-    }
-
-    if (wantsEditor && !editorVisible && !editorMountedRef.current) {
-      lastInstanceUseRef.current.editor = now
-      setResourceMounted('editor', true, activeTab.id)
-      if (import.meta.env.DEV) {
-        eventMarker.mark('prewarm-create', {
-          resource: 'editor',
-          target: 'edit-preview',
-          scheduleId: requestedPrewarmScheduleIdsRef.current['edit-preview'] ?? null,
-          phase: 'requested',
-        })
-      }
-    }
-
-    if (wantsRight && viewMode !== 'dual-preview' && !rightPreviewMountedRef.current) {
-      const candidate = dualRightTab ?? activeTab
-      retainedRightTabRef.current = candidate
-      lastInstanceUseRef.current['right-preview'] = now
-      setResourceMounted('right-preview', true, candidate.id)
-      if (import.meta.env.DEV) {
-        eventMarker.mark('prewarm-create', {
-          resource: 'right-preview',
-          target: 'dual-preview',
-          scheduleId: requestedPrewarmScheduleIdsRef.current['dual-preview'] ?? null,
-          phase: 'requested',
-        })
-      }
-    }
-
-    if (wantsDiff && viewMode !== 'diff-preview' && !diffMountedRef.current) {
-      lastInstanceUseRef.current.diff = now
-      setResourceMounted('diff', true, activeTab.id)
-      if (import.meta.env.DEV) {
-        eventMarker.mark('prewarm-create', {
-          resource: 'diff',
-          target: 'diff-preview',
-          scheduleId: requestedPrewarmScheduleIdsRef.current['diff-preview'] ?? null,
-          phase: 'requested',
-        })
-      }
-      const decision = decideHiddenResource('diff', 'diff', activeTab.id, activeTab.content.length)
-      if (decision.action !== 'release') return
-      if (diffReleaseFrameRef.current !== null) window.cancelAnimationFrame(diffReleaseFrameRef.current)
-      diffReleaseFrameRef.current = window.requestAnimationFrame(() => {
-        diffReleaseFrameRef.current = null
-        if (viewModeRef.current === 'diff-preview' || instanceDocumentRef.current.diff !== activeTab.id) return
-        setResourceMounted('diff', false)
-      })
-    }
-  }, [activeDocumentFirstScreenReady, activeTab?.id, modePrewarm, prewarmedModeKeys, decideHiddenResource, setResourceMounted]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const getStoredPreviewTop = useCallback((tabId: string | null | undefined, pane: 'left' | 'right' = 'left') => {
-    if (!tabId) return 0
-    const position = useEditorStore.getState().viewMode === 'dual-preview'
-      ? readingPositionsRef.current.getForPane(tabId, pane)
-      : readingPositionsRef.current.get(tabId)
-    return position?.previewScrollTop ?? 0
-  }, [])
-
-  const getStoredEditorTop = useCallback((tabId: string | null | undefined) => {
-    if (!tabId) return 0
-    return readingPositionsRef.current.get(tabId)?.editorScrollTop ?? 0
-  }, [])
+    viewModeRef,
+    editorViewRef,
+    leftMarkdownPreviewRef,
+    rightMarkdownPreviewRef,
+    restoredPreviewKeysRef,
+    scrollSyncSessionRef,
+    clearPreviewSwitching,
+    setPreviewRestoreTick,
+    flushReadingPositions,
+    updateEditorHeading,
+    setTocFocus,
+  })
+  const {
+    readingPositionsRef,
+    isRestoringScrollRef,
+    getStoredPreviewTop,
+    getStoredEditorTop,
+    saveEditorPositionForTab,
+    savePreviewReadingPosition,
+    scheduleFlush,
+    restoreEditorReadingPosition,
+    restorePreviewReadingPosition,
+  } = readingPositionBridge
+  const previewSelectionBridge = usePreviewSelectionBridge({
+    activeTab,
+    rightTab,
+    leftPreviewRef,
+    rightPreviewRef,
+    leftMarkdownPreviewRef,
+    rightMarkdownPreviewRef,
+  })
+  const {
+    previewMenu,
+    closePreviewMenu,
+    handlePreviewContextMenu,
+    handleCopyPreviewSelection,
+    handleSelectAllPreview,
+    handleAddPreviewSelectionToAi,
+    handlePreviewAiAction,
+  } = previewSelectionBridge
 
   const leftPreviewMasked = Boolean(
     activeTab?.id
@@ -1038,163 +541,6 @@ export function EditorArea() {
     && restoredPreviewKeysRef.current.right !== rightTab.id
     && getStoredPreviewTop(rightTab.id, 'right') > 0
   )
-
-  const saveEditorPositionForTab = useCallback((tabId: string | null | undefined, view = editorViewRef.current) => {
-    if (!tabId || !view) return
-    const mainIndex = view.state.selection.ranges.indexOf(view.state.selection.main)
-    const ranges = view.state.selection.ranges.map((r) => ({
-      anchor: r.anchor,
-      head: r.head,
-    }))
-    readingPositionsRef.current.save(tabId, {
-      editorScrollTop: view.scrollDOM.scrollTop,
-      topLine: getEditorTopLine(view),
-      cursor: view.state.selection.main.head,
-      selection: { anchor: view.state.selection.main.anchor, head: view.state.selection.main.head },
-      ranges: ranges.length > 1 ? ranges : undefined,
-      mainIndex: ranges.length > 1 ? mainIndex : undefined,
-    })
-  }, [])
-
-  const savePreviewReadingPosition = useCallback((
-    tabId: string,
-    container: HTMLElement | null,
-    previewHandle: MarkdownPreviewHandle | null,
-    pane: 'left' | 'right' = 'left'
-  ) => {
-    if (isRestoringScrollRef.current) return
-    if (!container) return
-    const position = {
-      previewScrollTop: container.scrollTop,
-      topLine: previewHandle?.getLineForTop(container.scrollTop + SCROLL_SYNC_TOP_OFFSET),
-    }
-    if (viewModeRef.current === 'dual-preview') {
-      readingPositionsRef.current.saveForPane(tabId, pane, position)
-    } else {
-      readingPositionsRef.current.save(tabId, position)
-    }
-  }, [])
-
-  const withRestoreLock = useCallback((restore: () => void) => {
-    isRestoringScrollRef.current = true
-    restore()
-    if (restoreScrollFrameRef.current !== null) {
-      window.cancelAnimationFrame(restoreScrollFrameRef.current)
-    }
-    restoreScrollFrameRef.current = window.requestAnimationFrame(() => {
-      isRestoringScrollRef.current = false
-      restoreScrollFrameRef.current = null
-    })
-  }, [])
-
-  const scheduleFlush = useCallback(() => {
-    if (isRestoringScrollRef.current) return
-    if (flushTimerRef.current !== null) clearTimeout(flushTimerRef.current)
-    flushTimerRef.current = setTimeout(() => {
-      flushTimerRef.current = null
-      if (isRestoringScrollRef.current) return
-      const positions = readingPositionsRef.current
-      // 从 ReadingPositionSession 提取所有位置
-      const all: Record<string, ReadingPosition> = {}
-      const activeId = activeTab?.id
-      if (activeId) {
-        const editorPos = positions.get(activeId)
-        if (editorPos) all[activeId] = editorPos
-        const leftPos = positions.getForPane(activeId, 'left')
-        if (leftPos) all[`${activeId}:left`] = leftPos
-        const rightPos = positions.getForPane(activeId, 'right')
-        if (rightPos) all[`${activeId}:right`] = rightPos
-      }
-      if (Object.keys(all).length > 0) {
-        flushReadingPositions(all)
-      }
-    }, 500)
-  }, [activeTab?.id, flushReadingPositions])
-
-  const schedulePreviewReveal = useCallback((tabId?: string) => {
-    if (tabId) { clearPreviewSwitching(tabId) }
-    setPreviewRestoreTick((tick) => tick + 1)
-  }, [clearPreviewSwitching])
-
-  const restoreEditorReadingPosition = useCallback((tabId: string) => {
-    const view = editorViewRef.current
-    const position = readingPositionsRef.current.get(tabId)
-    if (!view || !position) return
-
-    if (editorRestoreFrameRef.current !== null) {
-      window.cancelAnimationFrame(editorRestoreFrameRef.current)
-    }
-    editorRestoreFrameRef.current = window.requestAnimationFrame(() => {
-      editorRestoreFrameRef.current = null
-      const currentMode = useEditorStore.getState().viewMode
-      if (editorViewRef.current !== view || (currentMode !== 'edit' && currentMode !== 'edit-preview')) return
-      // 优先使用 editorScrollTop 直接恢复，比 topLine + scrollIntoView 更精确
-      if (typeof position.editorScrollTop === 'number') {
-        view.scrollDOM.scrollTop = position.editorScrollTop
-      } else if (typeof position.topLine === 'number' && position.topLine <= view.state.doc.lines) {
-        const pos = view.state.doc.line(position.topLine).from
-        view.scrollDOM.scrollTop = Math.max(0, view.lineBlockAt(pos).top - SCROLL_SYNC_TOP_OFFSET)
-      }
-    })
-  }, [])
-
-  const restorePreviewReadingPosition = useCallback((
-    tabId: string,
-    container: HTMLElement | null,
-    pane: 'left' | 'right'
-  ) => {
-    const position = useEditorStore.getState().viewMode === 'dual-preview'
-      ? readingPositionsRef.current.getForPane(tabId, pane)
-      : readingPositionsRef.current.get(tabId)
-    if (!container) return
-    const previewHandle = pane === 'left' ? leftMarkdownPreviewRef.current : rightMarkdownPreviewRef.current
-    const lineTop = position?.previewScrollTop == null && position?.topLine != null
-      ? getPreviewTopForLine(container, position.topLine, previewHandle?.getTopForLine(position.topLine))
-      : undefined
-    const nextTop = position?.previewScrollTop
-      ?? (typeof lineTop === 'number' ? Math.max(0, lineTop - SCROLL_SYNC_TOP_OFFSET) : 0)
-    withRestoreLock(() => {
-      container.scrollTop = nextTop
-    })
-    restoredPreviewKeysRef.current[pane] = tabId
-    schedulePreviewReveal(tabId)
-  }, [schedulePreviewReveal, withRestoreLock])
-
-  useEffect(() => {
-    if (!activeTab?.id || (viewMode !== 'edit' && viewMode !== 'edit-preview')) return
-    let view: EditorView | null = null
-    const handleScroll = () => {
-      const currentMode = useEditorStore.getState().viewMode
-      if (currentMode !== 'edit' && currentMode !== 'edit-preview') return
-      if (scrollSyncSessionRef.current.source !== 'preview') {
-        saveEditorPositionForTab(activeTab.id)
-        scheduleFlush()
-        setTocFocus('editor')
-      }
-      if (editorTocFrameRef.current !== null || !view) return
-      editorTocFrameRef.current = window.requestAnimationFrame(() => {
-        editorTocFrameRef.current = null
-        if (view) updateEditorHeading(view)
-      })
-    }
-    let frame = window.requestAnimationFrame(() => {
-      view = editorViewRef.current
-      if (!view) return
-      updateEditorHeading(view)
-      view.scrollDOM.addEventListener('scroll', handleScroll, { passive: true })
-    })
-
-    return () => {
-      window.cancelAnimationFrame(frame)
-      if (view) {
-        view.scrollDOM.removeEventListener('scroll', handleScroll)
-      }
-      if (editorTocFrameRef.current !== null) {
-        window.cancelAnimationFrame(editorTocFrameRef.current)
-        editorTocFrameRef.current = null
-      }
-    }
-  }, [activeTab?.id, saveEditorPositionForTab, scheduleFlush, updateEditorHeading, viewMode])
 
   // 预览内容更新（版本变化）只恢复预览自身位置，保证右侧渲染稳定；
   // 绝不在内容更新时反向恢复编辑器位置——否则右侧渲染会把左侧视口拉走
@@ -1228,68 +574,6 @@ export function EditorArea() {
     restoreEditorReadingPosition(activeTab.id)
   }, [activeTab?.id, restoreEditorReadingPosition, viewMode])
 
-  // 切换标签页时立即 flush 上一个标签页的位置
-  useEffect(() => {
-    const prevId = previousActiveTabIdRef.current
-    previousActiveTabIdRef.current = activeTabId ?? null
-    if (!prevId || prevId === activeTabId) return
-    // 取消 debounce，立即 flush
-    if (flushTimerRef.current !== null) {
-      clearTimeout(flushTimerRef.current)
-      flushTimerRef.current = null
-    }
-    const positions = readingPositionsRef.current
-    const all: Record<string, ReadingPosition> = {}
-    const editorPos = positions.get(prevId)
-    if (editorPos) all[prevId] = editorPos
-    const leftPos = positions.getForPane(prevId, 'left')
-    if (leftPos) all[`${prevId}:left`] = leftPos
-    const rightPos = positions.getForPane(prevId, 'right')
-    if (rightPos) all[`${prevId}:right`] = rightPos
-    if (Object.keys(all).length > 0) {
-      flushReadingPositions(all)
-    }
-  }, [activeTabId, flushReadingPositions])
-
-  // 退出/隐藏时 flush 所有位置
-  useEffect(() => {
-    const handleBeforeUnload = () => {
-      if (flushTimerRef.current !== null) {
-        clearTimeout(flushTimerRef.current)
-        flushTimerRef.current = null
-      }
-      const positions = readingPositionsRef.current
-      const all: Record<string, ReadingPosition> = {}
-      const activeId = activeTab?.id
-      if (activeId) {
-        const editorPos = positions.get(activeId)
-        if (editorPos) all[activeId] = editorPos
-        const leftPos = positions.getForPane(activeId, 'left')
-        if (leftPos) all[`${activeId}:left`] = leftPos
-        const rightPos = positions.getForPane(activeId, 'right')
-        if (rightPos) all[`${activeId}:right`] = rightPos
-      }
-      if (Object.keys(all).length > 0) {
-        flushReadingPositions(all)
-      }
-    }
-    window.addEventListener('beforeunload', handleBeforeUnload)
-    const handleVisibility = () => {
-      if (document.visibilityState === 'hidden') handleBeforeUnload()
-    }
-    document.addEventListener('visibilitychange', handleVisibility)
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload)
-      document.removeEventListener('visibilitychange', handleVisibility)
-    }
-  }, [activeTab?.id, flushReadingPositions])
-
-  const clearPreviewContextHighlight = useCallback(() => {
-    if (typeof CSS !== 'undefined' && CSS.highlights) {
-      CSS.highlights.delete(PREVIEW_CONTEXT_HIGHLIGHT)
-    }
-  }, [])
-
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && !e.altKey) {
@@ -1320,8 +604,6 @@ export function EditorArea() {
     window.addEventListener('wheel', handler, { passive: false, capture: true })
     return () => window.removeEventListener('wheel', handler, { capture: true })
   }, [])
-
-  useEffect(() => clearPreviewContextHighlight, [clearPreviewContextHighlight])
 
   /** 取消正在写编辑器 scrollTop 的 follower（预览滚动驱动方向） */
   const cancelEditorFollower = useCallback(() => {
@@ -1357,27 +639,10 @@ export function EditorArea() {
 
   useEffect(() => () => {
     scrollSyncSessionRef.current.dispose()
-    clearAllTtls()
     cancelEditorFollower()
     cancelPreviewFollower()
     cancelEditorHeadingJump()
     scrollFollowerGenerationRef.current += 1
-    if (idlePrewarmCancelRef.current) {
-      idlePrewarmCancelRef.current()
-      idlePrewarmCancelRef.current = null
-    }
-    if (diffReleaseFrameRef.current !== null) {
-      window.cancelAnimationFrame(diffReleaseFrameRef.current)
-      diffReleaseFrameRef.current = null
-    }
-    if (restoreScrollFrameRef.current !== null) {
-      window.cancelAnimationFrame(restoreScrollFrameRef.current)
-      restoreScrollFrameRef.current = null
-    }
-    if (editorRestoreFrameRef.current !== null) {
-      window.cancelAnimationFrame(editorRestoreFrameRef.current)
-      editorRestoreFrameRef.current = null
-    }
     if (editorScrollFrameRef.current !== null) {
       window.cancelAnimationFrame(editorScrollFrameRef.current)
       editorScrollFrameRef.current = null
@@ -1386,15 +651,6 @@ export function EditorArea() {
       window.cancelAnimationFrame(previewScrollFrameRef.current)
       previewScrollFrameRef.current = null
     }
-    if (editorTocFrameRef.current !== null) {
-      window.cancelAnimationFrame(editorTocFrameRef.current)
-      editorTocFrameRef.current = null
-    }
-    retainedRightTabRef.current = null
-    leftPreviewRenderRef.current = { content: '', filePath: undefined }
-    instanceDocumentRef.current = {}
-    prewarmedModeKeysRef.current = {}
-    warmedModeKeysRef.current.clear()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleEditorChange = useCallback(
@@ -1961,213 +1217,6 @@ export function EditorArea() {
   )
   const fullscreenTocWidthClass = viewMode === 'dual-preview' ? 'gm-fullscreen-toc-adjacent--dual' : ''
 
-  const getPreviewSelectionLineRange = useCallback((selection: Selection, container: HTMLElement): { startLine?: number, endLine?: number } => {
-    if (!selection || selection.rangeCount === 0) return {}
-
-    const range = selection.getRangeAt(0)
-
-    // 向上查找带 data-md-line 的元素
-    const findLineElement = (node: Node | null): HTMLElement | null => {
-      let current = node instanceof HTMLElement ? node : node?.parentElement
-      while (current && current !== container) {
-        if (current.hasAttribute?.('data-md-line')) return current
-        current = current.parentElement
-      }
-      return null
-    }
-
-    const startEl = findLineElement(range.startContainer)
-    const endEl = findLineElement(range.endContainer)
-    const readLine = (element: HTMLElement | null, attribute: 'data-md-line' | 'data-md-end-line') => {
-      const value = Number(element?.getAttribute(attribute))
-      return Number.isFinite(value) && value > 0 ? value : undefined
-    }
-    const firstLine = readLine(startEl, 'data-md-line')
-    const lastLine = readLine(endEl, 'data-md-end-line') ?? readLine(endEl, 'data-md-line')
-    if (firstLine === undefined) return { startLine: lastLine, endLine: lastLine }
-    if (lastLine === undefined) return { startLine: firstLine, endLine: firstLine }
-    return {
-      startLine: Math.min(firstLine, lastLine),
-      endLine: Math.max(firstLine, lastLine),
-    }
-  }, [])
-
-  const handlePreviewContextMenu = useCallback((
-    e: React.MouseEvent<HTMLDivElement>,
-    pane: 'left' | 'right'
-  ) => {
-    e.preventDefault()
-    // 优先读取统一 Range 选区快照（虚拟化下 DOM 卸载不丢失）
-    const previewHandle = pane === 'left' ? leftMarkdownPreviewRef.current : rightMarkdownPreviewRef.current
-    const snapshot = previewHandle?.getSelection() ?? null
-    let selectedText = snapshot?.text ?? ''
-    let startLine = snapshot?.startLine
-    let endLine = snapshot?.endLine
-    const selectionFrom = snapshot?.from
-    const selectionTo = snapshot?.to
-
-    // 非接管区域（KaTeX / 代码高亮等）回退原生 DOM Selection
-    if (!selectedText) {
-      const container = pane === 'left' ? leftPreviewRef.current : rightPreviewRef.current
-      const selection = window.getSelection()
-      if (container && selection && selection.rangeCount > 0
-        && container.contains(selection.anchorNode) && container.contains(selection.focusNode)) {
-        selectedText = selection.toString()
-        const lineRange = getPreviewSelectionLineRange(selection, container)
-        startLine = lineRange.startLine
-        endLine = lineRange.endLine
-      }
-      clearPreviewContextHighlight()
-      if (selectedText && typeof CSS !== 'undefined' && CSS.highlights && selection && selection.rangeCount > 0) {
-        CSS.highlights.set(PREVIEW_CONTEXT_HIGHLIGHT, new Highlight(selection.getRangeAt(0).cloneRange()))
-      }
-    }
-
-    setPreviewMenu({ x: e.clientX, y: e.clientY, selectedText, startLine, endLine, selectionFrom, selectionTo, pane })
-  }, [clearPreviewContextHighlight, getPreviewSelectionLineRange])
-
-  const handleCopyPreviewSelection = useCallback(() => {
-    if (previewMenu?.selectedText) {
-      void navigator.clipboard.writeText(previewMenu.selectedText)
-    }
-    clearPreviewContextHighlight()
-    setPreviewMenu(null)
-  }, [clearPreviewContextHighlight, previewMenu])
-
-  const handleSelectAllPreview = useCallback(() => {
-    // 逻辑全文选择：selectionRange = 文档开始 → 文档结束，不依赖 DOM Selection
-    const previewHandle = previewMenu?.pane === 'right' ? rightMarkdownPreviewRef.current : leftMarkdownPreviewRef.current
-    previewHandle?.selectAll()
-    clearPreviewContextHighlight()
-    setPreviewMenu(null)
-  }, [clearPreviewContextHighlight, previewMenu])
-
-  const getPreviewSourceSelection = useCallback((): PreviewSelectionSource | null => {
-    if (!previewMenu?.selectedText) return null
-
-    const tab = previewMenu.pane === 'right' ? rightTab : activeTab
-    if (!tab) return null
-
-    const selectedText = previewMenu.selectedText.trim()
-    if (!selectedText) return null
-
-    const content = tab.content
-
-    // 统一 Range 快照：offset 即精确源码位置，无需文本回溯推测
-    if (
-      typeof previewMenu.selectionFrom === 'number'
-      && typeof previewMenu.selectionTo === 'number'
-      && previewMenu.selectionTo > previewMenu.selectionFrom
-      && previewMenu.selectionTo <= content.length
-    ) {
-      return {
-        title: tab.title,
-        filePath: tab.filePath,
-        text: content.slice(previewMenu.selectionFrom, previewMenu.selectionTo),
-        startLine: previewMenu.startLine,
-        endLine: previewMenu.endLine,
-        selectionFrom: previewMenu.selectionFrom,
-        selectionTo: previewMenu.selectionTo,
-      }
-    }
-    const normalizedSelectedText = selectedText.replace(/\r\n/g, '\n')
-    const lines = content.split('\n')
-    const startLine = previewMenu.startLine
-    const endLine = previewMenu.endLine
-
-    const findUniqueRange = (source: string, needle: string, baseOffset = 0) => {
-      const variants = [...new Set([needle, needle.replace(/\n/g, '\r\n')])]
-      const matches = variants.flatMap((variant) => {
-        if (!variant) return []
-        const indexes: number[] = []
-        let index = source.indexOf(variant)
-        while (index >= 0 && indexes.length < 2) {
-          indexes.push(index)
-          index = source.indexOf(variant, index + variant.length)
-        }
-        return indexes.map((from) => ({ from, to: from + variant.length }))
-      })
-      const uniqueMatches = matches.filter((match, index) => (
-        matches.findIndex((candidate) => candidate.from === match.from && candidate.to === match.to) === index
-      ))
-      return uniqueMatches.length === 1
-        ? { from: baseOffset + uniqueMatches[0].from, to: baseOffset + uniqueMatches[0].to }
-        : null
-    }
-
-    const offsetForLine = (line: number) => {
-      let offset = 0
-      for (let i = 0; i < Math.max(0, line - 1); i++) {
-        offset += lines[i].length + 1
-      }
-      return offset
-    }
-
-    let range: { from: number; to: number } | null = null
-    let markdownText = ''
-
-    if (startLine && endLine) {
-      const safeStart = Math.max(1, Math.min(startLine, lines.length))
-      const safeEnd = Math.max(safeStart, Math.min(endLine, lines.length))
-      const from = offsetForLine(safeStart)
-      const to = offsetForLine(safeEnd) + lines[safeEnd - 1].length
-      markdownText = content.slice(from, to)
-      range = findUniqueRange(markdownText, normalizedSelectedText, from)
-      if (!range) {
-        range = { from, to }
-      }
-    }
-
-    range = range || findUniqueRange(content, normalizedSelectedText)
-
-    const sourceText = range ? content.slice(range.from, range.to) : normalizedSelectedText
-
-    return {
-      title: tab.title,
-      filePath: tab.filePath,
-      text: sourceText || markdownText || normalizedSelectedText,
-      startLine,
-      endLine,
-      selectionFrom: range?.from,
-      selectionTo: range?.to,
-    }
-  }, [activeTab, previewMenu, rightTab])
-
-  const handleAddPreviewSelectionToAi = useCallback(() => {
-    if (!previewMenu?.selectedText) return
-    const sourceSelection = getPreviewSourceSelection()
-    if (!sourceSelection) return
-    addSelectionContextTag({
-      title: sourceSelection.title,
-      filePath: sourceSelection.filePath,
-      text: sourceSelection.text,
-      startLine: sourceSelection.startLine,
-      endLine: sourceSelection.endLine,
-      selectionFrom: sourceSelection.selectionFrom,
-      selectionTo: sourceSelection.selectionTo,
-    })
-    clearPreviewContextHighlight()
-    setPreviewMenu(null)
-  }, [previewMenu, clearPreviewContextHighlight, getPreviewSourceSelection])
-
-  const handlePreviewAiAction = useCallback((prompt: string) => {
-    if (!previewMenu?.selectedText) return
-    const sourceSelection = getPreviewSourceSelection()
-    if (!sourceSelection) return
-    addSelectionContextTag({
-      title: sourceSelection.title,
-      filePath: sourceSelection.filePath,
-      text: sourceSelection.text,
-      startLine: sourceSelection.startLine,
-      endLine: sourceSelection.endLine,
-      selectionFrom: sourceSelection.selectionFrom,
-      selectionTo: sourceSelection.selectionTo,
-    })
-    setAiShortcutPrompt(prompt)
-    clearPreviewContextHighlight()
-    setPreviewMenu(null)
-  }, [previewMenu, clearPreviewContextHighlight, getPreviewSourceSelection])
-
   // Drag & drop for dual-preview right pane
   const handleRightPaneDragOver = useCallback((e: React.DragEvent) => {
     const hasTab = e.dataTransfer.types.includes('application/x-guanmo-tab')
@@ -2241,10 +1290,59 @@ export function EditorArea() {
     }
   }, [activeTab?.content.length, activeTab?.id, markActiveDocumentFirstScreenReady, modePerformancePolicy, previewContentReady, viewMode])
 
+  const schedulePendingPreviewReveal = useCallback(() => {
+    if (previewRevealTimerRef.current !== null) window.clearTimeout(previewRevealTimerRef.current)
+    previewRevealTimerRef.current = window.setTimeout(() => {
+      previewRevealTimerRef.current = null
+      const editorState = useEditorStore.getState()
+      const reveal = editorState.pendingReveal
+      const tab = editorState.tabs.find((item) => item.id === editorState.activeTabId)
+      if (
+        reveal?.surface !== 'preview'
+        || !tab
+        || reveal.tabId !== editorState.activeTabId
+        || editorState.viewMode === 'edit'
+        || activePreviewPendingRef.current
+      ) return
+      leftMarkdownPreviewRef.current?.revealSourceLines({
+        documentKey: tab.id,
+        documentVersion: getContentSignature(tab.content),
+        startLine: reveal.startLine,
+        endLine: reveal.endLine,
+        onApplied: () => {
+          if (useEditorStore.getState().pendingReveal === reveal) clearPendingReveal()
+        },
+      })
+    }, 0)
+  }, [clearPendingReveal])
+
   const handlePreviewRenderComplete = useCallback(() => {
     markStartupPoint('preview-render-complete', { mode: viewMode })
     eventMarker.mark('preview-render-complete', { mode: viewMode })
-  }, [viewMode])
+    const pending = useReadingMarksStore.getState().pendingNavigation
+    if (pending && activeTab?.filePath && isSameFilePath(activeTab.filePath, pending.documentPath)) {
+      if (leftMarkdownPreviewRef.current?.navigateToReadingMark(pending.markId)) clearMarkNavigation()
+    }
+    schedulePendingPreviewReveal()
+  }, [activeTab?.filePath, clearMarkNavigation, schedulePendingPreviewReveal, viewMode])
+
+  useEffect(() => {
+    if (pendingReveal?.surface !== 'preview' || pendingReveal.tabId !== activeTab?.id || viewMode === 'edit') return
+    schedulePendingPreviewReveal()
+  }, [activeTab?.id, pendingReveal, previewContentReady, schedulePendingPreviewReveal, viewMode])
+
+  useEffect(() => () => {
+    if (previewRevealTimerRef.current !== null) window.clearTimeout(previewRevealTimerRef.current)
+  }, [])
+
+  useEffect(() => {
+    const pending = pendingMarkNavigation
+    if (!pending || viewMode === 'edit' || !activeTab?.filePath || !isSameFilePath(activeTab.filePath, pending.documentPath)) return
+    const timer = window.setTimeout(() => {
+      if (leftMarkdownPreviewRef.current?.navigateToReadingMark(pending.markId)) clearMarkNavigation()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [activeReadingMarks, activeTab?.filePath, clearMarkNavigation, pendingMarkNavigation, previewContentReady, viewMode])
 
   return (
     <div
@@ -2252,6 +1350,7 @@ export function EditorArea() {
       style={isFullscreen ? { '--gm-fullscreen-content-padding': `${fullscreenContentPadding}px` } as CSSProperties : undefined}
     >
       {!isFullscreen && <TabBar />}
+      <AnnotationHoverOverlay ref={annotationOverlayRef} onUpdate={handleOverlayUpdate} onDelete={handleOverlayDelete} />
 
       <div className="flex-1 flex overflow-hidden relative">
         {tabs.length === 0 ? (
@@ -2346,6 +1445,11 @@ export function EditorArea() {
                     onFirstVisible={() => handlePreviewFirstVisible(activeTab?.id ?? null)}
                     onRenderComplete={handlePreviewRenderComplete}
                     resource="left-preview"
+                    readingMarks={activeReadingMarks}
+                    onCreateReadingMark={readingMarksEnabled ? handleCreateReadingMark : undefined}
+                    onUpdateReadingMark={readingMarksEnabled ? handleUpdateReadingMark : undefined}
+                    onDeleteReadingMark={readingMarksEnabled ? handleDeleteReadingMark : undefined}
+                    annotationOverlayRef={readingMarksEnabled ? annotationOverlayRef : undefined}
                   />
                 </Suspense>
               </div>
@@ -2394,6 +1498,11 @@ export function EditorArea() {
                     onDraftStateChange={handleRightDraftStateChange}
                     isVisible={viewMode === 'dual-preview'}
                     resource="right-preview"
+                    readingMarks={rightReadingMarks}
+                    onCreateReadingMark={readingMarksEnabled ? handleCreateRightReadingMark : undefined}
+                    onUpdateReadingMark={readingMarksEnabled ? handleUpdateRightReadingMark : undefined}
+                    onDeleteReadingMark={readingMarksEnabled ? handleDeleteRightReadingMark : undefined}
+                    annotationOverlayRef={readingMarksEnabled ? annotationOverlayRef : undefined}
                   />
                 </Suspense>
               ) : (
@@ -2430,10 +1539,7 @@ export function EditorArea() {
           <SearchOverlay onClose={() => setSearchOpen(false)} {...getSearchProps()} />
         )}
         {previewMenu && (
-          <ContextMenu position={previewMenu} onClose={() => {
-            clearPreviewContextHighlight()
-            setPreviewMenu(null)
-          }} minWidth={176} maxWidth={176}>
+          <ContextMenu position={previewMenu} onClose={closePreviewMenu} minWidth={176} maxWidth={176}>
             <ContextMenuGroupTitle>预览操作</ContextMenuGroupTitle>
             <ContextMenuItem onClick={handleCopyPreviewSelection} disabled={!previewMenu.selectedText}>
               复制
@@ -2495,48 +1601,6 @@ function resolveActiveHeadingByScroll(
     return toc.find((item) => item.line <= halfLine)?.id ?? null
   }
   return null
-}
-
-function getPreviewTopForLine(
-  container: HTMLElement,
-  line: number,
-  estimatedTop?: number
-): number | undefined {
-  let previousElement: HTMLElement | undefined
-  let previousLine = -1
-  let nextElement: HTMLElement | undefined
-  let nextLine = Number.POSITIVE_INFINITY
-
-  for (const element of container.querySelectorAll<HTMLElement>('[data-md-line]')) {
-    const elementLine = Number(element.dataset.mdLine)
-    if (!Number.isFinite(elementLine) || elementLine < 1) continue
-    if (elementLine <= line && elementLine > previousLine) {
-      previousElement = element
-      previousLine = elementLine
-    } else if (elementLine > line && elementLine < nextLine) {
-      nextElement = element
-      nextLine = elementLine
-    }
-  }
-
-  const anchorElement = previousElement ?? nextElement
-  if (!anchorElement) return estimatedTop
-  const containerTop = container.getBoundingClientRect().top
-  const anchorRect = anchorElement.getBoundingClientRect()
-  const anchorTop = anchorRect.top - containerTop + container.scrollTop
-  const endLine = Number(anchorElement.dataset.mdEndLine)
-  if (previousElement && Number.isFinite(endLine) && endLine > previousLine && line <= endLine) {
-    const progress = (line - previousLine) / (endLine - previousLine)
-    return anchorTop + anchorRect.height * progress
-  }
-
-  if (previousElement && nextElement && nextLine !== previousLine) {
-    const nextTop = nextElement.getBoundingClientRect().top - containerTop + container.scrollTop
-    const progress = (line - previousLine) / (nextLine - previousLine)
-    return anchorTop + (nextTop - anchorTop) * Math.max(0, Math.min(1, progress))
-  }
-
-  return estimatedTop ?? anchorTop
 }
 
 function reportPreviewSwitchPerformance(tabId: string, restoreStartedAt: number) {

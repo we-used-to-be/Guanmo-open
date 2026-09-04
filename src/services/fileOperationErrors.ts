@@ -1,4 +1,10 @@
+import { formatFileSize, parseFileTooLargeError } from '@/services/markdownFileOpenPolicy'
+
 export function describeFileOperationError(err: unknown, fallback: string): string {
+  const tooLarge = parseFileTooLargeError(err)
+  if (tooLarge) {
+    return `文件过大，当前最多支持 ${formatFileSize(tooLarge.limitBytes)}`
+  }
   const message = err instanceof Error ? err.message : String(err)
   const lower = message.toLowerCase()
   if (

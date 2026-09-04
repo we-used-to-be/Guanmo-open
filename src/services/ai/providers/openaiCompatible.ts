@@ -9,7 +9,7 @@ import type {
 } from '../types'
 import { AiAuthError, AiNetworkError, AiError } from '../errors'
 import { parseSSEStream } from '../stream'
-import { ExternalHttpError, externalFetch, UnsupportedCapabilityError } from '../../externalHttp'
+import { ExternalHttpError, externalFetch, UnsupportedCapabilityError } from '@/services/externalHttp'
 import { applyReasoningMode, removeReasoningParams } from '../reasoningAdapter'
 
 function isLocalApi(baseUrl: string): boolean {

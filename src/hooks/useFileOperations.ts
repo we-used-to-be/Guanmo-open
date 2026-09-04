@@ -7,6 +7,7 @@ import { isSameFilePath } from '@/services/pathIdentity'
 import { toast } from '@/services/toast'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { isTauri } from '@/hooks/useTauri'
+import { getRuntimeCapabilities } from '@/services/runtimeCapabilities'
 
 const AUTO_SAVE_INDEX_DELAY = 5000
 
@@ -36,7 +37,7 @@ export function useFileOperations() {
       }
     } catch (err) {
       console.error('Open file failed:', err)
-      toast.error('打开文件失败')
+      toast.error(describeFileOperationError(err, '打开文件失败'))
     }
   }, [addTab, tabs])
 
@@ -76,7 +77,7 @@ export function useFileOperations() {
       autoSaveTimersRef.current.clear()
     }
 
-    if (!isTauri() || !editor.autoSave) {
+    if ((!isTauri() && !getRuntimeCapabilities().browserFileWrite) || !editor.autoSave) {
       clearAutoSaveTimers()
       autoSaveRetriesRef.current.clear()
       return

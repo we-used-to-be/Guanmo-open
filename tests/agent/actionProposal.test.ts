@@ -49,6 +49,19 @@ describe('Agent 行动安全底座', () => {
     })
   })
 
+  it('行动提案消息通过 chatStore action 写入', () => {
+    const proposal = makeProposal()
+    useChatStore.getState().addMessage({
+      id: 'assistant-1',
+      role: 'assistant',
+      content: '确认',
+    })
+
+    useChatStore.getState().updateMessageActionProposal('assistant-1', proposal)
+
+    expect(useChatStore.getState().messages[0].actionProposal).toEqual(proposal)
+  })
+
   it('工具注册表声明 effect、capability、确认策略与撤销说明', () => {
     expect(getTool('search_knowledge')).toMatchObject({ effect: 'read', confirmationPolicy: 'never' })
     expect(getTool('replace_current_tab_text')).toMatchObject({ effect: 'write_local', confirmationPolicy: 'required' })

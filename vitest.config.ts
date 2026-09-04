@@ -7,6 +7,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      '@settings-entry': path.resolve(__dirname, './src/web/WebSettingsPage.tsx'),
       '@scripts': path.resolve(__dirname, './scripts'),
       'animal-island-ui': path.resolve(__dirname, './src/vendor/animal-island-ui/index.ts'),
     },

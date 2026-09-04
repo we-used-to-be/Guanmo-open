@@ -5,10 +5,10 @@ import type { AgentStep, AgentTaskContext } from '@/services/agent/types'
 import type { ContextTag } from '@/types/contextTag'
 import { MAX_CONTEXT_TAGS } from '@/types/contextTag'
 import {
-  persistChatSession,
-  persistChatMessage,
-  loadRecentChatTurns,
-} from '@/services/database/persistence'
+  loadRecentConversationTurns,
+  persistConversationSession,
+  type LoadedConversationMessageRow,
+} from '@/services/agent/conversationCommands'
 import {
   decodeReadingScope,
   decodeReadingSourceCoverage,
@@ -74,6 +74,7 @@ interface ChatState {
   addMessage: (msg: ChatMessage) => void
   updateLastAssistantMessage: (content: string) => void
   updateMessageContent: (id: string, content: string) => void
+  updateMessageActionProposal: (id: string | undefined, actionProposal: ActionProposal, error?: string) => void
   updateMessageContextMeta: (id: string, contextMeta: ChatMessageContextMeta) => void
   updateMessageSources: (id: string, sources: ChatMessageSource[]) => void
   updateMessageReferencedSourceIds: (id: string, referencedSourceIds: SourceReferenceId[]) => void
@@ -164,6 +165,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!current || current.content === content) return s
     return {
       messages: s.messages.map((msg) => (msg.id === id ? { ...msg, content } : msg)),
+    }
+  }),
+
+  updateMessageActionProposal: (id, actionProposal, error) => set((s) => {
+    if (!id) return s
+    return {
+      ...(error === undefined ? {} : { error }),
+      messages: s.messages.map((msg) => (msg.id === id ? { ...msg, actionProposal } : msg)),
     }
   }),
 
@@ -430,10 +439,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       ? (firstUserMessage.displayContent || firstUserMessage.content).slice(0, 30).replace(/\n/g, ' ')
       : '新对话'
 
-    await persistChatSession({ id: sessionId, title })
-
-    for (const msg of normalizedVisibleMessages) {
-      await persistChatMessage({
+    await persistConversationSession(
+      { id: sessionId, title },
+      normalizedVisibleMessages.map((msg) => ({
         id: msg.id!,
         sessionId,
         parentId: msg.parentId,
@@ -441,8 +449,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         content: msg.content,
         metadata: encodeChatMessageMetadata(msg),
         createdAt: msg.timestamp,
-      })
-    }
+      })),
+    )
 
     if (!get().hasMoreHistory) {
       set({ hasMoreHistory: true })
@@ -453,7 +461,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const state = get()
     if (!state.hasMoreHistory) return
 
-    const rows = await loadRecentChatTurns(state.historyOffset, HISTORY_QA_GROUP_SIZE)
+    const rows = await loadRecentConversationTurns(state.historyOffset, HISTORY_QA_GROUP_SIZE)
 
     if (rows.length === 0) {
       set({ hasMoreHistory: false })
@@ -473,7 +481,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 }))
 
-type LoadedChatMessageRow = Awaited<ReturnType<typeof loadRecentChatTurns>>[number]
+type LoadedChatMessageRow = LoadedConversationMessageRow
 
 function buildCompleteQaMessages(rows: LoadedChatMessageRow[]): Promise<ChatMessage[]> {
   return import('@/services/agent/actionProposal').then(({ decodeActionProposal, decodeEditConfirmation }) =>

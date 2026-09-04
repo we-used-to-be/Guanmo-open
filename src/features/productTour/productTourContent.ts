@@ -16,7 +16,7 @@ export const PRODUCT_TOUR_STEPS: ProductTourStep[] = [
       '[data-product-tour="open-folder"]',
     ],
     title: '打开文件 / 文件夹',
-    content: '点击这里打开文件或文件夹。\n你也可以直接拖入 Markdown 文件，或将观墨设为默认 .md 应用后双击打开。',
+    content: '点击这里打开文件或文件夹。\n网页端可以直接拖入 Markdown 文件；桌面端还可以将观墨设为默认 .md 应用后双击打开。',
     placement: 'right',
   },
   {

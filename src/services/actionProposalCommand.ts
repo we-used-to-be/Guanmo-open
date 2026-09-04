@@ -98,9 +98,8 @@ export async function executeActionProposalCommand(proposal: ActionProposal): Pr
 
 export async function confirmActionProposalCommand(id: string): Promise<void> {
   let executing: ActionProposal | undefined
-  useChatStore.setState((state) => {
-    const proposal = state.messages.find((item) => item.actionProposal?.id === id)?.actionProposal
-    if (!proposal || proposal.status !== 'pending') return state
+  const proposal = useChatStore.getState().messages.find((item) => item.actionProposal?.id === id)?.actionProposal
+  if (proposal?.status === 'pending') {
     const now = Date.now()
     executing = {
       ...proposal,
@@ -108,31 +107,21 @@ export async function confirmActionProposalCommand(id: string): Promise<void> {
       updatedAt: now,
       ...(now > proposal.expiresAt ? { errorCategory: 'expired' as const } : {}),
     }
-    return {
-      messages: state.messages.map((item) => item.id === proposal.messageId
-        ? { ...item, actionProposal: executing }
-        : item),
-    }
-  })
+    useChatStore.getState().updateMessageActionProposal(proposal.messageId, executing)
+  }
   if (!executing || executing.status !== 'executing') {
     await useChatStore.getState().saveCurrentSession().catch(() => undefined)
     return
   }
   try {
     const result = await executeActionProposalCommand(executing)
-    useChatStore.setState((state) => {
-      const completed: ActionProposal = {
-        ...executing!,
-        status: result.status === 'completed' ? 'completed' : 'rejected',
-        updatedAt: Date.now(),
-        ...(result.status === 'cancelled' ? { errorCategory: 'cancelled' as const } : {}),
-      }
-      return {
-        messages: state.messages.map((item) => item.id === completed.messageId
-          ? { ...item, actionProposal: completed }
-          : item),
-      }
-    })
+    const completed: ActionProposal = {
+      ...executing,
+      status: result.status === 'completed' ? 'completed' : 'rejected',
+      updatedAt: Date.now(),
+      ...(result.status === 'cancelled' ? { errorCategory: 'cancelled' as const } : {}),
+    }
+    useChatStore.getState().updateMessageActionProposal(completed.messageId, completed)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     const errorCategory: ActionProposal['errorCategory'] = /来源消息已变化/.test(message)
@@ -140,20 +129,13 @@ export async function confirmActionProposalCommand(id: string): Promise<void> {
       : /尚未注册|功能开发中/.test(message)
         ? 'unsupported'
         : 'execution_failed'
-    useChatStore.setState((state) => {
-      const failed: ActionProposal = {
-        ...executing!,
-        status: 'failed',
-        updatedAt: Date.now(),
-        errorCategory,
-      }
-      return {
-        error: `行动未执行：${message}`,
-        messages: state.messages.map((item) => item.id === failed.messageId
-          ? { ...item, actionProposal: failed }
-          : item),
-      }
-    })
+    const failed: ActionProposal = {
+      ...executing,
+      status: 'failed',
+      updatedAt: Date.now(),
+      errorCategory,
+    }
+    useChatStore.getState().updateMessageActionProposal(failed.messageId, failed, `行动未执行：${message}`)
   }
   await useChatStore.getState().saveCurrentSession().catch((error) => {
     console.warn('[Chat] save action confirmation failed:', error)
@@ -161,16 +143,11 @@ export async function confirmActionProposalCommand(id: string): Promise<void> {
 }
 
 export function rejectActionProposalCommand(id: string): void {
-  useChatStore.setState((state) => {
-    const proposal = state.messages.find((item) => item.actionProposal?.id === id)?.actionProposal
-    if (!proposal || proposal.status !== 'pending') return state
+  const proposal = useChatStore.getState().messages.find((item) => item.actionProposal?.id === id)?.actionProposal
+  if (proposal?.status === 'pending') {
     const rejected: ActionProposal = { ...proposal, status: 'rejected', updatedAt: Date.now() }
-    return {
-      messages: state.messages.map((item) => item.id === rejected.messageId
-        ? { ...item, actionProposal: rejected }
-        : item),
-    }
-  })
+    useChatStore.getState().updateMessageActionProposal(rejected.messageId, rejected)
+  }
   void useChatStore.getState().saveCurrentSession().catch((error) => {
     console.warn('[Chat] save action rejection failed:', error)
   })

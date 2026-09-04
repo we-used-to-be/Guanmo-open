@@ -1,25 +1,36 @@
 import { useMemo } from 'react'
+import { BookOpen } from 'lucide-react'
 import { useEditorStore } from '@/stores/editorStore'
 import { useAppStore } from '@/stores/appStore'
+import { getRuntimeCapabilities } from '@/services/runtimeCapabilities'
+import {
+  requestOpenAiChat,
+  requestOpenReadingArtifacts,
+  requestToggleAiChat,
+  requestToggleReadingArtifacts,
+} from '@/services/aiPanelNavigation'
 
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
-  ok: { label: 'AI 就绪', color: 'bg-gm-success' },
-  chat_unreachable: { label: '对话服务不可达', color: 'bg-gm-error' },
-  embedding_unreachable: { label: 'Embedding 服务不可达', color: 'bg-gm-error' },
-  both_unreachable: { label: '对话和 Embedding 不可达', color: 'bg-gm-error' },
-  search_unreachable: { label: '搜索 API 不可用', color: 'bg-gm-error' },
-  chat_search_unreachable: { label: '对话和搜索不可达', color: 'bg-gm-error' },
-  embedding_search_unreachable: { label: 'Embedding 和搜索不可达', color: 'bg-gm-error' },
-  all_unreachable: { label: 'AI 服务全部不可达', color: 'bg-gm-error' },
-  not_configured: { label: 'AI 未配置', color: 'bg-gm-text-disabled' },
-  unchecked: { label: 'AI 检测中…', color: 'bg-gm-text-disabled' },
+  ok: { label: 'AI 就绪', color: 'text-gm-success' },
+  chat_unreachable: { label: '对话服务不可达', color: 'text-gm-error' },
+  embedding_unreachable: { label: 'Embedding 服务不可达', color: 'text-gm-error' },
+  both_unreachable: { label: '对话和 Embedding 不可达', color: 'text-gm-error' },
+  search_unreachable: { label: '搜索 API 不可用', color: 'text-gm-error' },
+  chat_search_unreachable: { label: '对话和搜索不可达', color: 'text-gm-error' },
+  embedding_search_unreachable: { label: 'Embedding 和搜索不可达', color: 'text-gm-error' },
+  all_unreachable: { label: 'AI 服务全部不可达', color: 'text-gm-error' },
+  not_configured: { label: 'AI 未配置', color: 'text-gm-text-disabled' },
+  unchecked: { label: 'AI 检测中…', color: 'text-gm-text-disabled' },
 }
 
 export function StatusBar() {
   const tabs = useEditorStore((s) => s.tabs)
   const activeTabId = useEditorStore((s) => s.activeTabId)
   const aiStatus = useAppStore((s) => s.aiStatus)
+  const aiPanelOpen = useAppStore((s) => s.aiPanelOpen)
   const toggleAiPanel = useAppStore((s) => s.toggleAiPanel)
+  const databaseEnabled = getRuntimeCapabilities().database
+  const aiStatusInfo = STATUS_MAP[aiStatus] ?? STATUS_MAP.unchecked
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
 
@@ -62,11 +73,75 @@ export function StatusBar() {
         </>
       )}
 
-      <StatusItem dataTour="ai-assistant" className="gap-1.5 gm-pointer-cursor" onClick={toggleAiPanel}>
-        <div className={`w-2 h-2 rounded-full ${STATUS_MAP[aiStatus]?.color ?? STATUS_MAP.unchecked.color}`} />
-        <span>{STATUS_MAP[aiStatus]?.label ?? STATUS_MAP.unchecked.label}</span>
-      </StatusItem>
+      <div className="flex items-center gap-1">
+        <StatusAction
+          aria-label={databaseEnabled ? '打开阅读成果' : '阅读成果仅桌面版可用'}
+          title={databaseEnabled ? '阅读成果' : '阅读成果仅桌面版可用'}
+          disabled={!databaseEnabled}
+          onClick={() => {
+            if (!databaseEnabled) return
+            if (!aiPanelOpen) {
+              toggleAiPanel()
+              requestOpenReadingArtifacts()
+            } else {
+              requestToggleReadingArtifacts()
+            }
+          }}
+        >
+          <BookOpen size={15} strokeWidth={1.7} aria-hidden="true" />
+        </StatusAction>
+        <StatusAction
+          dataTour="ai-assistant"
+          aria-label={`打开 AI 助手，${aiStatusInfo.label}`}
+          title={aiStatusInfo.label}
+          onClick={() => {
+            if (!aiPanelOpen) {
+              toggleAiPanel()
+              requestOpenAiChat()
+            } else {
+              requestToggleAiChat()
+            }
+          }}
+          active={aiPanelOpen}
+        >
+          <span className={`text-micro font-bold leading-none ${aiStatusInfo.color}`}>AI</span>
+        </StatusAction>
+      </div>
     </div>
+  )
+}
+
+function StatusAction({
+  children,
+  className = '',
+  onClick,
+  dataTour,
+  title,
+  disabled = false,
+  active = false,
+  ...props
+}: {
+  children: React.ReactNode
+  className?: string
+  onClick?: () => void
+  dataTour?: string
+  title: string
+  disabled?: boolean
+  active?: boolean
+  'aria-label': string
+}) {
+  return (
+    <button
+      type="button"
+      className={`flex h-6 w-7 items-center justify-center rounded-md text-gm-text-tertiary transition-colors hover:bg-gm-surface-hover hover:text-gm-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gm-primary disabled:cursor-not-allowed disabled:opacity-50 ${active ? 'bg-gm-surface-hover' : ''} ${className}`}
+      data-product-tour={dataTour}
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+      {...props}
+    >
+      {children}
+    </button>
   )
 }
 

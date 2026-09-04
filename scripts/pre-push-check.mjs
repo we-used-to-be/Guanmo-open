@@ -46,6 +46,7 @@ const HIGH_RISK_FILES = [
 /** 敏感内容扫描跳过列表 — 已知安全的文件（含存储键名、示例值等） */
 const SENSITIVE_SCAN_SKIP = [
   'src/services/secureStorage.ts',   // 仅包含存储键名常量，非真实密钥
+  'src/web/secureStorage.ts',        // Web 端 secureStorage shim，仅含存储键名常量
 ];
 
 /** 当匹配行的值部分包含以下模式时，跳过（非真实密钥，仅为键名/路径/标识符） */

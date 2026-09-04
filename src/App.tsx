@@ -18,10 +18,10 @@ import {
   type PersistedTabRestoreIssue,
 } from './services/sessionRestore'
 import { useEditorStore } from './stores/editorStore'
-import { isTauri } from './hooks/useTauri'
+import { isTauri, waitForFileAccessRestore } from './hooks/useTauri'
 import { useUsageTracking } from './hooks/useUsageTracking'
 import { GlobalTooltip } from './components/common/Tooltip'
-import { migrateLegacyFileAccess } from './services/persistedFileAccess'
+import { markLegacyFileAccessMigrationDone, migrateLegacyFileAccess } from './services/persistedFileAccess'
 import { toast } from './services/toast'
 import { detectLegacyData, type LegacyDetectionResult } from './services/database/legacyDetector'
 import { scheduleIdleTask } from './services/idleScheduler'
@@ -49,11 +49,21 @@ function logDuration(label: string, startedAt: number) {
   console.info(`[Perf] ${label}: ${Math.round(performance.now() - startedAt)}ms`)
 }
 
-function showRestoreIssues(issues: PersistedTabRestoreIssue[]): void {
-  if (issues.length === 0) return
+function showRestoreIssues(issues: PersistedTabRestoreIssue[], includeTooLarge = true): void {
+  const visibleIssues = includeTooLarge ? issues : issues.filter((issue) => issue.kind !== 'too-large')
+  if (visibleIssues.length === 0) return
   void import('./services/sessionRestoreNotifications')
-    .then(({ showSessionRestoreIssues }) => showSessionRestoreIssues(issues))
+    .then(({ showSessionRestoreIssues }) => showSessionRestoreIssues(visibleIssues))
     .catch((error) => console.warn('[App] Restore issue notification failed:', error))
+}
+
+function removeSkippedRestoreTabs(issues: PersistedTabRestoreIssue[]): void {
+  const skippedTabIds = issues
+    .filter((issue) => issue.kind === 'too-large' && !issue.preservedDraft)
+    .map((issue) => issue.tabId)
+  for (const tabId of skippedTabIds) {
+    useEditorStore.getState().closeTab(tabId)
+  }
 }
 
 /**
@@ -70,7 +80,7 @@ async function restoreTabs(): Promise<void> {
   }
 
   if (openedFromFileAssociation) {
-    useEditorStore.getState().resetTabsForExternalOpen()
+    useEditorStore.getState().resetTabsForExternalOpen(useSettingsStore.getState().editor.defaultOpenMode)
     markStartupPoint('active-tab-disk-read-complete', { outcome: 'skipped-external-open' })
     markStartupPoint('startup-session-restore-complete', { outcome: 'skipped-external-open' })
     return
@@ -112,7 +122,8 @@ async function restoreTabs(): Promise<void> {
   if (activeTab && restoredActiveTab) {
     useEditorStore.getState().mergeRestoredTab(activeTab, restoredActiveTab)
   }
-  showRestoreIssues(activeIssues)
+  removeSkippedRestoreTabs(activeIssues)
+  showRestoreIssues(activeIssues, false)
   markStartupPoint('startup-session-restore-complete', {
     outcome: activeTab ? (restoredActiveTab ? 'restored' : 'active-missing') : 'no-active-tab',
     tabs: restorableTabs.length,
@@ -131,7 +142,11 @@ async function restoreTabs(): Promise<void> {
       backgroundIssues.push(issue)
     },
   }).then(() => {
-    showRestoreIssues(backgroundIssues)
+    removeSkippedRestoreTabs(backgroundIssues)
+    showRestoreIssues(backgroundIssues, false)
+    showRestoreIssues(
+      [...activeIssues, ...backgroundIssues].filter((issue) => issue.kind === 'too-large'),
+    )
     logDuration('background tab restore', restoreStartedAt)
   }).catch((error) => {
     console.warn('[App] Background tab restore failed:', error)
@@ -205,25 +220,7 @@ function scheduleIdleWarmup(): void {
     })
   }, 3000) // 延迟 3 秒，完全不阻塞
 
-  // 优先级 7: 旧版文件访问迁移
-  scheduleIdleTask(
-    SINGLETON_IDS.LEGACY_FILE_ACCESS,
-    async () => {
-      if (isTauri()) {
-        const startTime = performance.now()
-        try {
-          await migrateLegacyFileAccess()
-          logDuration('legacy file access migration', startTime)
-        } catch (err) {
-          console.warn('[App] Legacy file access migration failed:', err)
-        }
-      }
-    },
-    7,
-    '旧版文件访问迁移'
-  )
-
-  // 优先级 8: 旧版数据检测
+  // 优先级 7: 旧版数据检测
   scheduleIdleTask(
     SINGLETON_IDS.LEGACY_DATA_DETECTION,
     async () => {
@@ -415,11 +412,27 @@ function App() {
 
         const databaseStartedAt = performance.now()
         const restoreTabsStartedAt = performance.now()
+        const databaseReady = initDatabase().then(() => {
+          markStartupPoint('database-ready')
+          logDuration('database init', databaseStartedAt)
+        })
+        void databaseReady.catch(() => undefined)
+        const fileAccessRestore = await waitForFileAccessRestore()
+        if (!fileAccessRestore.restoreSucceeded || !fileAccessRestore.legacyMigrationCompleted) {
+          await databaseReady
+          const migrationStartedAt = performance.now()
+          try {
+            await migrateLegacyFileAccess()
+            logDuration('legacy file access migration', migrationStartedAt)
+          } catch (error) {
+            console.warn('[App] Legacy file access migration failed:', error)
+          }
+        } else if (isTauri()) {
+          // Rust 是迁移最终事实；成功状态也要把兼容缓存标记补齐。
+          markLegacyFileAccessMigrationDone()
+        }
         await Promise.all([
-          initDatabase().then(() => {
-            markStartupPoint('database-ready')
-            logDuration('database init', databaseStartedAt)
-          }),
+          databaseReady,
           restoreTabs().then(() => {
             logDuration('tabs restored', restoreTabsStartedAt)
           }),

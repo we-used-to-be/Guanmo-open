@@ -40,6 +40,9 @@ jobs:
       - name: 按锁文件安装依赖
         run: npm ci
 
+      - name: Store 边界检查
+        run: npm run test:store-boundaries
+
       - name: Lint
         run: npm run lint
 

@@ -84,6 +84,44 @@ describe('文档模型契约（invariants 见 docs/architecture/state-ownership.
     expect(useEditorStore.getState().rightPaneTabId).toBeNull()
   })
 
+  it('定位请求默认交给编辑器，并可明确交给预览', () => {
+    useEditorStore.getState().requestReveal('contract-a', 2, 3)
+    expect(useEditorStore.getState().pendingReveal).toEqual({
+      tabId: 'contract-a',
+      startLine: 2,
+      endLine: 3,
+      surface: 'editor',
+    })
+
+    useEditorStore.getState().requestReveal('contract-a', 4, 5, 'preview')
+    expect(useEditorStore.getState().pendingReveal).toEqual({
+      tabId: 'contract-a',
+      startLine: 4,
+      endLine: 5,
+      surface: 'preview',
+    })
+  })
+
+  it('产品引导恢复通过 editorStore action 原子更新视图状态', () => {
+    useEditorStore.getState().restoreProductTourState({
+      viewMode: 'dual-preview',
+      previewVisible: false,
+      rightPaneTabId: 'contract-b',
+      rightPaneUserSelected: true,
+      activeTabId: 'contract-b',
+      previewSwitchingTabId: null,
+    })
+
+    expect(useEditorStore.getState()).toMatchObject({
+      viewMode: 'dual-preview',
+      previewVisible: false,
+      rightPaneTabId: 'contract-b',
+      rightPaneUserSelected: true,
+      activeTabId: 'contract-b',
+      previewSwitchingTabId: null,
+    })
+  })
+
   it('阅读位置更新只触碰 readingPositions，不触碰 tabs', () => {
     const snapshot = tabContentSnapshot()
 

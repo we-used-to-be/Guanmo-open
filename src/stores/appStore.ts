@@ -1,6 +1,8 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { createJSONStorage, persist } from 'zustand/middleware'
 import { createWorkspaceRoot, normalizeWorkspacePath, type WorkspaceRoot } from '@/services/workspaceIdentity'
+import { isWebRuntime } from '@/services/runtimeCapabilities'
+import { createVolatilePersistStorage } from '@/services/webSessionStorage'
 
 export { createWorkspaceRoot, normalizeWorkspacePath } from '@/services/workspaceIdentity'
 export type { WorkspaceRoot } from '@/services/workspaceIdentity'
@@ -33,6 +35,7 @@ export interface AppState {
   setAiPanelWidth: (width: number) => void
   addWorkspaceRoot: (path: string) => boolean
   removeWorkspaceRoot: (id: string) => void
+  resetWorkspaceForWebSession: () => void
   setAiStatus: (status: AiServiceStatus) => void
   setFullscreen: (isFullscreen: boolean) => void
 }
@@ -104,11 +107,15 @@ export const useAppStore = create<AppState>()(
       removeWorkspaceRoot: (id) => set((state) => ({
         workspaceRoots: state.workspaceRoots.filter((root) => root.id !== id),
       })),
+      resetWorkspaceForWebSession: () => set({ workspaceRoots: [], aiStatus: 'unchecked' }),
       setAiStatus: (status) => set({ aiStatus: status }),
       setFullscreen: (isFullscreen) => set({ isFullscreen }),
     }),
     {
       name: 'guanmo-app',
+      storage: isWebRuntime()
+        ? createVolatilePersistStorage<Partial<AppState>>()
+        : createJSONStorage<Partial<AppState>>(() => localStorage),
       partialize: (state) => ({
         sidebarWidth: state.sidebarWidth,
         aiPanelWidth: state.aiPanelWidth,

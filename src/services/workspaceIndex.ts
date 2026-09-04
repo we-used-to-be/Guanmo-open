@@ -1,11 +1,7 @@
-import { fileExists } from '@/hooks/useTauri'
-import { listDirectory } from '@/services/fileSystem'
 import { normalizeFilePath } from '@/services/pathIdentity'
 import { normalizeWorkspacePath } from '@/services/workspaceIdentity'
-import { listEmbeddingJobs, loadDocumentFilePaths, removeEmbeddingJobByPath, removePersistedDocumentByPath } from '@/services/database/persistence'
-import { indexWorkspaceMarkdown, type WorkspaceIndexResult } from '@/services/rag/indexer'
-import { vectorStore } from '@/services/rag/vectorStore'
-import { removeNativeRagIndexDocument } from '@/services/rag/nativeIndex'
+import { workspaceIndexGateway } from '@/services/workspaceIndexGateway'
+import type { WorkspaceIndexResult } from '@/services/rag/indexer'
 
 export interface WorkspaceCleanupResult {
   removed: number
@@ -16,6 +12,24 @@ export interface WorkspaceCleanupResult {
 export interface WorkspaceRebuildResult extends WorkspaceIndexResult {
   removed: number
   removedPaths: string[]
+}
+
+export async function indexWorkspaceDocuments(rootPath: string): Promise<WorkspaceIndexResult> {
+  return workspaceIndexGateway.indexWorkspaceMarkdown(rootPath)
+}
+
+export function isWorkspaceMarkdownPath(filePath: string): boolean {
+  return workspaceIndexGateway.isMarkdownPath(filePath)
+}
+
+export async function isWorkspaceKnowledgeDocumentIndexed(filePath: string): Promise<boolean> {
+  return workspaceIndexGateway.isKnowledgeDocumentIndexed(filePath)
+}
+
+export async function addWorkspaceKnowledgeDocument(
+  params: Parameters<typeof workspaceIndexGateway.addKnowledgeDocumentFromFile>[0],
+) {
+  return workspaceIndexGateway.addKnowledgeDocumentFromFile(params)
 }
 
 function isInsideWorkspace(filePath: string, workspacePath: string) {
@@ -35,36 +49,20 @@ function toWorkspacePaths(workspacePaths: string | string[]): string[] {
   })
 }
 
-async function getReadableWorkspacePaths(workspacePaths: string[]): Promise<{ readable: string[]; errors: string[] }> {
-  const readable: string[] = []
-  const errors: string[] = []
-  for (const workspacePath of workspacePaths) {
-    try {
-      await listDirectory(workspacePath)
-      readable.push(workspacePath)
-    } catch (error) {
-      errors.push(`${workspacePath}: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }
-  return { readable, errors }
-}
-
 export async function cleanupMissingWorkspaceDocuments(workspacePaths: string | string[]): Promise<WorkspaceCleanupResult> {
-  const { readable, errors } = await getReadableWorkspacePaths(toWorkspacePaths(workspacePaths))
-  const filePaths = await loadDocumentFilePaths()
-  const jobPaths = (await listEmbeddingJobs()).map((job) => job.filePath)
-  const paths = Array.from(new Set([...filePaths, ...jobPaths]))
+  const { readable, errors } = await workspaceIndexGateway.getReadableWorkspacePaths(toWorkspacePaths(workspacePaths))
+  const paths = await workspaceIndexGateway.loadIndexedFilePaths()
   const removedPaths: string[] = []
 
   for (const filePath of paths) {
     if (!readable.some((workspacePath) => isInsideWorkspace(filePath, workspacePath))) continue
-    const exists = await fileExists(filePath).catch(() => false)
-    if (exists) continue
-    vectorStore.removeByFilePath(filePath)
-    await removePersistedDocumentByPath(filePath)
-    await removeNativeRagIndexDocument(filePath)
-    await removeEmbeddingJobByPath(filePath)
-    removedPaths.push(filePath)
+    try {
+      if (await workspaceIndexGateway.fileExists(filePath)) continue
+      await workspaceIndexGateway.removeDocumentIndex(filePath)
+      removedPaths.push(filePath)
+    } catch (error) {
+      errors.push(`${filePath}: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
   return {
@@ -75,22 +73,24 @@ export async function cleanupMissingWorkspaceDocuments(workspacePaths: string | 
 }
 
 export async function rebuildWorkspaceDocuments(workspacePaths: string | string[]): Promise<WorkspaceRebuildResult> {
-  const { readable, errors } = await getReadableWorkspacePaths(toWorkspacePaths(workspacePaths))
-  const documentPaths = await loadDocumentFilePaths()
+  const { readable, errors } = await workspaceIndexGateway.getReadableWorkspacePaths(toWorkspacePaths(workspacePaths))
+  const documentPaths = await workspaceIndexGateway.loadIndexedFilePaths()
   const removedPaths: string[] = []
+  const result: WorkspaceIndexResult = { indexed: 0, skipped: 0, failed: errors.length, errors: [...errors] }
 
   for (const filePath of documentPaths) {
     if (!readable.some((workspacePath) => isInsideWorkspace(filePath, workspacePath))) continue
-    vectorStore.removeByFilePath(filePath)
-    await removePersistedDocumentByPath(filePath)
-    await removeNativeRagIndexDocument(filePath)
-    await removeEmbeddingJobByPath(filePath)
-    removedPaths.push(filePath)
+    try {
+      await workspaceIndexGateway.removeDocumentIndex(filePath)
+      removedPaths.push(filePath)
+    } catch (error) {
+      result.failed++
+      result.errors.push(`${filePath}: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
-  const result: WorkspaceIndexResult = { indexed: 0, skipped: 0, failed: errors.length, errors: [...errors] }
   for (const workspacePath of readable) {
-    const indexed = await indexWorkspaceMarkdown(workspacePath)
+    const indexed = await workspaceIndexGateway.indexWorkspaceMarkdown(workspacePath)
     result.indexed += indexed.indexed
     result.skipped += indexed.skipped
     result.failed += indexed.failed

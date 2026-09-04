@@ -146,6 +146,12 @@ export function getPendingIndexTimerPaths(): string[] {
   return [...pendingIndexTimers.keys()]
 }
 
+useSettingsStore.subscribe((state, previousState) => {
+  if (previousState.knowledge.autoIndexEnabled && !state.knowledge.autoIndexEnabled) {
+    cancelPendingIndexTimers(getPendingIndexTimerPaths())
+  }
+})
+
 export async function indexWorkspaceMarkdown(
   rootPath: string,
   maxFiles = 200,

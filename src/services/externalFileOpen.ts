@@ -1,6 +1,6 @@
-import { readFile } from '@/hooks/useTauri'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { isWorkspaceDisplayFile } from '@/services/fileTree'
+import { readMarkdownFileForOpen } from '@/services/markdownFileOpenPolicy'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { useEditorStore } from '@/stores/editorStore'
@@ -56,7 +56,7 @@ export async function openExternalFilePaths(
         continue
       }
 
-      const content = await readFile(path)
+      const content = await readMarkdownFileForOpen(path)
       const name = getFileName(path)
       useEditorStore.getState().addTab(path, name, content)
       scheduleMarkdownDocumentIndex(path, name, content)

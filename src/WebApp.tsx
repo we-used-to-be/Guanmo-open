@@ -1,40 +1,122 @@
-import { useLayoutEffect, useState } from 'react'
+import { useEffect, useLayoutEffect } from 'react'
+import { AppLayout } from '@/components/layout/AppLayout'
+import { ToastContainer } from '@/components/common/ToastContainer'
+import { GlobalTooltip } from '@/components/common/Tooltip'
+import { syncDocumentTheme, useSettingsStore } from '@/stores/settingsStore'
+import { useAppStore } from '@/stores/appStore'
+import { useEditorStore } from '@/stores/editorStore'
+import { useChatStore } from '@/stores/chatStore'
+import {
+  clearBrowserFileSession,
+  registerBrowserDirectoryHandle,
+  registerBrowserFile,
+  registerBrowserFileHandle,
+} from '@/services/browserFileSystem'
+import { updateSearchConfig } from '@/services/webSearch'
+import { getWebSecretRuntimeState } from '@/web/webSecretRuntime'
+import { requestProductTour } from '@/features/productTour/productTourEvents'
+import { hasShownProductTourInvite, markProductTourInviteShown } from '@/features/productTour/productTourStorage'
+import { toast } from '@/services/toast'
 
-type WebTheme = 'light' | 'dark'
-const THEME_KEY = 'guanmo-web-theme'
-
-function readTheme(): WebTheme {
-  return localStorage.getItem(THEME_KEY) === 'dark' ? 'dark' : 'light'
-}
-
+/** Web 端只启动共享桌面壳；文件、标签和聊天状态均为当前页面会话。 */
 export default function WebApp() {
-  const [theme, setTheme] = useState<WebTheme>(readTheme)
+  const themeId = useSettingsStore((state) => state.appearance.themeId)
 
   useLayoutEffect(() => {
-    document.documentElement.dataset.theme = theme
-    document.documentElement.dataset.themeId = theme
-    document.documentElement.style.colorScheme = theme
-    delete document.documentElement.dataset.lightPalette
-    localStorage.setItem(THEME_KEY, theme)
-  }, [theme])
+    syncDocumentTheme(themeId)
+  }, [themeId])
+
+  useLayoutEffect(() => {
+    document.documentElement.dataset.gmRuntime = 'web'
+    document.getElementById('guanmo-startup-shell')?.remove()
+    try {
+      // 清理旧版 Web 壳留下的文件/标签快照；设置与 API Key 存储不在此范围。
+      localStorage.removeItem('guanmo-app')
+      localStorage.removeItem('guanmo-editor')
+      localStorage.removeItem('guanmo-boot-snapshot')
+    } catch {
+      // 隐私模式下 localStorage 可能不可用，内存 Store 仍然满足会话隔离。
+    }
+    clearBrowserFileSession()
+    useAppStore.getState().resetWorkspaceForWebSession()
+    useEditorStore.getState().resetTabsForWebSession(useSettingsStore.getState().editor.defaultOpenMode)
+    useChatStore.getState().clearMessages()
+    useChatStore.getState().setStreaming(false)
+    return () => {
+      if (document.documentElement.dataset.gmRuntime === 'web') {
+        delete document.documentElement.dataset.gmRuntime
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (hasShownProductTourInvite()) return
+    markProductTourInviteShown()
+    toast.show({
+      id: 'product-tour-invite',
+      title: '欢迎使用观墨',
+      message: '用 1 分钟了解文件、阅读模式与 AI 助手',
+      type: 'info',
+      duration: null,
+      actions: [{ label: '开始导览', primary: true, onClick: requestProductTour }],
+    })
+  }, [])
+
+  useEffect(() => {
+    const secretState = getWebSecretRuntimeState()
+    if (secretState.unlocked) {
+      useSettingsStore.getState().applyWebRuntimeApiKeys({ chatApiKey: secretState.chatApiKey, webSearchApiKey: secretState.webSearchApiKey })
+    }
+    const { webSearch } = useSettingsStore.getState()
+    updateSearchConfig({ ...webSearch, apiKey: secretState.webSearchApiKey })
+  }, [])
+
+  useEffect(() => {
+    const onDragOver = (event: DragEvent) => event.preventDefault()
+    const onDrop = (event: DragEvent) => {
+      event.preventDefault()
+      const items = Array.from(event.dataTransfer?.items ?? [])
+      void (async () => {
+        for (const item of items) {
+          try {
+            const getHandle = (item as DataTransferItem & { getAsFileSystemHandle?: () => Promise<unknown> }).getAsFileSystemHandle
+            if (getHandle) {
+              const handle = await getHandle.call(item)
+              if (handle && typeof handle === 'object' && (handle as { kind?: string }).kind === 'directory') {
+                const root = registerBrowserDirectoryHandle(handle as Parameters<typeof registerBrowserDirectoryHandle>[0])
+                useAppStore.getState().addWorkspaceRoot(root.path)
+                continue
+              }
+              if (handle && typeof handle === 'object' && (handle as { kind?: string }).kind === 'file' && /\.md$/i.test((handle as { name: string }).name)) {
+                const opened = await registerBrowserFileHandle(handle as Parameters<typeof registerBrowserFileHandle>[0])
+                useEditorStore.getState().addTab(opened.path, opened.name, opened.content)
+                continue
+              }
+            }
+            const file = item.getAsFile()
+            if (file && /\.md$/i.test(file.name)) {
+              const opened = await registerBrowserFile(file)
+              useEditorStore.getState().addTab(opened.path, opened.name, opened.content)
+            }
+          } catch (error) {
+            console.warn('[Web] dropped file could not be opened:', error)
+          }
+        }
+      })()
+    }
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('drop', onDrop)
+    return () => {
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('drop', onDrop)
+    }
+  }, [])
 
   return (
-    <main className="flex h-full items-center justify-center bg-gm-canvas px-6 text-gm-text">
-      <section className="w-full max-w-xl rounded-2xl border border-gm-border bg-gm-surface p-8 text-center shadow-lg">
-        <div className="text-sm font-semibold tracking-[0.25em] text-gm-primary">观墨</div>
-        <h1 className="mt-4 text-2xl font-bold">完整功能仅在桌面端提供</h1>
-        <p className="mt-3 text-sm leading-6 text-gm-text-secondary">
-          Web 端不提供本地文件管理、数据库、AI 与知识库能力，避免产生不完整或不安全的兼容行为。
-        </p>
-        <div className="mt-6 flex items-center justify-center gap-3">
-          <a className="rounded-lg bg-gm-primary px-4 py-2 text-sm font-semibold text-white" href="https://github.com/we-used-to-be/Guanmo-open/releases/latest">
-            下载桌面版
-          </a>
-          <button className="rounded-lg border border-gm-border px-4 py-2 text-sm text-gm-text-secondary" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}>
-            切换{theme === 'dark' ? '浅色' : '深色'}主题
-          </button>
-        </div>
-      </section>
-    </main>
+    <>
+      <AppLayout />
+      <ToastContainer />
+      <GlobalTooltip />
+    </>
   )
 }

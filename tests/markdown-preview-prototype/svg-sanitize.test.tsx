@@ -63,6 +63,8 @@ describe('Markdown inline SVG sanitation', () => {
     expect(html).toContain('<path')
     expect(html).toContain('<text')
     expect(html).toContain('>开始</text>')
+    expect(html).not.toMatch(/<rect[^>]*>\s*<text/)
+    expect(html).not.toMatch(/<path[^>]*>\s*<rect/)
   })
 
   it('保留空行分隔 SVG 的文字定位与字号样式', () => {

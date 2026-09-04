@@ -19,6 +19,7 @@
     "paths": {
       "@/*": ["src/*"],
       "@app-entry": ["src/App.tsx"],
+      "@settings-entry": ["src/features/settings/SettingsPage.tsx"],
       "animal-island-ui": ["src/vendor/animal-island-ui/index.ts"]
     }
   },

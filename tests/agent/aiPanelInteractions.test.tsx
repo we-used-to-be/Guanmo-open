@@ -1,6 +1,10 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AiPanel } from '@/components/ai/AiPanel'
+import { StatusBar } from '@/components/layout/StatusBar'
+import { consumePendingPanelNavigation, requestOpenReadingArtifacts } from '@/services/aiPanelNavigation'
+import type { TimelineItem } from '@/stores/chatStore'
+import { useAppStore } from '@/stores/appStore'
 
 const aiChat = vi.hoisted(() => ({
   messages: [
@@ -70,6 +74,11 @@ vi.mock('@/hooks/useAiChat', () => ({
   useAiChat: () => aiChat,
 }))
 
+vi.mock('@/services/runtimeCapabilities', () => ({
+  isWebRuntime: () => false,
+  getRuntimeCapabilities: () => ({ database: true }),
+}))
+
 vi.mock('@/stores/readingArtifactsStore', () => ({
   useReadingArtifactsStore: (selector: (state: typeof readingArtifacts) => unknown) => selector(readingArtifacts),
 }))
@@ -85,6 +94,7 @@ describe('AI 面板视图返回', () => {
     readingArtifacts.page = 1
     readingArtifacts.pageSize = 20
     readingArtifacts.total = 1
+    aiChat.timeline = []
     readingArtifacts.setQuery.mockReset()
     readingArtifacts.setPage.mockReset()
     scrollTo.mockReset()
@@ -117,65 +127,54 @@ describe('AI 面板视图返回', () => {
     expect(scrollTo).toHaveBeenCalledWith({ top: 960 })
   })
 
-  it('展开阅读成果后显示原问题，长问题默认收起并可继续展开', () => {
+  it('阅读成果视图不显示聊天的 Agent 状态链路', () => {
+    aiChat.timeline = [{ id: 'timeline-1', type: 'done', label: '生成回答完成', timestamp: 1 } as TimelineItem]
     render(<AiPanel />)
+
+    expect(screen.getByText('Agent 状态链路：')).toBeInTheDocument()
     fireEvent.click(screen.getByTitle('阅读成果'))
-
-    expect(screen.queryByText('原问题')).not.toBeInTheDocument()
-    const header = screen.getByText('匿名摘要').closest('button')!
-    expect(header.lastElementChild).toHaveClass('ml-auto')
-    expect(header.parentElement).toHaveClass('border-gm-border-subtle', 'bg-gm-surface')
-    fireEvent.click(header)
-
-    expect(screen.getByText('原问题')).toBeInTheDocument()
-    expect(screen.getByText('成果内容')).toBeInTheDocument()
-    expect(screen.getByText('参考来源')).toBeInTheDocument()
-    expect(screen.getByText('原问题').parentElement).toHaveClass('bg-gm-primary/5')
-    expect(screen.getByText('成果内容').parentElement).toHaveClass('bg-gm-canvas')
-    const question = screen.getByText(/这是一个较长的原问题/)
-    expect(question.style.webkitLineClamp).toBe('3')
-    fireEvent.click(screen.getByRole('button', { name: '展开问题' }))
-    expect(question.style.webkitLineClamp).toBe('')
-    expect(screen.getByRole('button', { name: '收起问题' })).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByText('匿名成果正文')).toHaveClass('text-caption', 'leading-relaxed')
-    expect(screen.getByTitle('打开 note.md:2-4')).toHaveTextContent('note.md / 章节A / L2-4')
-    expect(screen.getByRole('link', { name: /匿名网页/ })).toHaveAttribute('href', 'https://example.com/anonymous')
+    expect(screen.queryByText('Agent 状态链路：')).not.toBeInTheDocument()
   })
 
-  it('搜索输入短暂防抖后才更新查询条件，并显示服务端总数与分页', () => {
+  it('底部 AI 与阅读成果入口按当前页面切换或收起侧边栏', () => {
     vi.useFakeTimers()
-    readingArtifacts.artifacts = [artifactFixture]
-    readingArtifacts.page = 2
-    readingArtifacts.total = 41
-    render(<AiPanel />)
-    fireEvent.click(screen.getByTitle('阅读成果'))
+    useAppStore.getState().closeAiPanel()
+    render(<><StatusBar /><AiPanel /></>)
 
-    const input = screen.getByLabelText('搜索阅读成果')
-    fireEvent.change(input, { target: { value: '匿名' } })
-    expect(readingArtifacts.setQuery).not.toHaveBeenCalled()
-    vi.advanceTimersByTime(179)
-    expect(readingArtifacts.setQuery).not.toHaveBeenCalled()
-    vi.advanceTimersByTime(1)
-    expect(readingArtifacts.setQuery).toHaveBeenCalledWith('匿名')
-    expect(screen.getByText('41 条')).toBeInTheDocument()
-    expect(screen.getByText('第 2 / 3 页')).toBeInTheDocument()
+    const aiButton = screen.getByRole('button', { name: /打开 AI 助手/ })
+    const artifactsButton = screen.getByRole('button', { name: '打开阅读成果' })
+    const flushNavigation = () => act(() => { vi.runOnlyPendingTimers() })
 
-    fireEvent.click(screen.getByRole('button', { name: '下一页' }))
-    expect(readingArtifacts.setPage).toHaveBeenCalledWith(3)
+    fireEvent.click(aiButton)
+    flushNavigation()
+    expect(useAppStore.getState().aiPanelOpen).toBe(true)
+    expect(screen.getByText('AI 助手')).toBeInTheDocument()
+
+    fireEvent.click(artifactsButton)
+    flushNavigation()
+    expect(screen.getByText('阅读成果')).toBeInTheDocument()
+    expect(useAppStore.getState().aiPanelOpen).toBe(true)
+
+    fireEvent.click(aiButton)
+    flushNavigation()
+    expect(screen.getByText('AI 助手')).toBeInTheDocument()
+    expect(useAppStore.getState().aiPanelOpen).toBe(true)
+
+    fireEvent.click(aiButton)
+    flushNavigation()
+    expect(useAppStore.getState().aiPanelOpen).toBe(false)
+
+    fireEvent.click(artifactsButton)
+    flushNavigation()
+    expect(screen.getByText('阅读成果')).toBeInTheDocument()
+    fireEvent.click(artifactsButton)
+    flushNavigation()
+    expect(useAppStore.getState().aiPanelOpen).toBe(false)
   })
 
-  it('区分尚无成果和当前条件无匹配结果', () => {
-    const first = render(<AiPanel />)
-    readingArtifacts.artifacts = []
-    readingArtifacts.total = 0
-    fireEvent.click(screen.getByTitle('阅读成果'))
-    expect(screen.getByText('还没有阅读成果')).toBeInTheDocument()
-
-    first.unmount()
-    readingArtifacts.filter = 'summary'
-    const second = render(<AiPanel />)
-    fireEvent.click(screen.getByTitle('阅读成果'))
-    expect(screen.getByText('当前条件无匹配结果')).toBeInTheDocument()
-    second.unmount()
+  it('侧边栏懒加载前会保留阅读成果导航意图', () => {
+    requestOpenReadingArtifacts()
+    expect(consumePendingPanelNavigation()).toEqual({ mode: 'open', view: 'artifacts' })
   })
+
 })

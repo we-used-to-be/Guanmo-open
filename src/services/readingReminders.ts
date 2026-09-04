@@ -13,6 +13,12 @@ import {
 } from './readingReminderNotifications'
 import { refreshReadingReminderRuntime } from './readingReminderRuntime'
 
+export type { ReadingReminder } from './database/readingReminders'
+
+export async function loadReadingRemindersCommand(): Promise<ReadingReminder[]> {
+  return loadReadingReminders()
+}
+
 export interface CreateReadingReminderInput {
   id: string
   title: string

@@ -1,4 +1,5 @@
-import { dirnamePath, fileExists, joinPath, prepareMarkdownAssetsDir, readBinaryFile, writeBinaryFile } from '@/hooks/useTauri'
+import { dirnamePath, fileExists, isTauri, joinPath, prepareMarkdownAssetsDir, readBinaryFile, writeBinaryFile } from '@/hooks/useTauri'
+import { browserFileExists, createBrowserFile, createBrowserFolder, writeBrowserBinaryFile } from '@/services/browserFileSystem'
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
 
@@ -24,6 +25,17 @@ export async function saveImageFileForMarkdown(markdownPath: string, file: File)
 }
 
 async function saveImageBytesForMarkdown(markdownPath: string, bytes: Uint8Array, ext: string): Promise<string> {
+  if (!isTauri()) {
+    if (!markdownPath.startsWith('webfs://')) throw new Error('当前浏览器仅能将图片写入已授权的目录工作区')
+    const markdownDir = await dirnamePath(markdownPath)
+    const assetsDir = await joinPath(markdownDir, 'assets')
+    if (!(await browserFileExists(assetsDir))) await createBrowserFolder(markdownDir, 'assets')
+    const baseName = buildBaseName(markdownPath)
+    const fileName = await nextAssetFileName(assetsDir, baseName, ext, browserFileExists)
+    const targetPath = await createBrowserFile(assetsDir, fileName)
+    await writeBrowserBinaryFile(targetPath, bytes)
+    return `./assets/${fileName}`
+  }
   const markdownDir = await dirnamePath(markdownPath)
   const assetsDir = await joinPath(markdownDir, 'assets')
   await prepareMarkdownAssetsDir(markdownPath)
@@ -35,7 +47,12 @@ async function saveImageBytesForMarkdown(markdownPath: string, bytes: Uint8Array
   return `./assets/${fileName}`
 }
 
-async function nextAssetFileName(assetsDir: string, baseName: string, ext: string): Promise<string> {
+async function nextAssetFileName(
+  assetsDir: string,
+  baseName: string,
+  ext: string,
+  exists: (path: string) => Promise<boolean> = fileExists,
+): Promise<string> {
   const stamp = new Date()
   const datePart = [
     stamp.getFullYear(),
@@ -50,7 +67,7 @@ async function nextAssetFileName(assetsDir: string, baseName: string, ext: strin
 
   for (let index = 1; index <= 999; index += 1) {
     const fileName = `${baseName}-${datePart}-${timePart}-${String(index).padStart(3, '0')}.${ext}`
-    if (!(await fileExists(await joinPath(assetsDir, fileName)))) return fileName
+    if (!(await exists(await joinPath(assetsDir, fileName)))) return fileName
   }
 
   return `${baseName}-${datePart}-${timePart}-${crypto.randomUUID().slice(0, 8)}.${ext}`

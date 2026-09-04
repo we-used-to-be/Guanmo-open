@@ -24,6 +24,7 @@ export type PreviewBlockType =
   | 'blockquote'
   | 'code'
   | 'mermaid'
+  | 'echarts'
   | 'math'
   | 'table'
   | 'html'
@@ -40,13 +41,117 @@ export type PreviewBlockType =
  * value 区间，多行 code 按源码行拆分，避免把围栏或缩进算入字符映射。
  * math / inlineMath 以去除定界符后的 LaTeX 源码作为确定回退文本，
  * from/to 精确指向 value 源码位置（与源码逐字符对齐）。
- * html 节点按标签切分文本 run：run 与源码逐字符对齐；script / style /
- * foreignObject（rehype-sanitize strip 列表）内部文本不产生 segment。
+ * html 节点按标签切分文本 run；源码实体等导致可见文本与源码长度不一致时，
+ * 额外保留可见文本边界到源码 offset 的映射；script / style / foreignObject
+ * （rehype-sanitize strip 列表）内部文本不产生 segment。
  */
 export interface PreviewTextSegment {
   from: number
   to: number
   text: string
+  /** 非等长渲染文本的可见字符边界 → 源码 offset；长度为 text.length + 1。 */
+  sourceBoundaries?: number[]
+}
+
+interface CodePointSlice {
+  value: string
+  length: number
+}
+
+function readCodePointAt(text: string, index: number): CodePointSlice {
+  const codePoint = text.codePointAt(index)
+  if (codePoint === undefined) return { value: '', length: 0 }
+  const value = String.fromCodePoint(codePoint)
+  return { value, length: value.length }
+}
+
+function isMarkdownEscapable(char: string): boolean {
+  return /^[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]$/.test(char)
+}
+
+function decodeSourceCharacterReference(token: string): string | null {
+  const numeric = /^&#(x[\da-f]+|\d+);$/i.exec(token)?.[1]
+  if (numeric) {
+    const codePoint = numeric[0].toLowerCase() === 'x'
+      ? Number.parseInt(numeric.slice(1), 16)
+      : Number.parseInt(numeric, 10)
+    if (!Number.isInteger(codePoint) || codePoint <= 0 || codePoint > 0x10ffff || codePoint >= 0xd800 && codePoint <= 0xdfff) return null
+    return String.fromCodePoint(codePoint)
+  }
+  if (typeof document === 'undefined') return null
+  const textarea = document.createElement('textarea')
+  textarea.innerHTML = token
+  return textarea.value === token ? null : textarea.value
+}
+
+function readSourceCharacterReference(raw: string, index: number): { token: string; value: string } | null {
+  const token = /^&(?:#x[\da-f]+|#\d+|[A-Za-z][A-Za-z0-9]+);/i.exec(raw.slice(index))?.[0]
+  if (!token) return null
+  const value = decodeSourceCharacterReference(token)
+  return value ? { token, value } : null
+}
+
+/**
+ * 计算渲染可见文本的字符边界对应的源码 offset。
+ * 返回 null 表示源码与可见文本等长或无法可靠对齐；只有识别出转义、实体、
+ * 行尾规范化等确定转换时才返回非线性边界映射。
+ */
+export function buildSourceTextBoundaries(source: string, from: number, to: number, text: string): number[] | null {
+  const raw = source.slice(from, to)
+  if (raw === text) return null
+
+  const boundaries = [from]
+  let sourceIndex = 0
+  let textIndex = 0
+  const appendBoundaries = (sourceStart: number, sourceEnd: number, textLength: number, linear: boolean) => {
+    for (let index = 1; index <= textLength; index += 1) {
+      boundaries.push(from + (linear
+        ? sourceStart + index
+        : index === textLength ? sourceEnd : sourceStart))
+    }
+  }
+
+  while (sourceIndex < raw.length && textIndex < text.length) {
+    const sourceChar = readCodePointAt(raw, sourceIndex)
+    const textChar = readCodePointAt(text, textIndex)
+    if (!sourceChar.length || !textChar.length) return null
+    const reference = raw[sourceIndex] === '&' ? readSourceCharacterReference(raw, sourceIndex) : null
+    if (reference && text.startsWith(reference.value, textIndex)) {
+      appendBoundaries(sourceIndex, sourceIndex + reference.token.length, reference.value.length, false)
+      sourceIndex += reference.token.length
+      textIndex += reference.value.length
+      continue
+    }
+    if (sourceChar.value === textChar.value) {
+      appendBoundaries(sourceIndex, sourceIndex + sourceChar.length, textChar.length, true)
+      sourceIndex += sourceChar.length
+      textIndex += textChar.length
+      continue
+    }
+
+    if (raw[sourceIndex] === '\\' && sourceIndex + 1 < raw.length) {
+      const escaped = readCodePointAt(raw, sourceIndex + 1)
+      if (isMarkdownEscapable(escaped.value) && escaped.value === textChar.value) {
+        appendBoundaries(sourceIndex, sourceIndex + 1 + escaped.length, textChar.length, false)
+        sourceIndex += 1 + escaped.length
+        textIndex += textChar.length
+        continue
+      }
+    }
+
+    const newline = raw.startsWith('\r\n', sourceIndex) ? '\r\n' : raw[sourceIndex] === '\r' || raw[sourceIndex] === '\n' ? raw[sourceIndex] : ''
+    if (newline && text[textIndex] === ' ') {
+      appendBoundaries(sourceIndex, sourceIndex + newline.length, 1, false)
+      sourceIndex += newline.length
+      textIndex += 1
+      continue
+    }
+
+    return null
+  }
+
+  if (sourceIndex !== raw.length || textIndex !== text.length || boundaries.length !== text.length + 1) return null
+  return boundaries
 }
 
 export interface PreviewBlock {
@@ -80,7 +185,7 @@ export interface PreviewBlock {
   }
   /** 当块为 list 时记录顶层项数，用于粗略高度估计 */
   listItemCount?: number
-  /** 当块为 code/mermaid 时记录语言与行数，用于粗略高度估计 */
+  /** 当块为 code/mermaid/echarts 时记录语言与行数，用于粗略高度估计 */
   codeMeta?: {
     lang?: string
     lines: number
@@ -357,10 +462,10 @@ export function createMarkdownPreviewModel(rawContent: string): MarkdownPreviewM
       }
     } else if (type === 'list') {
       block.listItemCount = countDirectChildren(node, 'listItem')
-    } else if (type === 'code' || type === 'mermaid') {
+    } else if (type === 'code' || type === 'mermaid' || type === 'echarts') {
       const value = node.value ?? normalizedContent.slice(startOffset, endOffset)
       block.codeMeta = {
-        lang: type === 'mermaid' ? 'mermaid' : node.lang ?? undefined,
+        lang: type === 'mermaid' || type === 'echarts' ? type : node.lang ?? undefined,
         lines: countLines(value),
       }
     } else if (type === 'table') {
@@ -507,7 +612,7 @@ function countLineBreaks(value: string): number {
  * 优先级：
  * 1. `heading-{line}`（extractToc / data-heading-id 同源的内部标识，需校验该行确为标题块起始行）；
  * 2. 按文档顺序扫描渲染块：标题块先比对 model.toc 的 slug id（createHeadingId 去重语义），
- *    再扫描块源码中的 HTML id 属性；code / mermaid / frontmatter 块不渲染 id，跳过。
+ *    再扫描块源码中的 HTML id 属性；code / mermaid / echarts / frontmatter 块不渲染 id，跳过。
  * 未命中返回 null，调用方保持安全 no-op。
  * 边界：纯文本书写的 `id="..."`（如讲解 HTML 的文档）可能被识别为锚点目标；
  * 与阶段 1 的确定回退语义一致——只保证确定、可解释，不做 DOM 级精确判定。
@@ -525,7 +630,7 @@ export function findAnchorTarget(model: MarkdownPreviewModel, id: string): Previ
 
   const headingSlugByLine = new Map(model.toc.map((item) => [item.line, item.id]))
   for (const block of model.blocks) {
-    if (block.type === 'code' || block.type === 'mermaid' || block.type === 'frontmatter') continue
+    if (block.type === 'code' || block.type === 'mermaid' || block.type === 'echarts' || block.type === 'frontmatter') continue
     if (block.type === 'heading' && headingSlugByLine.get(block.startLine) === id) {
       return { line: block.startLine, kind: 'heading-slug' }
     }
@@ -583,6 +688,8 @@ interface VisibleTextPart {
   text: string
   /** 该段首字符对应的源码 offset */
   srcFrom: number
+  /** 非等长可见文本的字符边界 → 源码 offset */
+  sourceBoundaries?: number[]
   /** 该段归属的块索引（块间分隔符归属前一块） */
   blockIndex: number
 }
@@ -616,7 +723,13 @@ export function getVisibleTextProjection(model: MarkdownPreviewModel): VisibleTe
     }
     for (const segment of block.textSegments) {
       if (!segment.text) continue
-      parts.push({ projFrom: text.length, text: segment.text, srcFrom: segment.from, blockIndex })
+      parts.push({
+        projFrom: text.length,
+        text: segment.text,
+        srcFrom: segment.from,
+        sourceBoundaries: segment.sourceBoundaries,
+        blockIndex,
+      })
       text += segment.text
     }
   })
@@ -626,7 +739,7 @@ export function getVisibleTextProjection(model: MarkdownPreviewModel): VisibleTe
 }
 
 /** 投影位置 → 源码 offset + 块索引；parts 覆盖整个投影区间，二分查找包含该位置的段 */
-function projectionIndexToSource(projection: VisibleTextProjection, index: number): { srcOffset: number; blockIndex: number } | null {
+function projectionIndexToSource(projection: VisibleTextProjection, index: number): { srcOffset: number; srcEndOffset: number; blockIndex: number } | null {
   const { parts } = projection
   if (index < 0 || index >= projection.text.length || parts.length === 0) return null
   let lo = 0
@@ -638,7 +751,13 @@ function projectionIndexToSource(projection: VisibleTextProjection, index: numbe
   }
   const part = parts[lo]
   if (!part || index >= part.projFrom + part.text.length) return null
-  return { srcOffset: part.srcFrom + (index - part.projFrom), blockIndex: part.blockIndex }
+  const local = index - part.projFrom
+  const boundaries = part.sourceBoundaries
+  return {
+    srcOffset: boundaries?.[local] ?? part.srcFrom + local,
+    srcEndOffset: boundaries?.[local + 1] ?? part.srcFrom + local + 1,
+    blockIndex: part.blockIndex,
+  }
 }
 
 export interface VisibleTextSearchHit {
@@ -670,7 +789,7 @@ export function searchVisibleText(model: MarkdownPreviewModel, query: string): V
     const start = projectionIndexToSource(projection, idx)
     const last = projectionIndexToSource(projection, idx + query.length - 1)
     if (start && last) {
-      hits.push({ from: start.srcOffset, to: last.srcOffset + 1, blockIndex: start.blockIndex })
+      hits.push({ from: start.srcOffset, to: last.srcEndOffset, blockIndex: start.blockIndex })
     }
     cursor = idx + Math.max(1, query.length)
   }
@@ -744,7 +863,7 @@ export function getEstimatedPreviewLineForTop(
  * - hard break 记为单个换行；
  * - math / inlineMath：以去定界符后的 LaTeX 源码作为确定回退文本，
  *   from/to 精确指向 value 的源码区间（逐字符对齐）；
- * - html：按标签切分文本 run，run 与源码逐字符对齐（不解码实体）；
+ * - html：按标签切分渲染可见文本 run；实体等非等长内容同时保留源码边界映射；
  *   script / style / foreignObject（sanitize strip 列表）内部文本不产生 segment，
  *   包括跨 mdast 节点的未闭合不可见元素（内联 html 场景）。
  * source 为与节点 position 同坐标系的全文（normalizedContent；LaTeX 规范化为等长替换）。
@@ -766,7 +885,8 @@ function collectTextSegments(node: MdastPositioned, source: string): PreviewText
       const from = current.position?.start?.offset
       const to = current.position?.end?.offset
       if (!pendingInvisibleClose && typeof from === 'number' && typeof to === 'number' && typeof current.value === 'string' && current.value) {
-        out.push({ from, to, text: current.value })
+        const sourceBoundaries = buildSourceTextBoundaries(source, from, to, current.value)
+        out.push({ from, to, text: current.value, sourceBoundaries: sourceBoundaries ?? undefined })
       }
       return
     }
@@ -831,13 +951,20 @@ function collectLiteralValueSegments(
   const contentEnd = inlineFence && raw.endsWith(inlineFence)
     ? raw.length - inlineFence.length
     : raw.length
-  const exact = raw.slice(contentStart, contentEnd).indexOf(value)
+  const contentFrom = from + contentStart
+  const contentTo = from + contentEnd
+  const content = raw.slice(contentStart, contentEnd)
+  const exact = content.indexOf(value)
   if (exact >= 0) {
     const valueStart = contentStart + exact
     return [{ from: from + valueStart, to: from + valueStart + value.length, text: value }]
   }
   if (type === 'inlineCode') {
-    // 极端空白规范化场景保持既有确定性回退；普通 inlineCode 均走精确分支。
+    const sourceBoundaries = buildSourceTextBoundaries(source, contentFrom, contentTo, value)
+    if (sourceBoundaries) {
+      return [{ from: sourceBoundaries[0], to: sourceBoundaries[sourceBoundaries.length - 1], text: value, sourceBoundaries }]
+    }
+    // 极端规范化场景保持既有确定性回退；普通 inlineCode 均走精确分支。
     return [{ from, to, text: value }]
   }
 
@@ -930,11 +1057,28 @@ function findHtmlClosingTagEnd(raw: string, tagName: string): number {
   return m ? m.index + m[0].length : -1
 }
 
+function decodeHtmlText(raw: string): string {
+  let text = ''
+  let index = 0
+  while (index < raw.length) {
+    const reference = raw[index] === '&' ? readSourceCharacterReference(raw, index) : null
+    if (reference) {
+      text += reference.value
+      index += reference.token.length
+      continue
+    }
+    const char = readCodePointAt(raw, index)
+    text += char.value
+    index += char.length || 1
+  }
+  return text
+}
+
 /**
  * 把 html 节点 value（原始 HTML 源码）切分为与源码逐字符对齐的文本 run 并追加到 out。
  * - 标签、注释、doctype/处理指令不产生文本；
  * - script / style / foreignObject 内部文本不产生 run（渲染后被 sanitize 移除）；
- * - 文本 run 保持源码原文（不解码实体），保证 offset 逐字符对齐；
+ * - 文本 run 使用渲染后的可见文本；实体等非等长内容同时保留源码边界映射；
  * - 未闭合标签等无法识别的 '<' 按普通文本字符处理（确定性回退）；
  * - 不可见元素的闭合标签不在本片段内时，通过 onInvisibleOpen 把标签名
  *   交回调用方继续等待（跨 mdast html 节点的内联场景）。
@@ -950,7 +1094,15 @@ function appendHtmlRuns(
   let runStart = -1
   const flushRun = (runEnd: number) => {
     if (runStart >= 0 && runEnd > runStart) {
-      out.push({ from: baseOffset + runStart, to: baseOffset + runEnd, text: raw.slice(runStart, runEnd) })
+      const rawText = raw.slice(runStart, runEnd)
+      const text = decodeHtmlText(rawText)
+      const sourceBoundaries = buildSourceTextBoundaries(rawText, 0, rawText.length, text)
+      out.push({
+        from: baseOffset + runStart,
+        to: baseOffset + runEnd,
+        text,
+        sourceBoundaries: sourceBoundaries?.map((offset) => baseOffset + runStart + offset),
+      })
     }
     runStart = -1
   }
@@ -1009,7 +1161,10 @@ function classifyBlockType(node: MdastPositioned): PreviewBlockType {
     return 'image'
   }
   if (node.type === 'code') {
-    return node.lang?.toLowerCase() === 'mermaid' ? 'mermaid' : 'code'
+    const language = node.lang?.toLowerCase()
+    if (language === 'mermaid') return 'mermaid'
+    if (language === 'echarts') return 'echarts'
+    return 'code'
   }
   switch (node.type) {
     case 'heading':

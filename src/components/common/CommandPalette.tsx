@@ -3,6 +3,7 @@ import { Input } from 'animal-island-ui'
 import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
 import { openFile, saveFile, saveFileAs } from '@/services/fileSystem'
+import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { exportMarkdownAsHtml } from '@/services/markdownExport'
 import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { SHORTCUTS } from '@/services/shortcuts'
@@ -53,6 +54,7 @@ export function CommandPalette({ open, onClose, mode = 'commands' }: CommandPale
       scheduleMarkdownDocumentIndex(file.path, file.name, file.content)
     } catch (err) {
       console.error('Open file failed:', err)
+      toast.error(describeFileOperationError(err, '打开文件失败'))
     }
   }, [onClose])
 

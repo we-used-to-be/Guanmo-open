@@ -12,6 +12,7 @@ export type MarkdownBlockType =
   | 'blockquote'
   | 'code'
   | 'mermaid'
+  | 'echarts'
   | 'math'
   | 'table'
   | 'html'
@@ -124,7 +125,12 @@ function classifyNode(node: PositionedNode): MarkdownBlockType {
   if (node.type === 'paragraph' && node.children?.length === 1 && node.children[0].type === 'image') {
     return 'image'
   }
-  if (node.type === 'code') return node.lang?.toLowerCase() === 'mermaid' ? 'mermaid' : 'code'
+  if (node.type === 'code') {
+    const language = node.lang?.toLowerCase()
+    if (language === 'mermaid') return 'mermaid'
+    if (language === 'echarts') return 'echarts'
+    return 'code'
+  }
   switch (node.type) {
     case 'heading':
     case 'thematicBreak':

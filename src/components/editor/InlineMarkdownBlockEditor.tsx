@@ -17,7 +17,7 @@ interface InlineMarkdownBlockEditorProps {
   wordWrap: boolean
   conflict: boolean
   onDraftChange: (draft: string) => void
-  onSubmit: (draft: string) => void
+  onSubmit: (draft: string) => Promise<boolean> | boolean
   onCopyDraft: (draft: string) => void
 }
 
@@ -43,10 +43,9 @@ export function InlineMarkdownBlockEditor({
 
   useLayoutEffect(() => {
     if (!hostRef.current) return
-    const submit = (view: EditorView) => {
+    const submit = (view: EditorView): Promise<boolean> | boolean => {
       if (view.composing || composingRef.current) return false
-      onSubmitRef.current(view.state.doc.toString())
-      return true
+      return onSubmitRef.current(view.state.doc.toString())
     }
     const state = EditorState.create({
       doc: block.rawSource,
@@ -84,8 +83,11 @@ export function InlineMarkdownBlockEditor({
           {
             key: 'Ctrl-s',
             run: (view) => {
-              if (!submit(view)) return false
-              queueMicrotask(() => window.dispatchEvent(new CustomEvent('cm-save')))
+              const result = submit(view)
+              if (result === false) return false
+              void Promise.resolve(result).then((submitted) => {
+                if (submitted) window.dispatchEvent(new CustomEvent('cm-save'))
+              })
               return true
             },
           },

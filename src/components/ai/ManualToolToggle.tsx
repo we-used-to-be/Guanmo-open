@@ -28,34 +28,33 @@ export function ManualToolToggle({ onChange, onReasoningModeChange, disabled = f
   }, [disabled, reasoningMode, onReasoningModeChange])
 
   return (
-    <div className="flex items-center gap-1.5 px-2 pt-0.5 pb-1">
-      <div className="relative group">
-        <Button
-          type="default"
-          size="small"
-          disabled={disabled}
-          onClick={toggleReasoning}
+    <div className="relative group flex-shrink-0">
+      <Button
+        type="default"
+        size="small"
+        disabled={disabled}
+        onClick={toggleReasoning}
+        aria-label="深度思考"
+        aria-pressed={reasoningMode === 'on'}
+        title="开启深度思考"
           icon={
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z" />
-              <path d="M12 6v6l4 2" />
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M9 18h6" />
+              <path d="M10 22h4" />
+              <path d="M12 2a7 7 0 0 0-4 12.74V17h8v-2.26A7 7 0 0 0 12 2Z" />
             </svg>
           }
           className={`
-            gm-manual-tool-toggle !px-2 !py-1 !h-7 !text-micro !font-medium !rounded-2xl
-            ${reasoningMode === 'on'
-              ? 'gm-manual-tool-toggle--active'
-              : ''
-            }
-          `}
-        >
-          深度思考
-        </Button>
-        {/* Tooltip */}
-        <div className="gm-manual-tool-tooltip absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 rounded-lg text-micro whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
-          {reasoningMode === 'on' ? '已开启深度思考（仅本次请求）' : '开启深度思考模式，AI 将进行更深入的推理'}
-        </div>
-      </div>
+          gm-manual-tool-toggle gm-manual-tool-toggle--icon !h-8 !px-1 !py-0 !rounded-xl
+          ${reasoningMode === 'on'
+            ? 'gm-manual-tool-toggle--active font-semibold'
+            : 'text-gm-text-tertiary'
+          }
+        `}
+      >
+        <span className="text-micro leading-none">深度思考</span>
+        {reasoningMode === 'on' && <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true" />}
+      </Button>
     </div>
   )
 }

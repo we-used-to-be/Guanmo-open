@@ -1,18 +1,22 @@
 import { useState, useCallback, useRef } from 'react'
 import { useEditorStore } from '@/stores/editorStore'
-import { createFile, createFolder, openFile } from '@/services/fileSystem'
+import { createFile, createFolder, openFile, removeFileEntry } from '@/services/fileSystem'
 import type { FileNode } from '@/services/fileTree'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { addFileContextTag, summarizeFileWithAi } from '@/services/aiContext'
-import { addKnowledgeDocument, isKnowledgeDocumentIndexed } from '@/services/rag/knowledgeBase'
-import { isMarkdownPath } from '@/services/rag/indexer'
-import { readFile } from '@/hooks/useTauri'
+import {
+  addWorkspaceKnowledgeDocument,
+  isWorkspaceKnowledgeDocumentIndexed,
+  isWorkspaceMarkdownPath,
+} from '@/services/workspaceIndex'
 import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { saveExistingFileAs, validateFileName } from '@/services/fileEntryActions'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
+import { readRememberedMarkdownFileForOpen } from '@/services/markdownFileOpenPolicy'
 import { toast } from '@/services/toast'
 import { Tooltip, TruncatedText } from '@/components/common/Tooltip'
 import { useFileRename } from '@/hooks/useFileRename'
+import { getRuntimeCapabilities } from '@/services/runtimeCapabilities'
 
 interface FileTreeProps {
   nodes: FileNode[]
@@ -136,6 +140,7 @@ function EmptyState() {
       }
     } catch (err) {
       console.error('Open file failed:', err)
+      toast.error(describeFileOperationError(err, '打开文件失败'))
     }
   }, [])
 
@@ -172,6 +177,7 @@ function FileTreeNode({
   const activeTab = useEditorStore((s) => s.tabs.find((t) => t.id === s.activeTabId))
   const isActive = isSameFilePath(activeTab?.filePath, node.path)
   const isFile = node.type !== 'directory'
+  const databaseEnabled = getRuntimeCapabilities().database
   const [kbStatus, setKbStatus] = useState<'idle' | 'checking' | 'not-indexed' | 'indexed' | 'adding'>('idle')
 
   const handleClick = useCallback(() => {
@@ -183,12 +189,11 @@ function FileTreeNode({
   }, [node, onOpenFile])
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
-    if (!isFile) return
     e.preventDefault()
     setContextMenu({ x: e.clientX, y: e.clientY })
-    if (isMarkdownPath(node.path)) {
+    if (databaseEnabled && isWorkspaceMarkdownPath(node.path)) {
       setKbStatus('checking')
-      isKnowledgeDocumentIndexed(node.path).then((indexed) => {
+      isWorkspaceKnowledgeDocumentIndexed(node.path).then((indexed) => {
         setKbStatus(indexed ? 'indexed' : 'not-indexed')
       }).catch(() => {
         setKbStatus('not-indexed')
@@ -196,7 +201,7 @@ function FileTreeNode({
     } else {
       setKbStatus('idle')
     }
-  }, [isFile, node.path])
+  }, [databaseEnabled, isFile, node.path])
 
   const handleAddToAi = useCallback(() => {
     addFileContextTag({ title: node.name, filePath: node.path })
@@ -284,30 +289,48 @@ function FileTreeNode({
         <ContextMenu position={contextMenu} onClose={() => setContextMenu(null)} minWidth={176} maxWidth={176}>
           <ContextMenuGroupTitle variant="strong">文件操作</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => { rename.startRename(node.path, node.name); setContextMenu(null) }}>重命名</ContextMenuItem>
+          <ContextMenuItem onClick={async () => {
+            if (!window.confirm(`确认删除“${node.name}”吗？此操作不可恢复。`)) return
+            setContextMenu(null)
+            try {
+              await removeFileEntry(node.path)
+              if (isFile) {
+                const active = useEditorStore.getState().tabs.find((tab) => isSameFilePath(tab.filePath, node.path))
+                if (active) useEditorStore.getState().closeTab(active.id)
+              }
+              onRefreshWorkspace?.()
+              toast.success('已删除文件')
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : '删除文件失败')
+            }
+          }}>{isFile ? '删除文件' : '删除文件夹'}</ContextMenuItem>
           <ContextMenuItem onClick={handleSaveAs}>另存为</ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuGroupTitle variant="strong">AI 助手</ContextMenuGroupTitle>
           <ContextMenuItem onClick={handleSummarize}>AI 总结该文件</ContextMenuItem>
           <ContextMenuItem onClick={handleAddToAi}>添加文件到 AI 上下文</ContextMenuItem>
-          {isMarkdownPath(node.path) && (
+          {isWorkspaceMarkdownPath(node.path) && (
             <>
               <ContextMenuSeparator />
               <ContextMenuGroupTitle>知识库</ContextMenuGroupTitle>
+              {!databaseEnabled && (
+                <ContextMenuItem onClick={() => {}} disabled>
+                  知识库仅桌面版可用
+                </ContextMenuItem>
+              )}
               {kbStatus === 'checking' && (
                 <ContextMenuItem onClick={() => {}} disabled>
                   正在读取知识库状态…
                 </ContextMenuItem>
               )}
-              {kbStatus === 'not-indexed' && (
+              {databaseEnabled && kbStatus === 'not-indexed' && (
                 <ContextMenuItem onClick={async () => {
                   setContextMenu(null)
                   setKbStatus('adding')
                   try {
-                    const content = await readFile(node.path)
-                    const result = await addKnowledgeDocument({
+                    const result = await addWorkspaceKnowledgeDocument({
                       filePath: node.path,
                       title: node.name,
-                      content,
                     })
                     if (result.success) {
                       setKbStatus('indexed')
@@ -322,16 +345,14 @@ function FileTreeNode({
                   }
                 }}>加入知识库</ContextMenuItem>
               )}
-              {kbStatus === 'indexed' && (
+              {databaseEnabled && kbStatus === 'indexed' && (
                 <ContextMenuItem onClick={async () => {
                   setContextMenu(null)
                   setKbStatus('adding')
                   try {
-                    const content = await readFile(node.path)
-                    const result = await addKnowledgeDocument({
+                    const result = await addWorkspaceKnowledgeDocument({
                       filePath: node.path,
                       title: node.name,
-                      content,
                     })
                     if (result.success) {
                       setKbStatus('indexed')
@@ -346,7 +367,7 @@ function FileTreeNode({
                   }
                 }}>✓ 已加入知识库（点击更新）</ContextMenuItem>
               )}
-              {kbStatus === 'adding' && (
+              {databaseEnabled && kbStatus === 'adding' && (
                 <ContextMenuItem onClick={() => {}} disabled>
                   正在加入知识库…
                 </ContextMenuItem>
@@ -383,16 +404,21 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
   const [kbStatus, setKbStatus] = useState<'idle' | 'checking' | 'not-indexed' | 'indexed' | 'adding'>('idle')
 
   const handleOpen = useCallback(
-    (file: { name: string; path: string }) => {
+    async (file: { name: string; path: string }) => {
       if (onOpen) {
         onOpen(file)
         return
       }
-      const existing = tabs.find((t) => isSameFilePath(t.filePath, file.path))
-      if (existing) {
-        setActiveTab(existing.id)
-      } else {
-        addTab(file.path, file.name, '')
+      try {
+        const existing = tabs.find((t) => isSameFilePath(t.filePath, file.path))
+        if (existing) {
+          setActiveTab(existing.id)
+        } else {
+          const content = await readRememberedMarkdownFileForOpen(file.path)
+          addTab(file.path, file.name, content)
+        }
+      } catch (err) {
+        toast.error(describeFileOperationError(err, '打开最近文件失败'))
       }
     },
     [addTab, onOpen, setActiveTab, tabs]
@@ -422,9 +448,9 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
             onContextMenu={(e) => {
               e.preventDefault()
               setContextMenu({ x: e.clientX, y: e.clientY, file })
-              if (isMarkdownPath(file.path)) {
+              if (isWorkspaceMarkdownPath(file.path)) {
                 setKbStatus('checking')
-                isKnowledgeDocumentIndexed(file.path).then((indexed) => {
+                isWorkspaceKnowledgeDocumentIndexed(file.path).then((indexed) => {
                   setKbStatus(indexed ? 'indexed' : 'not-indexed')
                 }).catch(() => {
                   setKbStatus('not-indexed')
@@ -492,7 +518,7 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
           <ContextMenuSeparator />
           <ContextMenuGroupTitle variant="strong">AI 助手</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => { addFileContextTag({ title: contextMenu.file.name, filePath: contextMenu.file.path }); setContextMenu(null) }}>添加文件到 AI 上下文</ContextMenuItem>
-          {isMarkdownPath(contextMenu.file.path) && (
+          {isWorkspaceMarkdownPath(contextMenu.file.path) && (
             <>
               <ContextMenuSeparator />
               <ContextMenuGroupTitle>知识库</ContextMenuGroupTitle>
@@ -506,11 +532,9 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
                   setContextMenu(null)
                   setKbStatus('adding')
                   try {
-                    const content = await readFile(contextMenu.file.path)
-                    const result = await addKnowledgeDocument({
+                    const result = await addWorkspaceKnowledgeDocument({
                       filePath: contextMenu.file.path,
                       title: contextMenu.file.name,
-                      content,
                     })
                     if (result.success) {
                       setKbStatus('indexed')
@@ -530,11 +554,9 @@ export function RecentFiles({ files, onOpen, onRefreshWorkspace }: {
                   setContextMenu(null)
                   setKbStatus('adding')
                   try {
-                    const content = await readFile(contextMenu.file.path)
-                    const result = await addKnowledgeDocument({
+                    const result = await addWorkspaceKnowledgeDocument({
                       filePath: contextMenu.file.path,
                       title: contextMenu.file.name,
-                      content,
                     })
                     if (result.success) {
                       setKbStatus('indexed')

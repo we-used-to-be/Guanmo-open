@@ -17,6 +17,25 @@ export function showSessionRestoreIssues(issues: PersistedTabRestoreIssue[]): vo
     })
   }
 
+  const tooLarge = issues.filter((issue) => issue.kind === 'too-large')
+  if (tooLarge.length > 0) {
+    const preservedDrafts = tooLarge.filter((issue) => issue.preservedDraft)
+    const message = tooLarge.length === 1
+      ? preservedDrafts.length === 1
+        ? `「${tooLarge[0].title}」文件过大，已保留未保存内容，未刷新磁盘版本。`
+        : `「${tooLarge[0].title}」文件过大，本次启动已跳过恢复。`
+      : preservedDrafts.length > 0
+        ? `${tooLarge.length} 个文件超过打开上限，其中 ${preservedDrafts.length} 个标签保留了未保存内容。`
+        : `${tooLarge.length} 个文件超过打开上限，本次启动已跳过恢复。`
+    toast.show({
+      id: 'session-restore-too-large',
+      title: '已跳过过大文件',
+      message,
+      type: 'warning',
+      duration: null,
+    })
+  }
+
   const changed = issues.filter((issue) => issue.kind === 'external-change')
   if (changed.length === 0) return
   const currentTabs = useEditorStore.getState().tabs

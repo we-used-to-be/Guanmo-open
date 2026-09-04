@@ -1,5 +1,8 @@
-import type { PreviewBlock } from '@/services/markdownPreviewModel'
+import type { MarkdownPreviewModel, PreviewBlock } from '@/services/markdownPreviewModel'
 import type { DocumentRange } from '@/services/previewHighlight'
+import type { CreateReadingMarkResult, ReadingMark, ReadingMarkColor, UpdateReadingMarkPatch } from '@/services/readingMarks'
+import type { RefObject } from 'react'
+import type { AnnotationHoverOverlayHandle } from './AnnotationHoverOverlay'
 
 export interface MarkdownBlockCommitRequest {
   block: PreviewBlock
@@ -29,8 +32,17 @@ export interface PreviewSelectionSnapshot {
   endLine: number
 }
 
+export interface MarkdownPreviewSourceRevealRequest {
+  documentKey: string
+  documentVersion?: number | string
+  startLine: number
+  endLine?: number
+  onApplied?: () => void
+}
+
 export interface MarkdownPreviewHandle {
   scrollToLine: (line: number) => void
+  revealSourceLines: (request: MarkdownPreviewSourceRevealRequest) => boolean
   scrollToOffset: (offset: number) => void
   getTopForLine: (line: number) => number | undefined
   getLineForTop: (top: number) => number | undefined
@@ -42,6 +54,7 @@ export interface MarkdownPreviewHandle {
   getSelection: () => PreviewSelectionSnapshot | null
   selectAll: () => void
   clearSelection: () => void
+  navigateToReadingMark: (markId: string) => boolean
 }
 
 export interface MarkdownPreviewProps {
@@ -64,4 +77,9 @@ export interface MarkdownPreviewProps {
   onFirstVisible?: () => void
   onRenderComplete?: () => void
   resource?: 'preview' | 'left-preview' | 'right-preview'
+  readingMarks?: ReadingMark[]
+  onCreateReadingMark?: (selection: PreviewSelectionSnapshot, color: ReadingMarkColor, note: string | undefined, model: MarkdownPreviewModel) => Promise<CreateReadingMarkResult>
+  onUpdateReadingMark?: (id: string, patch: UpdateReadingMarkPatch) => Promise<ReadingMark>
+  onDeleteReadingMark?: (id: string) => Promise<void>
+  annotationOverlayRef?: RefObject<AnnotationHoverOverlayHandle | null>
 }

@@ -1,7 +1,7 @@
 import { useEditorStore, type Tab } from '@/stores/editorStore'
 import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
-import { saveFileAs } from '@/services/fileSystem'
-import { basenamePath, dirnamePath, fileExists, joinPath, renameFile } from '@/hooks/useTauri'
+import { fileExistsEntry, renameFileEntryInFileSystem, saveFileAs } from '@/services/fileSystem'
+import { basenamePath, dirnamePath, joinPath } from '@/hooks/useTauri'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { readRememberedFile } from '@/services/persistedFileAccess'
@@ -23,11 +23,11 @@ export async function renameFileEntry(path: string, nextName: string): Promise<s
   if (await basenamePath(path) === name) return path
 
   const nextPath = await joinPath(await dirnamePath(path), name)
-  if (await fileExists(nextPath)) {
+  if (await fileExistsEntry(nextPath)) {
     throw new Error('同一文件夹下已存在同名文件或文件夹')
   }
   try {
-    await renameFile(path, nextPath)
+    await renameFileEntryInFileSystem(path, name)
   } catch (err) {
     throw new Error(describeFileOperationError(err, '重命名失败'))
   }

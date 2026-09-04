@@ -3,8 +3,9 @@ import { FileTree } from '@/components/file-tree/FileTree'
 import { isTauri } from '@/hooks/useTauri'
 import { useWorkspaceFileTree } from '@/hooks/useWorkspaceFileTree'
 import { pickDirectory } from '@/services/fileSystem'
-import { indexWorkspaceMarkdown } from '@/services/rag/indexer'
+import { indexWorkspaceDocuments } from '@/services/workspaceIndex'
 import { toast } from '@/services/toast'
+import { getRuntimeCapabilities } from '@/services/runtimeCapabilities'
 
 interface WorkspaceRootsProps {
   onOpenFile: (path: string) => void
@@ -21,10 +22,11 @@ export function WorkspaceRoots({ onOpenFile }: WorkspaceRootsProps) {
   const [collapsedRootIds, setCollapsedRootIds] = useState<Set<string>>(() => new Set())
   const [workingRootId, setWorkingRootId] = useState<string | null>(null)
   const [rootSummaries, setRootSummaries] = useState<Record<string, string>>({})
+  const browserFileSystem = getRuntimeCapabilities().browserFileSystem
 
   const handleAddWorkspace = useCallback(async () => {
-    if (!isTauri()) {
-      toast.error('浏览器模式下不可用，请下载桌面版')
+    if (!isTauri() && !getRuntimeCapabilities().browserFileSystem) {
+      toast.error('当前浏览器不支持目录工作区，请使用 Chrome 或 Edge')
       return
     }
     try {
@@ -53,11 +55,15 @@ export function WorkspaceRoots({ onOpenFile }: WorkspaceRootsProps) {
   }, [])
 
   const handleIndex = useCallback(async (rootId: string, rootPath: string) => {
+    if (!getRuntimeCapabilities().database) {
+      toast.error('网页版不提供知识库索引')
+      return
+    }
     if (workingRootId) return
     setWorkingRootId(rootId)
     setSummary(rootId, null)
     try {
-      const result = await indexWorkspaceMarkdown(rootPath)
+      const result = await indexWorkspaceDocuments(rootPath)
       let summary = `已索引 ${result.indexed}`
       if (result.failed > 0) summary += `，失败 ${result.failed}`
       if (result.errors.length > 0) summary += `\n${result.errors.join('\n')}`
@@ -82,7 +88,9 @@ export function WorkspaceRoots({ onOpenFile }: WorkspaceRootsProps) {
         <button
           type="button"
           onClick={handleAddWorkspace}
-          className="rounded-md px-2 py-1 text-micro text-gm-text-secondary hover:bg-gm-surface-hover hover:text-gm-text"
+          disabled={!isTauri() && !browserFileSystem}
+          title={!isTauri() && !browserFileSystem ? '当前浏览器不支持目录工作区' : undefined}
+          className="rounded-md px-2 py-1 text-micro text-gm-text-secondary hover:bg-gm-surface-hover hover:text-gm-text disabled:cursor-not-allowed disabled:opacity-50"
         >
           添加文件夹
         </button>
@@ -132,7 +140,8 @@ export function WorkspaceRoots({ onOpenFile }: WorkspaceRootsProps) {
               </button>
               <button
                 type="button"
-                disabled={Boolean(workingRootId)}
+                disabled={!getRuntimeCapabilities().database || Boolean(workingRootId)}
+                title={!getRuntimeCapabilities().database ? '知识库索引仅桌面版可用' : undefined}
                 onClick={() => void handleIndex(root.id, root.path)}
                 className="text-micro text-gm-text-tertiary hover:text-gm-text disabled:cursor-not-allowed disabled:opacity-50"
               >

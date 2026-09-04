@@ -111,6 +111,8 @@ describe('MarkdownPreview 内嵌 HTML', () => {
     expect(texts[1]).toHaveAttribute('font-size', '16')
     expect(texts[1]).toHaveAttribute('font-weight', '600')
     expect(container.querySelector('svg line')).toHaveAttribute('stroke-width', '3')
+    expect(container.querySelector('svg rect > text')).toBeNull()
+    expect(container.querySelector('svg path > rect')).toBeNull()
   })
 
   it('以隐私友好的方式加载 HTTPS 图片', async () => {

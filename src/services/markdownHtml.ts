@@ -1,5 +1,6 @@
 import type { Options } from 'react-markdown'
 import type { Element, Root } from 'hast'
+import type { Raw } from 'mdast-util-to-hast'
 import rehypeRaw from 'rehype-raw'
 import rehypeSanitize, { defaultSchema, type Options as SanitizeSchema } from 'rehype-sanitize'
 import { processSvgStyleElements } from './svgStyle'
@@ -209,6 +210,64 @@ function isElement(node: Root['children'][number]): node is Element {
   return node.type === 'element'
 }
 
+/**
+ * Markdown blank lines split an HTML block before rehype-raw sees it. Rebuild
+ * each source-confirmed SVG range as one raw node first, so HTML parsing keeps
+ * SVG self-closing shapes as siblings instead of nesting later nodes under
+ * <rect>/<path> elements that cannot render children.
+ */
+function mergeSplitSvgRawNodes() {
+  return (tree: Root, file?: { toString?: () => string }) => {
+    const source = file?.toString?.()
+    if (!source) return
+    const ranges = collectSvgSourceRanges(source)
+    if (ranges.length === 0) return
+
+    const visit = (parent: Root | Element) => {
+      for (const range of ranges) {
+        const firstIndex = parent.children.findIndex((child) => child.position?.start?.offset === range.start)
+        if (firstIndex < 0) continue
+
+        let lastIndex = -1
+        let reachesRangeEnd = false
+        for (let index = firstIndex; index < parent.children.length; index += 1) {
+          const child = parent.children[index]
+          const start = child.position?.start?.offset
+          const end = child.position?.end?.offset
+          if (typeof start === 'number' && start < range.start) continue
+          if (typeof start === 'number' && start >= range.end) break
+          if (typeof end === 'number' && end > range.end) break
+          lastIndex = index
+          if (end === range.end) {
+            reachesRangeEnd = true
+            break
+          }
+        }
+        if (!reachesRangeEnd || lastIndex < firstIndex) continue
+
+        // A complete, unsplit raw node already has the correct parse context.
+        if (lastIndex === firstIndex) continue
+        const first = parent.children[firstIndex]
+        const last = parent.children[lastIndex]
+        const merged: Raw = {
+          type: 'raw' as const,
+          value: source.slice(range.start, range.end),
+          position: first.position && last.position
+            ? { start: first.position.start, end: last.position.end }
+            : undefined,
+        }
+        parent.children.splice(firstIndex, lastIndex - firstIndex + 1, merged)
+      }
+
+      for (const child of parent.children) {
+        if (isElement(child)) visit(child)
+      }
+    }
+
+    visit(tree)
+  }
+}
+
 function getSvgFragment(node: Root['children'][number]): Element[] | null {
   if (!isElement(node)) return null
   if (node.tagName !== 'p') {
@@ -366,6 +425,7 @@ function restoreSanitizedSvgReferences() {
 }
 
 export const MARKDOWN_HTML_REHYPE_PLUGINS: NonNullable<Options['rehypePlugins']> = [
+  mergeSplitSvgRawNodes,
   rehypeRaw,
   mergeSplitSvgFragments,
   promoteStandaloneSvg,

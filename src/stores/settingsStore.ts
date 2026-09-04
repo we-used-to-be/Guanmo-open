@@ -14,12 +14,23 @@ import {
   saveSecret,
 } from '@/services/secureStorage'
 import { toast } from '@/services/toast'
-import { cancelPendingIndexTimers, getPendingIndexTimerPaths } from '@/services/rag/indexer'
 import {
   createDefaultAiShortcutActions,
   normalizeAiShortcutActions,
   type AiShortcutAction,
 } from '@/services/aiShortcutActions'
+import {
+  DEFAULT_APPEARANCE_CONFIG_V1,
+  resolveAppearanceConfig,
+  resolveLastLightThemeId,
+  resolveThemeId,
+  THEME_IDS,
+} from '@/services/appearance/appearanceSchema'
+import type { AppearanceConfigV1, NonDarkThemeId, ThemeId } from '@/services/appearance/appearanceSchema'
+import { syncDocumentTheme as applyDocumentTheme } from '@/services/appearance/appearanceDom'
+
+export { THEME_IDS, resolveLastLightThemeId, resolveThemeId }
+export type { NonDarkThemeId, ThemeId }
 
 interface EditorSettings {
   fontSize: number
@@ -39,18 +50,13 @@ interface EditorSettings {
   defaultOpenMode: 'edit' | 'preview'
 }
 
-export const THEME_IDS = ['warm', 'light', 'dark', 'paper', 'github-light'] as const
-export type ThemeId = typeof THEME_IDS[number]
-export type NonDarkThemeId = Exclude<ThemeId, 'dark'>
-
 // 保留字段名与持久化结构，避免旧版本配置读取失败；运行时唯一头像方案为小球。
 export const AI_AVATAR_STYLES = ['sprite'] as const
 export type AiAvatarStyle = typeof AI_AVATAR_STYLES[number]
 
-interface AppearanceSettings {
+interface AppearanceSettings extends AppearanceConfigV1 {
   customCursorEnabled: boolean
   aiAvatarStyle: AiAvatarStyle
-  themeId: ThemeId
   lastLightThemeId: NonDarkThemeId
 }
 
@@ -76,9 +82,15 @@ interface SettingsState {
   updateAiConfig: (config: Partial<AiConfig>) => void
   updateEmbeddingConfig: (config: Partial<EmbeddingConfig>) => void
   updateEditorSettings: (settings: Partial<EditorSettings>) => void
-  updateAppearanceSettings: (settings: Partial<AppearanceSettings>) => void
+  updateAppearanceSettings: (settings: Partial<Omit<AppearanceSettings, 'version'>>) => void
   updateWebSearchConfig: (config: Partial<WebSearchConfig>) => void
   updateKnowledgeSettings: (settings: Partial<KnowledgeSettings>) => void
+  hydrateSecrets: (
+    secrets: { apiKey: string | null; embeddingApiKey: string | null; webSearchApiKey: string | null },
+    initial: { apiKey: string; embeddingApiKey: string; webSearchApiKey: string },
+  ) => void
+  // 仅将 Web 密钥运行时读取到的 API Key 写入内存（不触发 secureStorage 持久化）
+  applyWebRuntimeApiKeys: (keys: { chatApiKey: string; webSearchApiKey: string }) => void
   updateUsageTrackingSettings: (settings: Partial<UsageTrackingSettings>) => void
   setAiShortcutActions: (actions: AiShortcutAction[]) => void
   resetAiShortcutActions: () => void
@@ -114,9 +126,9 @@ const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
 }
 
 const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
+  ...DEFAULT_APPEARANCE_CONFIG_V1,
   customCursorEnabled: false,
   aiAvatarStyle: 'sprite',
-  themeId: 'warm',
   lastLightThemeId: 'warm',
 }
 
@@ -136,32 +148,6 @@ const DEFAULT_USAGE_TRACKING_SETTINGS: UsageTrackingSettings = {
   enabled: true,
 }
 
-export function resolveThemeId(appearance: unknown): ThemeId {
-  if (!appearance || typeof appearance !== 'object') return DEFAULT_APPEARANCE_SETTINGS.themeId
-  const saved = appearance as Record<string, unknown>
-  if (typeof saved.themeId === 'string' && THEME_IDS.includes(saved.themeId as ThemeId)) {
-    return saved.themeId as ThemeId
-  }
-  if (saved.theme === 'dark') return 'dark'
-  if (saved.theme === 'light' && saved.lightPalette === 'plain') return 'light'
-  return 'warm'
-}
-
-export function resolveLastLightThemeId(appearance: unknown): NonDarkThemeId {
-  if (!appearance || typeof appearance !== 'object') return DEFAULT_APPEARANCE_SETTINGS.lastLightThemeId
-  const saved = appearance as Record<string, unknown>
-  if (
-    typeof saved.lastLightThemeId === 'string'
-    && THEME_IDS.includes(saved.lastLightThemeId as ThemeId)
-    && saved.lastLightThemeId !== 'dark'
-  ) {
-    return saved.lastLightThemeId as NonDarkThemeId
-  }
-  const themeId = resolveThemeId(saved)
-  if (themeId !== 'dark') return themeId
-  return saved.lightPalette === 'plain' ? 'light' : 'warm'
-}
-
 export function resolveAiAvatarStyle(
   appearance: unknown,
   current: { appearance: AppearanceSettings },
@@ -173,12 +159,7 @@ export function resolveAiAvatarStyle(
 }
 
 export function syncDocumentTheme(themeId: ThemeId) {
-  if (typeof document === 'undefined') return
-  const root = document.documentElement
-  root.dataset.themeId = themeId
-  root.dataset.theme = themeId === 'dark' ? 'dark' : 'light'
-  root.style.colorScheme = themeId === 'dark' ? 'dark' : 'light'
-  delete root.dataset.lightPalette
+  applyDocumentTheme(themeId)
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -221,10 +202,32 @@ export const useSettingsStore = create<SettingsState>()(
 
       updateKnowledgeSettings: (settings) => {
         set((s) => ({ knowledge: { ...s.knowledge, ...settings } }))
-        if (settings.autoIndexEnabled === false) {
-          cancelPendingIndexTimers(getPendingIndexTimerPaths())
-        }
       },
+
+      hydrateSecrets: (secrets, initial) => set((s) => ({
+        ai: {
+          ...s.ai,
+          ...(secrets.apiKey && s.ai.apiKey === initial.apiKey ? { apiKey: secrets.apiKey } : {}),
+          embedding: {
+            ...s.ai.embedding,
+            ...(secrets.embeddingApiKey && s.ai.embedding.apiKey === initial.embeddingApiKey
+              ? { apiKey: secrets.embeddingApiKey }
+              : {}),
+          },
+        },
+        webSearch: {
+          ...s.webSearch,
+          ...(secrets.webSearchApiKey && s.webSearch.apiKey === initial.webSearchApiKey
+            ? { apiKey: secrets.webSearchApiKey }
+            : {}),
+        },
+      })),
+
+      applyWebRuntimeApiKeys: ({ chatApiKey, webSearchApiKey }) =>
+        set((s) => ({
+          ai: { ...s.ai, apiKey: chatApiKey },
+          webSearch: { ...s.webSearch, apiKey: webSearchApiKey },
+        })),
 
       updateUsageTrackingSettings: (settings) =>
         set((s) => ({ usageTracking: { ...s.usageTracking, ...settings } })),
@@ -237,13 +240,15 @@ export const useSettingsStore = create<SettingsState>()(
 
       updateAppearanceSettings: (settings) =>
         set((s) => {
-          const appearance = { ...s.appearance, ...settings }
+          const appearance: AppearanceSettings = {
+            ...s.appearance,
+            ...settings,
+            version: DEFAULT_APPEARANCE_CONFIG_V1.version,
+          }
           if (settings.themeId && settings.themeId !== 'dark') {
             appearance.lastLightThemeId = settings.themeId
           }
-          if ('themeId' in settings) {
-            syncDocumentTheme(appearance.themeId)
-          }
+          if ('themeId' in settings) applyDocumentTheme(appearance.themeId)
           return { appearance }
         }),
 
@@ -389,12 +394,13 @@ export const useSettingsStore = create<SettingsState>()(
           })(),
           appearance: (() => {
             const savedAppearance = (saved.appearance ?? {}) as unknown as Record<string, unknown>
+            const resolved = resolveAppearanceConfig(savedAppearance)
             return {
               customCursorEnabled: typeof savedAppearance.customCursorEnabled === 'boolean'
                 ? savedAppearance.customCursorEnabled
                 : current.appearance.customCursorEnabled,
               aiAvatarStyle: resolveAiAvatarStyle(savedAppearance, current),
-              themeId: resolveThemeId(savedAppearance),
+              ...resolved,
               lastLightThemeId: resolveLastLightThemeId(savedAppearance),
             }
           })(),

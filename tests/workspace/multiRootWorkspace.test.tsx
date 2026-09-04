@@ -8,6 +8,7 @@ vi.mock('@/services/fileSystem', () => ({
 }))
 
 vi.mock('@/hooks/useTauri', () => ({
+  isTauri: () => true,
   joinPath: async (...paths: string[]) => paths.join('/'),
 }))
 
@@ -67,6 +68,29 @@ describe('multi-root workspace state', () => {
 
     useAppStore.getState().removeWorkspaceRoot(roots[0].id)
     expect(selectPrimaryWorkspacePath(useAppStore.getState())).toBe('F:\\Personal')
+  })
+
+  it('persists and rehydrates workspace roots in desktop storage', async () => {
+    localStorage.removeItem('guanmo-app')
+    act(() => {
+      expect(useAppStore.getState().addWorkspaceRoot('D:\\Notes')).toBe(true)
+    })
+
+    const saved = localStorage.getItem('guanmo-app')
+    expect(saved).toBeTruthy()
+    expect(JSON.parse(saved!).state.workspaceRoots).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: 'D:\\Notes' })])
+    )
+
+    act(() => {
+      useAppStore.setState({ workspaceRoots: [] })
+    })
+    localStorage.setItem('guanmo-app', saved!)
+    await act(async () => {
+      await useAppStore.persist.rehydrate()
+    })
+
+    expect(useAppStore.getState().workspaceRoots.map((root) => root.path)).toEqual(['D:\\Notes'])
   })
 
   it('does not close tabs or clear global recent files and favorites when removing a root', () => {

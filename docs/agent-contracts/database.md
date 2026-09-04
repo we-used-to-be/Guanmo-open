@@ -17,7 +17,7 @@
 - 遗弃只永久忽略旧库，并按清单逆序回滚部分迁移，不删除 IndexedDB 或原有 SQLite 数据。
 - 每 5 秒心跳，单批 30 秒超时，60 秒无进度判定为 `failed/stalled`；批次与整次恢复均有限重试。
 - 完成前必须校验数量、ID、核心字段和关联关系。
-- 专项回归使用 `npm run test:legacy-db-migration` 与 `npm run test:legacy-db-recovery`。
+- 当前仓库未提供 `test:legacy-db-migration` 或 `test:legacy-db-recovery` 脚本；已实现的数据库迁移与备份事务契约回归使用 `npx vitest run tests/database/databaseMigrations.test.ts tests/database/transactionBridge.test.ts --maxWorkers=1`，运行时 schema 回归使用 `npm run test:runtime-schemas`。
 
 ## 数据解码与历史关联
 
@@ -25,3 +25,8 @@
 - Web 不提供数据库兼容适配器；桌面数据库关键 row 与备份 JSON 必须经运行时 schema 解码。
 - 备份导入必须在 SQLite 事务中完成，失败回滚。
 - 数据边界回归使用 `npm run test:runtime-schemas`。
+
+## ReadingMark 持久化
+
+- `reading_marks` 为独立表，SQLite/Rust 命令提供按 ID、按文档、全量分页读取、upsert 与删除；Rust 校验枚举、路径与 offset，并由 Rust 刷新 `updated_at`、保留 `created_at`。
+- 备份 v1 的 `readingMarks` 为可选输入、导出始终包含；导入与现有会话、成果和提醒在同一事务中恢复，旧备份缺少该字段必须兼容为空数组。

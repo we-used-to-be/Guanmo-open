@@ -107,6 +107,23 @@ function StatefulDelayedPreview({ onCommit }: { onCommit: () => void }) {
   )
 }
 
+function StatefulAnchoredPreview() {
+  const [content, setContent] = useState(Array.from({ length: 8 }, (_, index) => `第${index + 1}块`).join('\n\n'))
+  return (
+    <MarkdownPreview
+      content={content}
+      documentKey="doc-anchored"
+      documentVersion={content}
+      inlineEditEnabled
+      onBlockCommit={(request) => {
+        const result = replaceMarkdownBlock(content, request.block, request.draft)
+        if (result.status === 'applied') setContent(result.content)
+        return result
+      }}
+    />
+  )
+}
+
 describe('MarkdownPreview 预览内源码编辑', () => {
   it('有无语言标识的围栏代码块使用同款代码框', () => {
     const { container } = renderPreview({
@@ -452,6 +469,90 @@ describe('MarkdownPreview 预览内源码编辑', () => {
     expect(screen.getByText('新内容')).toBeInTheDocument()
   })
 
+  it('保存后按源码锚点保持视口位置，而不是恢复旧 scrollTop', async () => {
+    const user = userEvent.setup()
+    const host = document.createElement('div')
+    Object.defineProperties(host, {
+      clientHeight: { configurable: true, value: 100 },
+      clientWidth: { configurable: true, value: 600 },
+      scrollTop: { configurable: true, value: 121, writable: true },
+    })
+    document.body.appendChild(host)
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this === host) return new DOMRect(0, 0, 600, 100)
+      const index = this.dataset.mdBlockIndex
+      if (index !== undefined) {
+        const top = Number.parseFloat(this.style.top || '0') - host.scrollTop
+        return new DOMRect(0, top, 600, 40)
+      }
+      return new DOMRect()
+    })
+
+    render(<StatefulAnchoredPreview />, { container: host })
+    act(() => host.dispatchEvent(new Event('scroll')))
+    const before = host.querySelectorAll<HTMLElement>('[data-md-block-index]')[3]
+    const anchorViewportTopBefore = before.getBoundingClientRect().top - host.getBoundingClientRect().top
+
+    const firstBlock = Array.from(host.querySelectorAll<HTMLElement>('[data-md-block-index]'))
+      .find((element) => element.textContent?.includes('第1块'))
+    expect(firstBlock).toBeDefined()
+    altClick(firstBlock as HTMLElement)
+    await waitFor(() => expect(host.querySelector('.cm-content')).toBeInTheDocument())
+    const editor = host.querySelector('.cm-content') as HTMLElement
+    await user.click(editor)
+    await user.keyboard('{Control>}a{/Control}第一块\n\n新增块\n\n再新增块')
+    fireEvent.pointerDown(document.body)
+
+    await waitFor(() => expect(
+      Array.from(host.querySelectorAll<HTMLElement>('[data-md-block-index]'))
+        .some((element) => element.textContent?.includes('第4块')),
+    ).toBe(true))
+    const anchor = Array.from(host.querySelectorAll<HTMLElement>('[data-md-block-index]'))
+      .find((element) => element.textContent?.includes('第4块'))
+    expect(anchor).toBeDefined()
+    expect(anchor!.getBoundingClientRect().top - host.getBoundingClientRect().top)
+      .toBeCloseTo(anchorViewportTopBefore, 0)
+  })
+
+  it('修改视口下方区块时不刷新上方 DOM，也不改阅读位置', async () => {
+    const user = userEvent.setup()
+    const host = document.createElement('div')
+    let currentScrollTop = 0
+    let scrollTopWrites = 0
+    Object.defineProperties(host, {
+      clientHeight: { configurable: true, value: 100 },
+      clientWidth: { configurable: true, value: 600 },
+      scrollTop: {
+        configurable: true,
+        get: () => currentScrollTop,
+        set: (value: number) => {
+          currentScrollTop = value
+          scrollTopWrites += 1
+        },
+      },
+    })
+    document.body.appendChild(host)
+
+    render(<StatefulAnchoredPreview />, { container: host })
+    act(() => host.dispatchEvent(new Event('scroll')))
+    const upperBlock = host.querySelector<HTMLElement>('[data-md-block-index="0"]')
+    const lowerBlock = Array.from(host.querySelectorAll<HTMLElement>('[data-md-block-index]'))
+      .find((element) => element.textContent?.includes('第8块'))
+    expect(upperBlock).toBeDefined()
+    expect(lowerBlock).toBeDefined()
+
+    altClick(lowerBlock as HTMLElement)
+    const editor = await screen.findByRole('textbox')
+    await user.click(editor)
+    await user.keyboard('{Control>}a{/Control}第8块已修改')
+    fireEvent.pointerDown(document.body)
+
+    await waitFor(() => expect(host).toHaveTextContent('第8块已修改'))
+    expect(currentScrollTop).toBe(0)
+    expect(scrollTopWrites).toBe(0)
+    expect(host.querySelector('[data-md-block-index="0"]')).toBe(upperBlock)
+  })
+
   it('Ctrl+S 先提交块修改再触发文档保存事件', async () => {
     const user = userEvent.setup()
     const order: string[] = []
@@ -465,6 +566,32 @@ describe('MarkdownPreview 预览内源码编辑', () => {
     altClick(screen.getByText('原文'))
 
     await user.keyboard('{Control>}s{/Control}')
+    await waitFor(() => expect(order).toEqual(['commit', 'save']))
+    window.removeEventListener('cm-save', handleSave)
+  })
+
+  it('Ctrl+S 等待异步块提交完成后才触发文档保存事件', async () => {
+    const user = userEvent.setup()
+    const order: string[] = []
+    let resolveCommit!: (result: { status: 'applied' }) => void
+    const onBlockCommit = vi.fn(() => {
+      order.push('commit')
+      return new Promise<{ status: 'applied' }>((resolve) => {
+        resolveCommit = resolve
+      })
+    })
+    const handleSave = () => order.push('save')
+    window.addEventListener('cm-save', handleSave)
+    renderPreview({ content: '原文', onBlockCommit })
+    altClick(screen.getByText('原文'))
+
+    await user.keyboard('{Control>}s{/Control}')
+    await waitFor(() => expect(onBlockCommit).toHaveBeenCalledOnce())
+    expect(order).toEqual(['commit'])
+
+    await act(async () => {
+      resolveCommit({ status: 'applied' })
+    })
     await waitFor(() => expect(order).toEqual(['commit', 'save']))
     window.removeEventListener('cm-save', handleSave)
   })

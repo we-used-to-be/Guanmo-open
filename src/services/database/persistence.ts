@@ -13,6 +13,7 @@ import {
   buildMemoryQuery,
   type MemoryQueryFilters,
 } from './memoryQuery'
+import type { ReadingMark } from '@/services/readingMarks'
 
 interface DocumentRow {
   id: string
@@ -85,6 +86,7 @@ export interface BackupPayload {
   memories: Memory[]
   artifacts: ReadingArtifactBackupEntry[]
   readingReminders: ReadingReminderBackupEntry[]
+  readingMarks?: ReadingMark[]
   note: string
 }
 
@@ -916,6 +918,8 @@ export async function exportBackupPayload(): Promise<BackupPayload> {
   const artifacts = await loadReadingArtifactsForBackup()
   const { loadReadingRemindersForBackup } = await import('./readingReminders')
   const readingReminders = await loadReadingRemindersForBackup()
+  const { loadAllReadingMarksForBackup } = await import('./readingMarks')
+  const readingMarks = await loadAllReadingMarksForBackup()
   return {
     version: 1,
     exportedAt: Date.now(),
@@ -923,11 +927,12 @@ export async function exportBackupPayload(): Promise<BackupPayload> {
     memories,
     artifacts,
     readingReminders,
+    readingMarks,
     note: '不包含 API Key 等敏感密钥。知识库文档索引可在新环境通过工作区重建恢复。',
   }
 }
 
-export async function importBackupPayload(payload: BackupPayload): Promise<{ sessions: number; messages: number; memories: number; artifacts: number; readingReminders: number }> {
+export async function importBackupPayload(payload: BackupPayload): Promise<{ sessions: number; messages: number; memories: number; artifacts: number; readingReminders: number; readingMarks: number }> {
   if (payload.version !== 1) {
     throw new Error(`不支持的备份版本：${payload.version}`)
   }

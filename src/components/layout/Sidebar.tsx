@@ -1,13 +1,14 @@
 import { useState, useCallback } from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
-import { isTauri, readFile } from '@/hooks/useTauri'
+import { isTauri } from '@/hooks/useTauri'
 import { openFile, pickDirectory } from '@/services/fileSystem'
 import { isWorkspaceDisplayFile } from '@/services/fileTree'
 import { scheduleMarkdownDocumentIndex, isMarkdownPath } from '@/services/rag/indexer'
 import { addKnowledgeDocument, isKnowledgeDocumentIndexed } from '@/services/rag/knowledgeBase'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { toast } from '@/services/toast'
+import { getRuntimeCapabilities } from '@/services/runtimeCapabilities'
 import { Button, Collapse, Divider } from 'animal-island-ui'
 import { RecentFiles } from '@/components/file-tree/FileTree'
 import { WorkspaceRoots } from '@/components/file-tree/WorkspaceRoots'
@@ -16,6 +17,7 @@ import { addFileContextTag, summarizeFileWithAi } from '@/services/aiContext'
 import { saveExistingFileAs } from '@/services/fileEntryActions'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { readRememberedFile } from '@/services/persistedFileAccess'
+import { readMarkdownFileForOpen, readRememberedMarkdownFileForOpen } from '@/services/markdownFileOpenPolicy'
 import { TruncatedText } from '@/components/common/Tooltip'
 import { useFileRename } from '@/hooks/useFileRename'
 
@@ -33,6 +35,7 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
   const recentFiles = useEditorStore((s) => s.recentFiles).filter((file) => isWorkspaceDisplayFile(file.path))
   const favorites = useEditorStore((s) => s.favorites).filter(isWorkspaceDisplayFile)
   const tabs = useEditorStore((s) => s.tabs)
+  const browserFileSystem = getRuntimeCapabilities().browserFileSystem
 
   // Build favorites list with file names
   const favoriteFiles = favorites.map((path) => {
@@ -56,13 +59,13 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
       }
     } catch (err) {
       console.error('Open file failed:', err)
-      toast.error('打开文件失败')
+      toast.error(describeFileOperationError(err, '打开文件失败'))
     }
   }, [])
 
   const handleOpenFolder = useCallback(async () => {
-    if (!isTauri()) {
-      toast.error('浏览器模式下不可用，请下载桌面版')
+    if (!isTauri() && !getRuntimeCapabilities().browserFileSystem) {
+      toast.error('当前浏览器不支持目录工作区，请使用 Chrome 或 Edge')
       return
     }
     try {
@@ -78,18 +81,18 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
   }, [addWorkspaceRoot])
 
   const handleOpenFileFromTree = useCallback(async (path: string) => {
-    try {
-      if (!isWorkspaceDisplayFile(path)) return
-      const content = await readFile(path)
-      const name = path.split(/[/\\]/).pop() || 'untitled.md'
-      const state = useEditorStore.getState()
-      const existing = state.tabs.find((t) => isSameFilePath(t.filePath, path))
-      if (existing) {
-        state.setActiveTab(existing.id)
-      } else {
+      try {
+        if (!isWorkspaceDisplayFile(path)) return
+        const state = useEditorStore.getState()
+        const existing = state.tabs.find((t) => isSameFilePath(t.filePath, path))
+        if (existing) {
+          state.setActiveTab(existing.id)
+          return
+        }
+        const content = await readMarkdownFileForOpen(path)
+        const name = path.split(/[/\\]/).pop() || 'untitled.md'
         state.addTab(path, name, content)
-      }
-      scheduleMarkdownDocumentIndex(path, name, content)
+        scheduleMarkdownDocumentIndex(path, name, content)
     } catch (err) {
       if (err instanceof Error && err.message === 'Not running in Tauri') {
         toast.error('浏览器模式下无法打开本地文件，请下载桌面版')
@@ -109,7 +112,7 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
         state.setActiveTab(existing.id)
         return
       }
-      const content = await readRememberedFile(file.path)
+      const content = await readRememberedMarkdownFileForOpen(file.path)
       state.addTab(file.path, file.name, content)
       scheduleMarkdownDocumentIndex(file.path, file.name, content)
     } catch (err) {
@@ -146,7 +149,13 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
             <path d="M21 21l-4.35-4.35" />
           </svg>
         </SidebarIcon>
-        <SidebarIcon label="打开文件夹" onClick={handleOpenFolder} tourTarget="open-folder">
+        <SidebarIcon
+          label="打开文件夹"
+          onClick={handleOpenFolder}
+          disabled={!isTauri() && !browserFileSystem}
+          title={!isTauri() && !browserFileSystem ? '当前浏览器不支持目录工作区' : undefined}
+          tourTarget="open-folder"
+        >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
             <path d="M12 11v6M9 14l3-3 3 3" />
@@ -197,25 +206,13 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
           question="最近文件"
           defaultExpanded
           answer={
-            !isTauri() ? (
-              <div className="text-caption text-gm-text-tertiary text-center py-4">
-                <p>浏览器模式下最近文件不可用</p>
-                <p className="mt-1 text-gm-text-disabled">请下载桌面版体验完整功能</p>
-              </div>
-            ) : (
-              <RecentFiles files={recentFiles} onOpen={handleOpenRecentFile} onRefreshWorkspace={refreshWorkspaces} />
-            )
+            <RecentFiles files={recentFiles} onOpen={handleOpenRecentFile} onRefreshWorkspace={refreshWorkspaces} />
           }
         />
         <Collapse
           question="收藏"
           answer={
-            !isTauri() ? (
-              <div className="text-caption text-gm-text-tertiary text-center py-4">
-                <p>浏览器模式下收藏不可用</p>
-                <p className="mt-1 text-gm-text-disabled">请下载桌面版体验完整功能</p>
-              </div>
-            ) : favoriteFiles.length > 0 ? (
+            favoriteFiles.length > 0 ? (
               <FavoriteFiles files={favoriteFiles} onRefreshWorkspace={refreshWorkspaces} />
             ) : (
               <div className="text-caption text-gm-text-tertiary text-center py-4">
@@ -228,14 +225,7 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
           question="工作区"
           defaultExpanded
           answer={
-            !isTauri() ? (
-              <div className="text-caption text-gm-text-tertiary text-center py-4">
-                <p>浏览器模式下工作区不可用</p>
-                <p className="mt-1 text-gm-text-disabled">请下载桌面版体验完整功能</p>
-              </div>
-            ) : (
-              <WorkspaceRoots onOpenFile={(path) => { void handleOpenFileFromTree(path) }} />
-            )
+            <WorkspaceRoots onOpenFile={(path) => { void handleOpenFileFromTree(path) }} />
           }
         />
       </div>
@@ -259,7 +249,7 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
               </svg>
             }
           />
-          <Button type="text" size="small" title="打开文件夹" onClick={handleOpenFolder}
+          <Button type="text" size="small" title={browserFileSystem || isTauri() ? '打开文件夹' : '当前浏览器不支持目录工作区'} onClick={handleOpenFolder} disabled={!isTauri() && !browserFileSystem}
             icon={
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
@@ -289,6 +279,7 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
 }) {
   const activeTabId = useEditorStore((s) => s.activeTabId)
   const tabs = useEditorStore((s) => s.tabs)
+  const databaseEnabled = getRuntimeCapabilities().database
   const activeFilePath = tabs.find((t) => t.id === activeTabId)?.filePath
   const [showAll, setShowAll] = useState(false)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; file: { name: string; path: string } } | null>(null)
@@ -312,7 +303,7 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
       if (existing) {
         state.setActiveTab(existing.id)
       } else {
-        const content = await readRememberedFile(file.path)
+        const content = await readRememberedMarkdownFileForOpen(file.path)
         state.addTab(file.path, file.name, content)
         scheduleMarkdownDocumentIndex(file.path, file.name, content)
       }
@@ -357,7 +348,7 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
             onContextMenu={(e) => {
               e.preventDefault()
               setContextMenu({ x: e.clientX, y: e.clientY, file })
-              if (isMarkdownPath(file.path)) {
+              if (databaseEnabled && isMarkdownPath(file.path)) {
                 setKbStatus('checking')
                 isKnowledgeDocumentIndexed(file.path).then((indexed) => {
                   setKbStatus(indexed ? 'indexed' : 'not-indexed')
@@ -430,12 +421,17 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
             <>
               <ContextMenuSeparator />
               <ContextMenuGroupTitle>知识库</ContextMenuGroupTitle>
-              {kbStatus === 'checking' && (
+               {!databaseEnabled && (
+                 <ContextMenuItem onClick={() => {}} disabled>
+                   知识库仅桌面版可用
+                 </ContextMenuItem>
+               )}
+               {kbStatus === 'checking' && (
                 <ContextMenuItem onClick={() => {}} disabled>
                   正在读取知识库状态…
                 </ContextMenuItem>
               )}
-              {kbStatus === 'not-indexed' && (
+               {databaseEnabled && kbStatus === 'not-indexed' && (
                 <ContextMenuItem onClick={async () => {
                   setContextMenu(null)
                   setKbStatus('adding')
@@ -459,7 +455,7 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
                   }
                 }}>加入知识库</ContextMenuItem>
               )}
-              {kbStatus === 'indexed' && (
+               {databaseEnabled && kbStatus === 'indexed' && (
                 <ContextMenuItem onClick={async () => {
                   setContextMenu(null)
                   setKbStatus('adding')
@@ -483,7 +479,7 @@ function FavoriteFiles({ files, onRefreshWorkspace }: {
                   }
                 }}>✓ 已加入知识库（点击更新）</ContextMenuItem>
               )}
-              {kbStatus === 'adding' && (
+               {databaseEnabled && kbStatus === 'adding' && (
                 <ContextMenuItem onClick={() => {}} disabled>
                   正在加入知识库…
                 </ContextMenuItem>
@@ -520,19 +516,25 @@ function SidebarIcon({
   children,
   label,
   onClick,
+  disabled = false,
+  title,
   tourTarget,
 }: {
   children: React.ReactNode
   label: string
   onClick: () => void
+  disabled?: boolean
+  title?: string
   tourTarget?: string
 }) {
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       data-product-tour={tourTarget}
-      className="w-10 h-10 flex items-center justify-center rounded-lg text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover"
-      title={label}
+      aria-label={label}
+      className="w-10 h-10 flex items-center justify-center rounded-lg text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
+      title={title ?? label}
     >
       {children}
     </button>

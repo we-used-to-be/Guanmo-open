@@ -2,6 +2,7 @@ interface HeadingScrollOptions {
   container: HTMLElement
   fadeElement?: HTMLElement | null
   getTargetTop: () => number | undefined
+  forceDirect?: boolean
   onBeforeReveal?: () => void
   onSettled?: () => void
 }
@@ -18,6 +19,7 @@ export function startHeadingScroll({
   container,
   fadeElement,
   getTargetTop,
+  forceDirect = false,
   onBeforeReveal,
   onSettled,
 }: HeadingScrollOptions): (() => void) | null {
@@ -107,7 +109,7 @@ export function startHeadingScroll({
   const longJumpThreshold = Math.max(HEADING_JUMP_MIN_DISTANCE, container.clientHeight * HEADING_JUMP_VIEWPORTS)
   const reduceMotion = typeof window.matchMedia === 'function'
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  if (fadeElement && distance > longJumpThreshold && !reduceMotion) {
+  if (fadeElement && (forceDirect || distance > longJumpThreshold) && !reduceMotion) {
     fadeElement.style.transition = `opacity ${HEADING_JUMP_FADE_OUT_MS}ms ease-out`
     fadeElement.style.opacity = '0'
     phaseTimer = window.setTimeout(() => {

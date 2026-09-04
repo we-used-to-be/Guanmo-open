@@ -121,14 +121,6 @@ export function PromptComposer({ onSend, streaming, onCancel, onReasoningModeCha
         </div>
       )}
 
-      {/* 深度思考开关 */}
-      <ManualToolToggle
-        onChange={() => {}}
-        onReasoningModeChange={onReasoningModeChange}
-        disabled={streaming}
-        resetKey={resetManualToggle}
-      />
-
       <div className="gm-instant-color bg-gm-surface-elevated rounded-2xl border-2 border-gm-border focus-within:border-gm-primary">
         {/* Context Tags */}
         {contextTags.length > 0 && (
@@ -149,16 +141,26 @@ export function PromptComposer({ onSend, streaming, onCancel, onReasoningModeCha
         )}
 
         {/* Text Input */}
-        <div className="flex items-center gap-2 p-2">
+        <div className="px-2 pt-2">
           <textarea
             ref={textareaRef}
             value={draftInput}
             onChange={handleTextareaInput}
             onKeyDown={handleKeyDown}
             placeholder="输入消息... (Enter 发送)"
-            className={`flex-1 bg-transparent resize-none text-body text-gm-text placeholder-gm-text-disabled focus:outline-none min-h-[20px] max-h-[120px] ${streaming ? 'opacity-60' : ''}`}
+            className={`w-full bg-transparent resize-none text-body text-gm-text placeholder-gm-text-disabled focus:outline-none min-h-[20px] max-h-[120px] ${streaming ? 'opacity-60' : ''}`}
             rows={1}
             disabled={streaming}
+          />
+        </div>
+
+        {/* Composer Actions */}
+        <div className="flex items-center justify-between px-2 pb-1">
+          <ManualToolToggle
+            onChange={() => {}}
+            onReasoningModeChange={onReasoningModeChange}
+            disabled={streaming}
+            resetKey={resetManualToggle}
           />
           {streaming ? (
             <button
@@ -176,6 +178,7 @@ export function PromptComposer({ onSend, streaming, onCancel, onReasoningModeCha
               size="small"
               onClick={onSend}
               disabled={!draftInput.trim() && contextTags.length === 0}
+              className="!min-w-0 !w-9 !h-8 !p-0"
               icon={
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />

@@ -391,7 +391,7 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
 
   useEffect(() => {
     const view = viewRef.current
-    if (!view || !pendingReveal || !tabId || pendingReveal.tabId !== tabId) return
+    if (!view || !pendingReveal || pendingReveal.surface !== 'editor' || !tabId || pendingReveal.tabId !== tabId) return
     const startLine = Math.max(1, Math.min(pendingReveal.startLine, view.state.doc.lines))
     const endLine = Math.max(startLine, Math.min(pendingReveal.endLine ?? pendingReveal.startLine, view.state.doc.lines))
     const from = view.state.doc.line(startLine).from

@@ -209,9 +209,10 @@ VITE_GUANMO_WEB_SEARCH_API_KEY_SECRET=guanmo.web-search.api-key
 
 ### 环境要求 · Prerequisites
 
-- [Node.js](https://nodejs.org/) >= 18
+- [Node.js](https://nodejs.org/) >= 22
 - [Rust](https://www.rust-lang.org/) (stable)
-- [Tauri 2 CLI](https://v2.tauri.app/start/prerequisites/) 依赖
+- Windows 开发还需要 [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)（选择“使用 C++ 的桌面开发”）和 [Microsoft WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)。
+- Tauri CLI 已随项目开发依赖安装；Windows 其他前置条件见 [Tauri 官方文档](https://v2.tauri.app/zh-cn/start/prerequisites/)。
 
 ### 安装 · Installation
 

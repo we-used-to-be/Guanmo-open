@@ -4,6 +4,8 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeKatex from 'rehype-katex'
+import { Highlighter } from 'lucide-react'
+import { motion } from 'motion/react'
 import { createContext, forwardRef, isValidElement, lazy, memo, Suspense, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { convertFileSrc } from '@tauri-apps/api/core'
@@ -11,39 +13,49 @@ import { isTauri } from '@/hooks/useTauri'
 import { createHeadingId } from '@/services/markdownToc'
 import { remarkStandaloneDisplayMath } from '@/services/markdownMath'
 import { useSettingsStore } from '@/stores/settingsStore'
-import { createMarkdownPreviewModel, computeVisibleRange, findAnchorTarget, findBlockIndexByOffset, getEstimatedPreviewLineForTop, getEstimatedPreviewTopForLine, getSourceOffsetForLine, searchVisibleText, type PreviewBlock } from '@/services/markdownPreviewModel'
+import { createMarkdownPreviewModel, computeVisibleRange, findAnchorTarget, findBlockIndexByLine, findBlockIndexByOffset, getEstimatedPreviewLineForTop, getEstimatedPreviewTopForLine, getSourceOffsetForLine, searchVisibleText, type MarkdownPreviewModel, type PreviewBlock } from '@/services/markdownPreviewModel'
 import {
   buildDocumentRangeInfo,
   buildDomRangesForSourceRange,
+  createReadingMarkHitRegionAnnotator,
   createSourceOffsetAnnotator,
   domPointToSourceOffset,
   findWordRangeAt,
   getTextForSourceRange,
   previewHighlightRegistry,
 } from '@/services/previewHighlight'
+import { buildReadingMarkRangeIndex, findReadingMarkConflict, type CreateReadingMarkResult, type ReadingMark, type ReadingMarkColor } from '@/services/readingMarks'
 import { eventMarker } from '@/services/eventMarker'
 import { startHeadingScroll } from '@/services/headingScroll'
 import type {
   MarkdownPreviewHandle,
   MarkdownPreviewProps,
+  MarkdownPreviewSourceRevealRequest,
   PreviewSearchState,
+  PreviewSelectionSnapshot,
 } from './markdownPreviewTypes'
+import type { AnnotationHoverAnchor } from './AnnotationHoverOverlay'
+import { ReadingMarkToolbarContent } from './ReadingMarkToolbarContent'
+import { ReadingMarkToolbarShell, READING_MARK_TOOLBAR_CLOSE_DELAY } from './ReadingMarkToolbarShell'
 export type {
   MarkdownBlockCommitRequest,
   MarkdownBlockCommitResult,
   MarkdownPreviewHandle,
   MarkdownPreviewProps,
+  MarkdownPreviewSourceRevealRequest,
   PreviewSearchState,
   PreviewSelectionSnapshot,
 } from './markdownPreviewTypes'
 
 const LazyInlineMarkdownBlockEditor = lazy(() => import('./InlineMarkdownBlockEditor').then(({ InlineMarkdownBlockEditor }) => ({ default: InlineMarkdownBlockEditor })))
+const LazyEChartsBlock = lazy(() => import('./EChartsBlock').then(({ EChartsBlock }) => ({ default: EChartsBlock })))
 
 function InlineMarkdownEditorSuspenseFallback() {
   return <div className="gm-inline-markdown-editor min-h-12" aria-hidden="true" />
 }
 
 const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath, remarkStandaloneDisplayMath]
+const SOURCE_REVEAL_DURATION_MS = 1600
 const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex, rehypeHighlight]
 type RehypePlugins = NonNullable<Options['rehypePlugins']>
 let markdownHtmlPluginsPromise: Promise<RehypePlugins> | null = null
@@ -84,7 +96,39 @@ interface OptimisticPreviewContent {
   acceptedContents: string[]
 }
 
+interface PreviewViewportAnchor {
+  blockId: string
+  blockIndex: number
+  sourceOffset?: number
+  viewportOffset: number
+  fallbackScrollTop: number
+}
+
+interface PendingPreviewAnchorRestore extends PreviewViewportAnchor {
+  container: HTMLElement
+  documentKey: string
+  generation: number
+}
+
+interface PendingPreviewPatch {
+  previousModel: MarkdownPreviewModel
+  nextContent: string
+  documentKey: string
+  editedBlockId: string
+  replacementStart: number
+  replacementEnd: number
+  replacementLength: number
+  anchor: PreviewViewportAnchor | null
+  generation: number
+}
+
 const ALT_CLICK_MOVE_THRESHOLD = 6
+const USER_SCROLL_ACTIVITY_MS = 240
+
+function normalizeMeasuredBlockHeight(height: number): number {
+  const deviceScale = Math.max(1, window.devicePixelRatio || 1)
+  return Math.round(height * deviceScale) / deviceScale
+}
 
 /** 最近一次鼠标按下的预览实例（Ctrl+A / Ctrl+C 仅作用于该实例） */
 let activePreviewRoot: HTMLElement | null = null
@@ -97,6 +141,64 @@ interface PreviewDragSelection {
   rafId: number
   clientX: number
   clientY: number
+}
+
+interface FloatingAnchorRect {
+  top: number
+  right: number
+  bottom: number
+  left: number
+  triggerPoint?: { x: number; y: number }
+}
+
+interface PendingSelectionUi {
+  selection: PreviewSelectionSnapshot
+  anchorRect: FloatingAnchorRect
+  expanded: boolean
+  mode: 'colors' | 'text'
+  color: ReadingMarkColor
+  textDraft: string
+  creatingText: boolean
+  savingText: boolean
+  conflict?: { mark: ReadingMark; kind: 'exact' | 'overlap' }
+}
+
+function getRangeClientRects(range: globalThis.Range): FloatingAnchorRect[] {
+  const rangeWithGeometry = range as globalThis.Range & {
+    getClientRects?: () => DOMRectList
+    getBoundingClientRect?: () => DOMRect
+  }
+  const clientRects = rangeWithGeometry.getClientRects?.() ?? []
+  const rects = Array.from(clientRects).map((rect) => ({
+    top: rect.top,
+    right: rect.right,
+    bottom: rect.bottom,
+    left: rect.left,
+  }))
+  if (rects.length > 0) return rects
+  const rect = rangeWithGeometry.getBoundingClientRect?.()
+  return rect
+    ? [{ top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left }]
+    : []
+}
+
+function getSourceRangeClientRects(root: Element, from: number, to: number): FloatingAnchorRect[] {
+  return buildDomRangesForSourceRange(root, from, to)
+    .flatMap(getRangeClientRects)
+    .filter((rect) => rect.right > rect.left || rect.bottom > rect.top)
+}
+
+function getSourceRangeAnchorRect(root: Element | null, from: number, to: number, fallback: FloatingAnchorRect): FloatingAnchorRect {
+  if (!root) return fallback
+  const rects = getSourceRangeClientRects(root, from, to)
+  if (rects.length === 0) return fallback
+  return {
+    top: Math.min(...rects.map((rect) => rect.top)),
+    right: Math.max(...rects.map((rect) => rect.right)),
+    bottom: Math.max(...rects.map((rect) => rect.bottom)),
+    left: Math.min(...rects.map((rect) => rect.left)),
+    triggerPoint: fallback.triggerPoint,
+  }
 }
 
 function countLineBreaks(text: string): number {
@@ -112,6 +214,67 @@ function countLineBreaks(text: string): number {
   return n
 }
 
+function samePreviewBlock(left: PreviewBlock | undefined, right: PreviewBlock | undefined): boolean {
+  return Boolean(left && right && left.type === right.type && left.rawSource === right.rawSource)
+}
+
+function sameRawSources(left: Array<{ rawSource: string }>, right: Array<{ rawSource: string }>): boolean {
+  return left.length === right.length && left.every((item, index) => item.rawSource === right[index]?.rawSource)
+}
+
+function mapSourceOffsetThroughReplacement(
+  offset: number,
+  replacementStart: number,
+  replacementEnd: number,
+  replacementLength: number,
+): number {
+  if (offset <= replacementStart) return offset
+  const delta = replacementLength - (replacementEnd - replacementStart)
+  if (offset >= replacementEnd) return offset + delta
+  return replacementStart + Math.min(offset - replacementStart, replacementLength)
+}
+
+/**
+ * 找出一次块编辑后仍可复用的前缀/后缀区块。
+ * 中间区域可能发生拆分、合并或语义变化，必须让虚拟列表重新测量。
+ */
+function buildIncrementalBlockMapping(
+  previousModel: MarkdownPreviewModel,
+  nextModel: MarkdownPreviewModel,
+  editedBlockId: string,
+): Map<number, number> | null {
+  if (
+    previousModel.requiresWholeDocumentRender
+    || nextModel.requiresWholeDocumentRender
+    || !sameRawSources(previousModel.definitions, nextModel.definitions)
+    || !sameRawSources(previousModel.footnoteDefinitions, nextModel.footnoteDefinitions)
+  ) return null
+
+  const oldBlocks = previousModel.blocks
+  const newBlocks = nextModel.blocks
+  const editedIndex = oldBlocks.findIndex((block) => block.blockId === editedBlockId)
+  if (editedIndex < 0) return null
+
+  const mapping = new Map<number, number>()
+  let oldIndex = 0
+  let newIndex = 0
+  while (oldIndex < editedIndex) {
+    if (!samePreviewBlock(oldBlocks[oldIndex], newBlocks[newIndex])) return null
+    mapping.set(oldIndex, newIndex)
+    oldIndex += 1
+    newIndex += 1
+  }
+
+  let oldTail = oldBlocks.length - 1
+  let newTail = newBlocks.length - 1
+  while (oldTail > editedIndex && newTail >= newIndex && samePreviewBlock(oldBlocks[oldTail], newBlocks[newTail])) {
+    mapping.set(oldTail, newTail)
+    oldTail -= 1
+    newTail -= 1
+  }
+  return mapping
+}
+
 interface StableMarkdownContentProps {
   markdown: string
   skipHtml: boolean
@@ -120,6 +283,7 @@ interface StableMarkdownContentProps {
   baseLine: number
   renderFootnoteSection?: boolean
   footnoteReferenceSuffix?: string
+  readingMarkRanges?: Array<{ id: string; from: number; to: number }>
 }
 
 const StableMarkdownContent = memo(function StableMarkdownContent({
@@ -162,6 +326,7 @@ const StableMarkdownBlock = memo(function StableMarkdownBlock({
   top,
   onElement,
   rehypePlugins,
+  readingMarkRanges,
   ...contentProps
 }: StableMarkdownBlockProps) {
   const setElement = useCallback((element: HTMLDivElement | null) => {
@@ -169,8 +334,12 @@ const StableMarkdownBlock = memo(function StableMarkdownBlock({
   }, [globalIndex, onElement])
   // 按块注入源码 offset 标注：DOM ↔ 文档模型映射的数据来源
   const blockRehypePlugins = useMemo(
-    () => [...(rehypePlugins ?? []), createSourceOffsetAnnotator(block.startOffset)],
-    [rehypePlugins, block.startOffset],
+    () => [
+      ...(rehypePlugins ?? []),
+      createSourceOffsetAnnotator(block.startOffset, contentProps.markdown),
+      createReadingMarkHitRegionAnnotator(readingMarkRanges ?? []),
+    ],
+    [contentProps.markdown, readingMarkRanges, rehypePlugins, block.startOffset],
   )
 
   return (
@@ -207,6 +376,9 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   onFirstVisible,
   onRenderComplete,
   resource = 'preview',
+  readingMarks = [],
+  onCreateReadingMark,
+  annotationOverlayRef,
 }: MarkdownPreviewProps, ref: React.ForwardedRef<MarkdownPreviewHandle>) {
   const rootRef = useRef<HTMLDivElement>(null)
   const [activeEdit, setActiveEdit] = useState<ActiveBlockEdit | null>(null)
@@ -226,7 +398,9 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const onRenderCompleteRef = useRef(onRenderComplete)
   const firstVisibleRef = useRef(false)
   const lifecycleMetadataRef = useRef({ documentKey, resource })
-  const scrollRestoreRef = useRef<{ scrollTop: number; container: HTMLElement } | null>(null)
+  const previousModelRef = useRef<MarkdownPreviewModel | null>(null)
+  const pendingPreviewPatchRef = useRef<PendingPreviewPatch | null>(null)
+  const pendingAnchorRestoreRef = useRef<PendingPreviewAnchorRestore | null>(null)
   const displayedContent = activeEdit?.contentSnapshot ?? optimisticContent?.content ?? content
   const model = useMemo(() => createMarkdownPreviewModel(displayedContent), [displayedContent])
   const normalizedContent = model.normalizedContent
@@ -261,13 +435,24 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const { hasEmbeddedHtml, requiresWholeDocumentRender } = model
   const [htmlRehypePlugins, setHtmlRehypePlugins] = useState<RehypePlugins | null>(null)
   const [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(null)
+  const [pendingSelectionUi, setPendingSelectionUi] = useState<PendingSelectionUi | null>(null)
+  const textInputRef = useRef<HTMLTextAreaElement | null>(null)
+  const colorActionRef = useRef<HTMLButtonElement | null>(null)
+  const markActionRef = useRef<Promise<void> | null>(null)
+  const readingMarkCloseTimerRef = useRef<number | null>(null)
+  const readingMarkReducedMotionRef = useRef(false)
   const themeId = useSettingsStore((state) => state.appearance.themeId)
   // Virtual scrolling state
   const scrollContainerRef = useRef<HTMLElement | null>(null)
   const measuredHeightsRef = useRef<Map<string, number>>(new Map())
+  const pendingObservedHeightsRef = useRef<Map<number, { blockId: string; height: number }>>(new Map())
+  const lastObservedScrollTopRef = useRef(0)
+  const userScrollRef = useRef<{ direction: 'up' | 'down' | null; activeUntil: number }>({ direction: null, activeUntil: 0 })
+  const scrollAnchorGenerationRef = useRef(0)
   const headingScrollCancelRef = useRef<(() => void) | null>(null)
+  const sourceRevealTimerRef = useRef<number | null>(null)
   /** 未挂载搜索目标的精确定位校正任务：目标 Range 挂载后执行一次即清空 */
-  const pendingSearchCorrectionRef = useRef<{ from: number; to: number; blockId: string; appliedTop?: number } | null>(null)
+  const pendingSearchCorrectionRef = useRef<{ from: number; to: number; blockId: string; appliedTop?: number; onApplied?: () => void } | null>(null)
   const blockRefs = useRef<Map<number, HTMLDivElement | null>>(new Map())
   const blockResizeObserverRef = useRef<ResizeObserver | null>(null)
   const measurementKeyRef = useRef<{
@@ -279,14 +464,46 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     theme: string
   } | null>(null)
   const [scrollState, setScrollState] = useState<{ scrollTop: number; viewportHeight: number; viewportWidth: number }>({ scrollTop: 0, viewportHeight: 800, viewportWidth: 0 })
+  const [measurementRevision, setMeasurementRevision] = useState(0)
   const scrollStateRef = useRef(scrollState)
   const overscanBlocks = 5
+
+  const cancelPendingAnchorRestore = useCallback(() => {
+    scrollAnchorGenerationRef.current += 1
+    pendingAnchorRestoreRef.current = null
+  }, [])
 
   const cancelProgrammaticScroll = useCallback(() => {
     const cancel = headingScrollCancelRef.current
     headingScrollCancelRef.current = null
     cancel?.()
   }, [])
+
+  const cancelUserScroll = useCallback(() => {
+    cancelProgrammaticScroll()
+  }, [cancelProgrammaticScroll])
+
+  const markUserScroll = useCallback((deltaY: number | null) => {
+    userScrollRef.current = {
+      direction: deltaY === null ? null : deltaY > 0 ? 'down' : deltaY < 0 ? 'up' : null,
+      activeUntil: performance.now() + USER_SCROLL_ACTIVITY_MS,
+    }
+  }, [])
+
+  const handleWheelCapture = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+    cancelUserScroll()
+    markUserScroll(event.deltaY)
+  }, [cancelUserScroll, markUserScroll])
+
+  const handleWheel = useCallback((event: WheelEvent) => {
+    cancelUserScroll()
+    markUserScroll(event.deltaY)
+  }, [cancelUserScroll, markUserScroll])
+
+  const handlePointerDown = useCallback(() => {
+    cancelUserScroll()
+    markUserScroll(null)
+  }, [cancelUserScroll, markUserScroll])
 
   scrollStateRef.current = scrollState
 
@@ -298,25 +515,112 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const searchMatchesByBlockRef = useRef<Map<string, Array<{ from: number; to: number }>> | null>(null)
   /** 归一化选区（from < to，全文源码 offset）；DOM 卸载不影响其存活 */
   const selectionRangeRef = useRef<{ from: number; to: number } | null>(null)
+  /** 来源跳转的瞬时高亮（全文源码 offset）；与搜索、选区和 ReadingMark 分层。 */
+  const sourceRevealRangeRef = useRef<{ from: number; to: number } | null>(null)
   const selectionAnchorRef = useRef<number | null>(null)
   const dragStateRef = useRef<PreviewDragSelection | null>(null)
   /** 受支持交互 HTML（details 展开/折叠）的瞬时状态：块 ID + 块内序号 → 用户态；仅存本组件实例 ref，不写 Tab、不持久化 */
   const interactiveHtmlStateRef = useRef<Map<string, boolean>>(new Map())
   const interactiveStateKeyRef = useRef<string | null>(null)
+  const readingMarksRef = useRef(readingMarks)
+  readingMarksRef.current = readingMarks
+  const readingMarkIndex = useMemo(() => buildReadingMarkRangeIndex(model, readingMarks), [model, readingMarks])
+  const resolvedReadingMarks = readingMarkIndex.byId
+  const readingMarkIndexRef = useRef(readingMarkIndex)
+  readingMarkIndexRef.current = readingMarkIndex
+  const readingMarksById = useMemo(() => new Map(readingMarks.map((mark) => [mark.id, mark])), [readingMarks])
+  const readingMarksByIdRef = useRef(readingMarksById)
+  readingMarksByIdRef.current = readingMarksById
+  const readingMarkHitRangesByBlock = useMemo(() => {
+    const result = new Map<string, Array<{ id: string; from: number; to: number }>>()
+    for (const [blockId, entries] of readingMarkIndex.byBlockId) {
+      result.set(blockId, entries.map(({ mark, from, to }) => ({ id: mark.id, from, to })))
+    }
+    return result
+  }, [readingMarkIndex])
+  const readingMarkHitRanges = useMemo(
+    () => readingMarkIndex.sorted.map(({ mark, from, to }) => ({ id: mark.id, from, to })),
+    [readingMarkIndex],
+  )
+  const pendingSelectionRef = useRef<PendingSelectionUi | null>(null)
+  pendingSelectionRef.current = pendingSelectionUi
+  const focusedMarkIdRef = useRef<string | null>(null)
 
   const measurementKey = measurementKeyRef.current
-  if (
+  const layoutChanged = Boolean(
     !measurementKey
-    || measurementKey.content !== displayedContent
     || measurementKey.fontSize !== fontSize
     || measurementKey.lineHeight !== lineHeight
     || measurementKey.fontFamily !== fontFamily
     || measurementKey.wordWrap !== wordWrap
-    || measurementKey.theme !== themeId
-  ) {
+    || measurementKey.theme !== themeId,
+  )
+  const contentChanged = measurementKey?.content !== displayedContent
+  if (layoutChanged) {
     measuredHeightsRef.current = new Map()
-    measurementKeyRef.current = { content: displayedContent, fontSize, lineHeight, fontFamily, wordWrap, theme: themeId }
+    pendingObservedHeightsRef.current.clear()
+    pendingAnchorRestoreRef.current = null
+    pendingPreviewPatchRef.current = null
+  } else if (contentChanged) {
+    pendingObservedHeightsRef.current.clear()
+    const previousModel = previousModelRef.current
+    const patch = pendingPreviewPatchRef.current
+    const mapping = previousModel && patch
+      && patch.documentKey === documentKey
+      && patch.nextContent === displayedContent
+      && patch.previousModel.rawContent === previousModel.rawContent
+      ? buildIncrementalBlockMapping(previousModel, model, patch.editedBlockId)
+      : null
+    if (mapping && patch && previousModel) {
+      const nextHeights = new Map<string, number>()
+      for (const [oldIndex, newIndex] of mapping) {
+        const oldBlock = previousModel.blocks[oldIndex]
+        const newBlock = model.blocks[newIndex]
+        const height = oldBlock ? measuredHeightsRef.current.get(oldBlock.blockId) : undefined
+        if (newBlock && typeof height === 'number') nextHeights.set(newBlock.blockId, height)
+      }
+      measuredHeightsRef.current = nextHeights
+      const anchor = patch.anchor
+      const anchorNewIndex = anchor
+        ? mapping.get(anchor.blockIndex)
+          ?? [...mapping.entries()].find(([oldIndex]) => oldIndex > anchor.blockIndex)?.[1]
+          ?? [...mapping.entries()].reverse().find(([oldIndex]) => oldIndex < anchor.blockIndex)?.[1]
+        : undefined
+      const anchorBlock = typeof anchorNewIndex === 'number' ? model.blocks[anchorNewIndex] : undefined
+      const anchorContainer = scrollContainerRef.current
+      const mappedSourceOffset = anchor
+        && typeof anchor.sourceOffset === 'number'
+        && anchorNewIndex === mapping.get(anchor.blockIndex)
+        ? mapSourceOffsetThroughReplacement(
+            anchor.sourceOffset,
+            patch.replacementStart,
+            patch.replacementEnd,
+            patch.replacementLength,
+          )
+        : undefined
+      pendingAnchorRestoreRef.current = anchor
+        && typeof anchorNewIndex === 'number'
+        && anchorBlock
+        && anchorContainer
+        && patch.generation === scrollAnchorGenerationRef.current
+        ? {
+            ...anchor,
+            blockId: anchorBlock.blockId,
+            blockIndex: anchorNewIndex,
+            sourceOffset: mappedSourceOffset,
+            container: anchorContainer,
+            documentKey: patch.documentKey,
+            generation: patch.generation,
+          }
+        : null
+    } else {
+      measuredHeightsRef.current = new Map()
+      pendingAnchorRestoreRef.current = null
+    }
+    pendingPreviewPatchRef.current = null
   }
+  measurementKeyRef.current = { content: displayedContent, fontSize, lineHeight, fontFamily, wordWrap, theme: themeId }
+  previousModelRef.current = model
 
   // 交互 HTML 瞬时状态失效：文档内容或文档身份变化即整体清除（渲染期执行，
   // 早于本帧块挂载 ref callback，避免"先恢复旧状态、又被清空"的时序倒置）
@@ -366,10 +670,13 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   useEffect(() => {
     const lifecycleMetadata = lifecycleMetadataRef.current
     const root = rootRef.current
+    const overlay = annotationOverlayRef?.current
     mountedRef.current = true
     eventMarker.mark('model-create', lifecycleMetadata)
     return () => {
       cancelProgrammaticScroll()
+      if (sourceRevealTimerRef.current !== null) window.clearTimeout(sourceRevealTimerRef.current)
+      overlay?.hide()
       eventMarker.mark('model-dispose', lifecycleMetadata)
       previewHighlightRegistry.clearResource(lifecycleMetadata.resource)
       if (activePreviewRoot === root) activePreviewRoot = null
@@ -385,20 +692,20 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       }
       mountedRef.current = false
     }
-  }, [cancelProgrammaticScroll])
+  }, [annotationOverlayRef, cancelProgrammaticScroll])
 
   /* ---------------- 统一 Range：块级高亮同步（挂载/卸载时自动恢复） ---------------- */
 
   const syncBlockHighlights = useCallback((
     index: number,
     element: HTMLElement,
-    kinds: { search?: boolean; selection?: boolean } = {},
+    kinds: { search?: boolean; selection?: boolean; sourceReveal?: boolean; readingMarks?: boolean } = {},
   ) => {
     const block = modelRef.current.blocks[index]
     if (!block) return
-    const hasExplicitKinds = kinds.search !== undefined || kinds.selection !== undefined
-    if (!hasExplicitKinds && !searchStateRef.current && !selectionRangeRef.current) return
-    const next: { search?: globalThis.Range[]; searchActive?: globalThis.Range[]; selection?: globalThis.Range[] } = {}
+    const hasExplicitKinds = kinds.search !== undefined || kinds.selection !== undefined || kinds.sourceReveal !== undefined || kinds.readingMarks !== undefined
+    if (!hasExplicitKinds && !searchStateRef.current && !selectionRangeRef.current && !sourceRevealRangeRef.current && readingMarksRef.current.length === 0) return
+    const next: { search?: globalThis.Range[]; searchActive?: globalThis.Range[]; selection?: globalThis.Range[]; sourceReveal?: globalThis.Range[]; markYellow?: globalThis.Range[]; markGreen?: globalThis.Range[]; markBlue?: globalThis.Range[]; markPink?: globalThis.Range[]; markFocus?: globalThis.Range[] } = {}
     if (kinds.search !== false) {
       const searchState = searchStateRef.current
       const matches = searchState ? searchMatchesByBlockRef.current?.get(block.blockId) : undefined
@@ -426,10 +733,32 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
         ? buildDomRangesForSourceRange(element, from, to)
         : []
     }
+    if (kinds.sourceReveal !== false) {
+      const reveal = sourceRevealRangeRef.current
+      const from = Math.max(reveal?.from ?? 0, block.startOffset)
+      const to = Math.min(reveal?.to ?? 0, block.endOffset)
+      next.sourceReveal = reveal && to > from
+        ? buildDomRangesForSourceRange(element, from, to)
+        : []
+    }
+    if (kinds.readingMarks !== false) {
+      next.markYellow = []
+      next.markGreen = []
+      next.markBlue = []
+      next.markPink = []
+      next.markFocus = []
+      for (const entry of readingMarkIndex.byBlockId.get(block.blockId) ?? []) {
+        const { mark, from, to } = entry
+        const domRanges = buildDomRangesForSourceRange(element, Math.max(from, block.startOffset), Math.min(to, block.endOffset))
+        const kind = mark.color === 'green' ? 'markGreen' : mark.color === 'blue' ? 'markBlue' : mark.color === 'pink' ? 'markPink' : 'markYellow'
+        next[kind]!.push(...domRanges)
+        if (focusedMarkIdRef.current === mark.id) next.markFocus.push(...domRanges)
+      }
+    }
     previewHighlightRegistry.syncBlock(resource, block.blockId, next)
-  }, [resource])
+  }, [readingMarkIndex, resource])
 
-  const syncAllMountedBlocks = useCallback((kinds: { search?: boolean; selection?: boolean }) => {
+  const syncAllMountedBlocks = useCallback((kinds: { search?: boolean; selection?: boolean; sourceReveal?: boolean; readingMarks?: boolean }) => {
     if (requiresWholeDocumentRender) {
       // 整篇渲染模式无虚拟块 ref 追踪，直接按 DOM 标记同步
       const root = rootRef.current
@@ -459,6 +788,150 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     syncAllMountedBlocks({ search: false, selection: true })
   }, [syncAllMountedBlocks])
 
+  const getSelectionSnapshot = useCallback((): PreviewSelectionSnapshot | null => {
+    const selection = selectionRangeRef.current
+    if (!selection) return null
+    const currentModel = modelRef.current
+    const info = buildDocumentRangeInfo(currentModel, selection.from, selection.to)
+    if (!info) return null
+    return {
+      range: info.range,
+      from: selection.from,
+      to: selection.to,
+      text: getTextForSourceRange(currentModel, selection.from, selection.to),
+      startLine: 1 + countLineBreaks(currentModel.rawContent.slice(0, selection.from)),
+      endLine: 1 + countLineBreaks(currentModel.rawContent.slice(0, selection.to)),
+    }
+  }, [])
+
+  const cancelReadingMarkClose = useCallback(() => {
+    if (readingMarkCloseTimerRef.current !== null) {
+      window.clearTimeout(readingMarkCloseTimerRef.current)
+      readingMarkCloseTimerRef.current = null
+    }
+  }, [])
+
+  const dismissReadingMarkUi = useCallback(() => {
+    cancelReadingMarkClose()
+    pendingSelectionRef.current = null
+    setPendingSelectionUi(null)
+    annotationOverlayRef?.current?.hide()
+  }, [annotationOverlayRef, cancelReadingMarkClose])
+
+  const closeReadingMarkUiAfterSave = useCallback(() => {
+    cancelReadingMarkClose()
+    const current = pendingSelectionRef.current
+    if (!current) return
+    if (readingMarkReducedMotionRef.current) {
+      dismissReadingMarkUi()
+      applySelection(null)
+      return
+    }
+    const next = { ...current, mode: 'colors' as const, expanded: false, creatingText: false, savingText: false }
+    pendingSelectionRef.current = next
+    setPendingSelectionUi(next)
+    readingMarkCloseTimerRef.current = window.setTimeout(() => {
+      readingMarkCloseTimerRef.current = null
+      dismissReadingMarkUi()
+      applySelection(null)
+    }, READING_MARK_TOOLBAR_CLOSE_DELAY)
+  }, [applySelection, cancelReadingMarkClose, dismissReadingMarkUi])
+
+  const updatePendingSelection = useCallback((updater: (current: PendingSelectionUi) => PendingSelectionUi) => {
+    const current = pendingSelectionRef.current
+    if (!current) return null
+    const next = updater(current)
+    pendingSelectionRef.current = next
+    setPendingSelectionUi(next)
+    return next
+  }, [])
+
+  const openTextEditor = useCallback((pending: PendingSelectionUi) => {
+    const next = { ...pending, mode: 'text' as const, expanded: true, creatingText: false, savingText: false }
+    pendingSelectionRef.current = next
+    setPendingSelectionUi(next)
+    applySelection(null)
+  }, [applySelection])
+
+  const createMarkFromSelection = useCallback(async (color: ReadingMarkColor) => {
+    if (markActionRef.current) return
+    const action = (async () => {
+      const pending = pendingSelectionRef.current
+      if (!pending || pending.mode === 'text' || !onCreateReadingMark) return
+      try {
+        const result: CreateReadingMarkResult = await onCreateReadingMark(pending.selection, color, undefined, modelRef.current)
+        if (result.status === 'conflict') {
+          const next = { ...pending, mode: 'colors' as const, expanded: false, creatingText: false, conflict: { mark: result.mark, kind: result.kind } }
+          pendingSelectionRef.current = next
+          setPendingSelectionUi(next)
+          return
+        }
+        dismissReadingMarkUi()
+        applySelection(null)
+      } catch {
+        // 父级 Store 会回滚乐观状态并提供错误提示；浮钮保留以便重试。
+      }
+    })()
+    markActionRef.current = action
+    try {
+      await action
+    } finally {
+      if (markActionRef.current === action) markActionRef.current = null
+    }
+  }, [applySelection, dismissReadingMarkUi, onCreateReadingMark])
+
+  const enterTextMode = useCallback(() => {
+    const pending = pendingSelectionRef.current
+    if (!pending || pending.conflict || pending.mode === 'text' || markActionRef.current) return
+    openTextEditor(pending)
+  }, [openTextEditor])
+
+  const returnToColorMode = useCallback(() => {
+    updatePendingSelection((current) => ({ ...current, mode: 'colors', expanded: true, savingText: false }))
+  }, [updatePendingSelection])
+
+  const submitText = useCallback(async () => {
+    if (markActionRef.current) return
+    const action = (async () => {
+      const pending = pendingSelectionRef.current
+      if (!pending || pending.mode !== 'text' || !onCreateReadingMark) return
+      const draft = pending.textDraft
+      if (!draft.trim()) {
+        closeReadingMarkUiAfterSave()
+        return
+      }
+      const savingState = { ...pending, creatingText: true, savingText: true }
+      pendingSelectionRef.current = savingState
+      setPendingSelectionUi(savingState)
+      const promise = Promise.resolve().then(() => onCreateReadingMark(pending.selection, pending.color, draft, modelRef.current))
+      try {
+        const result = await promise
+        const current = pendingSelectionRef.current
+        if (!current || current.selection !== pending.selection || current.mode !== 'text') return
+        if (result.status === 'conflict') {
+          const conflictState = { ...current, mode: 'colors' as const, expanded: false, creatingText: false, savingText: false, conflict: { mark: result.mark, kind: result.kind } }
+          pendingSelectionRef.current = conflictState
+          setPendingSelectionUi(conflictState)
+          return
+        }
+        closeReadingMarkUiAfterSave()
+      } catch {
+        const current = pendingSelectionRef.current
+        if (current?.mode === 'text') {
+          const failedState = { ...current, creatingText: false, savingText: false }
+          pendingSelectionRef.current = failedState
+          setPendingSelectionUi(failedState)
+        }
+      }
+    })()
+    markActionRef.current = action
+    try {
+      await action
+    } finally {
+      if (markActionRef.current === action) markActionRef.current = null
+    }
+  }, [closeReadingMarkUiAfterSave, onCreateReadingMark])
+
   /** SearchOverlay 入口：基于可见文本投影全文搜索一次并按 blockId 建立匹配索引（O(1) 查询） */
   const setSearchStateImpl = useCallback((state: PreviewSearchState | null) => {
     searchStateRef.current = state && state.query ? state : null
@@ -485,12 +958,24 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     searchMatchesByBlockRef.current = null
     const hadSearch = searchStateRef.current !== null
     const hadSelection = selectionRangeRef.current !== null
+    const hadSourceReveal = sourceRevealRangeRef.current !== null
     searchStateRef.current = null
     selectionRangeRef.current = null
+    sourceRevealRangeRef.current = null
+    if (sourceRevealTimerRef.current !== null) {
+      window.clearTimeout(sourceRevealTimerRef.current)
+      sourceRevealTimerRef.current = null
+    }
     selectionAnchorRef.current = null
     if (hadSearch) syncAllMountedBlocks({ search: true, selection: false })
     if (hadSelection) syncAllMountedBlocks({ search: false, selection: true })
+    if (hadSourceReveal) syncAllMountedBlocks({ search: false, selection: false, sourceReveal: true, readingMarks: false })
+    syncAllMountedBlocks({ search: false, selection: false, readingMarks: true })
   }, [cancelProgrammaticScroll, displayedContent, syncAllMountedBlocks])
+
+  useEffect(() => {
+    syncAllMountedBlocks({ search: false, selection: false, readingMarks: true })
+  }, [readingMarks, resolvedReadingMarks, syncAllMountedBlocks])
 
   useEffect(() => {
     if (!optimisticContent) return
@@ -500,20 +985,93 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   }, [content, optimisticContent])
 
   useLayoutEffect(() => {
-    if (activeEdit || !scrollRestoreRef.current) return
-    const pending = scrollRestoreRef.current
-    if (pending.container) {
-      pending.container.scrollTop = pending.scrollTop
+    if (activeEdit || !pendingAnchorRestoreRef.current) return
+    const pending = pendingAnchorRestoreRef.current
+    const container = scrollContainerRef.current
+    if (
+      !container
+      || container !== pending.container
+      || documentKey !== pending.documentKey
+      || pending.generation !== scrollAnchorGenerationRef.current
+    ) {
+      pendingAnchorRestoreRef.current = null
+      return
     }
-    scrollRestoreRef.current = null
-  }, [activeEdit, displayedContent])
+
+    const block = model.blocks[pending.blockIndex]
+    if (!block || block.blockId !== pending.blockId) {
+      pendingAnchorRestoreRef.current = null
+      return
+    }
+
+    const nextHeights = new Map(measuredHeightsRef.current)
+    let measuredChanged = false
+    for (const [index, element] of blockRefs.current) {
+      const mountedBlock = model.blocks[index]
+      if (!element || !mountedBlock) continue
+      const height = element.getBoundingClientRect().height
+      if (height > 0 && nextHeights.get(mountedBlock.blockId) !== height) {
+        nextHeights.set(mountedBlock.blockId, height)
+        measuredChanged = true
+      }
+    }
+    if (measuredChanged) measuredHeightsRef.current = nextHeights
+    const projected = computeVisibleRange(
+      model,
+      container.scrollTop,
+      container.scrollTop + container.clientHeight,
+      nextHeights,
+      (candidate) => estimatePreviewBlockHeight(candidate, fontSize, lineHeight),
+      0,
+    )
+    const element = blockRefs.current.get(pending.blockIndex)
+    const domBlockTop = element
+      ? element.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+      : undefined
+    const blockTop = projected.blockTops[pending.blockIndex]
+      ?? domBlockTop
+      ?? getEstimatedPreviewTopForLine(
+          model,
+          block.startLine,
+          (candidate) => estimatePreviewBlockHeight(candidate, fontSize, lineHeight),
+          nextHeights,
+        )
+    const exactTop = element && typeof pending.sourceOffset === 'number'
+      ? getMountedSourceRangeTop(
+          element,
+          container,
+          pending.sourceOffset,
+          Math.min(block.endOffset, pending.sourceOffset + 1),
+        )
+      : undefined
+    const localOffset = typeof exactTop === 'number' && typeof domBlockTop === 'number'
+      ? exactTop - domBlockTop
+      : 0
+    const anchorTop = typeof blockTop === 'number'
+      ? blockTop + localOffset
+      : exactTop
+    const desired = typeof anchorTop === 'number'
+      ? anchorTop + pending.viewportOffset
+      : pending.fallbackScrollTop
+    const maxScrollTop = container.scrollHeight > container.clientHeight
+      ? container.scrollHeight - container.clientHeight
+      : Number.POSITIVE_INFINITY
+    const nextScrollTop = Math.max(0, Math.min(desired, maxScrollTop))
+    pendingAnchorRestoreRef.current = null
+    if (Math.abs(container.scrollTop - nextScrollTop) < 1) {
+      if (measuredChanged) setScrollState((state) => ({ ...state }))
+      return
+    }
+    container.scrollTop = nextScrollTop
+    setScrollState((state) => ({ ...state, scrollTop: nextScrollTop }))
+  }, [activeEdit, documentKey, fontSize, lineHeight, model])
 
   const remeasureMountedBlocks = useCallback(() => {
     const nextHeights = new Map<string, number>()
     for (const [index, element] of blockRefs.current) {
       const block = model.blocks[index]
       if (!element || !block) continue
-      const height = element.getBoundingClientRect().height
+      const height = normalizeMeasuredBlockHeight(element.getBoundingClientRect().height)
       if (height > 0) nextHeights.set(block.blockId, height)
     }
     measuredHeightsRef.current = nextHeights
@@ -523,8 +1081,20 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   useEffect(() => {
     const el = rootRef.current?.parentElement
     if (!el) return
+    const pendingObservedHeights = pendingObservedHeightsRef.current
     scrollContainerRef.current = el
+    lastObservedScrollTopRef.current = el.scrollTop
     const update = () => {
+      const previousScrollTop = lastObservedScrollTopRef.current
+      lastObservedScrollTopRef.current = el.scrollTop
+      const userScroll = userScrollRef.current
+      const now = performance.now()
+      if (userScroll.activeUntil > now && el.scrollTop !== previousScrollTop) {
+        if (userScroll.direction === null) {
+          userScroll.direction = el.scrollTop > previousScrollTop ? 'down' : 'up'
+        }
+        userScroll.activeUntil = now + USER_SCROLL_ACTIVITY_MS
+      }
       const nextState = { scrollTop: el.scrollTop, viewportHeight: el.clientHeight, viewportWidth: el.clientWidth }
       const currentWidth = scrollStateRef.current.viewportWidth
       if (currentWidth !== 0 && currentWidth !== el.clientWidth) {
@@ -558,48 +1128,43 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     }
     update()
     const ro = new ResizeObserver(update)
+    let disposed = false
+    let measurementFlushQueued = false
+    const queueMeasurementFlush = () => {
+      if (measurementFlushQueued) return
+      measurementFlushQueued = true
+      queueMicrotask(() => {
+        measurementFlushQueued = false
+        if (disposed || pendingObservedHeights.size === 0) return
+        flushSync(() => setMeasurementRevision((revision) => revision + 1))
+      })
+    }
     const blockRo = new ResizeObserver((entries) => {
       if (scrollStateRef.current.viewportWidth !== 0 && scrollStateRef.current.viewportWidth !== el.clientWidth) {
+        pendingObservedHeights.clear()
         update()
         return
       }
-      const estimateForObserver = (block: PreviewBlock) => estimatePreviewBlockHeight(block, fontSize, lineHeight)
-      const before = computeVisibleRange(
-        model,
-        el.scrollTop,
-        el.scrollTop + el.clientHeight,
-        measuredHeightsRef.current,
-        estimateForObserver,
-        0,
-      )
-      const anchorIndex = before.startIndex
-      const anchorTopBefore = before.blockTops[anchorIndex] ?? 0
       let changed = false
       for (const entry of entries) {
         const element = entry.target as HTMLElement
         const index = Number(element.dataset.mdBlockIndex)
         const block = model.blocks[index]
-        const height = entry.borderBoxSize?.[0]?.blockSize ?? element.getBoundingClientRect().height
-        if (block && height > 0 && measuredHeightsRef.current.get(block.blockId) !== height) {
-          measuredHeightsRef.current.set(block.blockId, height)
+        const height = normalizeMeasuredBlockHeight(
+          entry.borderBoxSize?.[0]?.blockSize ?? element.getBoundingClientRect().height,
+        )
+        const pending = pendingObservedHeights.get(index)
+        const previousHeight = pending?.blockId === block?.blockId
+          ? pending.height
+          : block
+            ? measuredHeightsRef.current.get(block.blockId)
+            : undefined
+        if (block && height > 0 && previousHeight !== height) {
+          pendingObservedHeights.set(index, { blockId: block.blockId, height })
           changed = true
         }
       }
-      if (changed) {
-        const after = computeVisibleRange(
-          model,
-          el.scrollTop,
-          el.scrollTop + el.clientHeight,
-          measuredHeightsRef.current,
-          estimateForObserver,
-          0,
-        )
-        if (!headingScrollCancelRef.current) {
-          const anchorDelta = (after.blockTops[anchorIndex] ?? anchorTopBefore) - anchorTopBefore
-          if (anchorDelta !== 0) el.scrollTop += anchorDelta
-        }
-        setScrollState({ scrollTop: el.scrollTop, viewportHeight: el.clientHeight, viewportWidth: el.clientWidth })
-      }
+      if (changed) queueMeasurementFlush()
     })
     blockResizeObserverRef.current = blockRo
     for (const blockElement of blockRefs.current.values()) {
@@ -607,20 +1172,22 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     }
     ro.observe(el)
     el.addEventListener('scroll', update, { passive: true })
-    el.addEventListener('wheel', cancelProgrammaticScroll, { passive: true })
-    el.addEventListener('pointerdown', cancelProgrammaticScroll)
-    el.addEventListener('touchstart', cancelProgrammaticScroll, { passive: true })
+    el.addEventListener('wheel', handleWheel, { passive: true })
+    el.addEventListener('pointerdown', handlePointerDown)
+    el.addEventListener('touchstart', handlePointerDown, { passive: true })
     return () => {
+      disposed = true
+      pendingObservedHeights.clear()
       cancelProgrammaticScroll()
       ro.disconnect()
       blockRo.disconnect()
       blockResizeObserverRef.current = null
       el.removeEventListener('scroll', update)
-      el.removeEventListener('wheel', cancelProgrammaticScroll)
-      el.removeEventListener('pointerdown', cancelProgrammaticScroll)
-      el.removeEventListener('touchstart', cancelProgrammaticScroll)
+      el.removeEventListener('wheel', handleWheel)
+      el.removeEventListener('pointerdown', handlePointerDown)
+      el.removeEventListener('touchstart', handlePointerDown)
     }
-  }, [cancelProgrammaticScroll, fontSize, lineHeight, model, remeasureMountedBlocks])
+  }, [cancelProgrammaticScroll, fontSize, handlePointerDown, handleWheel, lineHeight, model, remeasureMountedBlocks])
 
   /** 虚拟块（重新）挂载时恢复 details 展开/折叠等受支持交互 HTML 的用户瞬时状态 */
   const restoreInteractiveHtmlState = useCallback((element: HTMLElement) => {
@@ -675,11 +1242,82 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     return () => root.removeEventListener('toggle', handleToggle, true)
   }, [])
 
+  // 批注 Hover 仅在 Preview Root 做事件委托：高亮片段本身是渲染派生数据，
+  // 不为每条 ReadingMark 注册监听器，也不通过 pointermove 跟踪鼠标。
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root || !annotationOverlayRef) return
+    const handlePointerOver = (event: PointerEvent) => {
+      if (pendingSelectionRef.current || selectionRangeRef.current) return
+      const target = event.target
+      if (!(target instanceof Element)) return
+      const hit = target.closest<HTMLElement>('[data-gm-reading-mark-id]')
+      if (!hit || !root.contains(hit)) return
+      const related = event.relatedTarget
+      if (related instanceof Node && hit.contains(related)) return
+      const markId = hit.dataset.gmReadingMarkId?.split(',')[0]
+      const mark = markId ? readingMarksByIdRef.current.get(markId) : undefined
+      if (!mark) return
+      const rect = hit.getBoundingClientRect()
+      const anchor: AnnotationHoverAnchor = { top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left, triggerPoint: { x: event.clientX, y: event.clientY } }
+      annotationOverlayRef.current?.show(mark, anchor)
+    }
+    const handlePointerOut = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Element)) return
+      const hit = target.closest<HTMLElement>('[data-gm-reading-mark-id]')
+      if (!hit || !root.contains(hit)) return
+      const related = event.relatedTarget
+      if (related instanceof Node && (hit.contains(related) || (related instanceof Element && related.closest('[data-annotation-hover-overlay="true"]')))) return
+      annotationOverlayRef.current?.scheduleHide()
+    }
+    root.addEventListener('pointerover', handlePointerOver)
+    root.addEventListener('pointerout', handlePointerOut)
+    return () => {
+      root.removeEventListener('pointerover', handlePointerOver)
+      root.removeEventListener('pointerout', handlePointerOut)
+    }
+  }, [annotationOverlayRef])
+
   // Height estimation
   const estimateBlockHeight = useCallback(
     (block: PreviewBlock): number => estimatePreviewBlockHeight(block, fontSize, lineHeight),
     [fontSize, lineHeight],
   )
+
+  const captureViewportAnchor = useCallback((): PreviewViewportAnchor | null => {
+    const container = scrollContainerRef.current
+    if (!container || model.blocks.length === 0) return null
+    const fallbackScrollTop = container.scrollTop
+    const visibleAtTop = computeVisibleRange(
+      model,
+      fallbackScrollTop,
+      fallbackScrollTop + container.clientHeight,
+      measuredHeightsRef.current,
+      estimateBlockHeight,
+      0,
+    )
+    const blockIndex = visibleAtTop.startIndex
+    const block = model.blocks[blockIndex]
+    if (!block) return null
+    const element = blockRefs.current.get(blockIndex)
+    const blockTop = element
+      ? element.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+      : visibleAtTop.blockTops[blockIndex]
+    const line = getMountedPreviewLineForTop(model, rootRef.current, container, fallbackScrollTop)
+    const sourceOffset = typeof line === 'number' ? getSourceOffsetForLine(model, line) : undefined
+    const exactTop = element && typeof sourceOffset === 'number'
+      ? getMountedSourceRangeTop(element, container, sourceOffset, Math.min(block.endOffset, sourceOffset + 1))
+      : undefined
+    const anchorTop = typeof exactTop === 'number' ? exactTop : blockTop
+    return {
+      blockId: block.blockId,
+      blockIndex,
+      sourceOffset,
+      viewportOffset: fallbackScrollTop - anchorTop,
+      fallbackScrollTop,
+    }
+  }, [estimateBlockHeight, model])
 
   // 编辑与预览共用同一套目录滚动：短距离平滑滚动，长距离渐隐后瞬移并在渐显前校正。
   // 未挂载标题始终由全文模型提供位置，挂载后自动切换为真实 DOM 几何。
@@ -710,6 +1348,146 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     }
     return true
   }, [cancelProgrammaticScroll, estimateBlockHeight, model])
+
+  const navigateToReadingMarkInternal = useCallback((markId: string): boolean => {
+    const range = resolvedReadingMarks.get(markId)
+    if (!range) return false
+    focusedMarkIdRef.current = markId
+    syncAllMountedBlocks({ search: false, selection: false, readingMarks: true })
+    const index = findBlockIndexByOffset(model, range.from)
+    if (index < 0) return false
+    const container = scrollContainerRef.current
+    if (!container) return false
+    cancelProgrammaticScroll()
+    const element = blockRefs.current.get(index)
+    const exactTop = element ? getMountedSourceRangeTop(element, container, range.from, range.to) : undefined
+    if (typeof exactTop === 'number') {
+      container.scrollTo({ top: Math.max(0, exactTop - 24) })
+    } else {
+      const block = model.blocks[index]
+      const line = block.startLine + countLineBreaks(model.rawContent.slice(block.startOffset, range.from))
+      const top = getEstimatedPreviewTopForLine(model, line, estimateBlockHeight, measuredHeightsRef.current)
+      if (typeof top !== 'number') return false
+      pendingSearchCorrectionRef.current = { from: range.from, to: range.to, blockId: model.blocks[index].blockId }
+      container.scrollTo({ top: Math.max(0, top - 24) })
+    }
+    window.setTimeout(() => {
+      if (focusedMarkIdRef.current !== markId) return
+      focusedMarkIdRef.current = null
+      syncAllMountedBlocks({ search: false, selection: false, readingMarks: true })
+    }, 1600)
+    return true
+  }, [cancelProgrammaticScroll, estimateBlockHeight, model, resolvedReadingMarks, syncAllMountedBlocks])
+
+  const scrollToSourceRangeDirect = useCallback((
+    from: number,
+    to: number,
+    onApplied?: () => void,
+  ): boolean => {
+    const container = scrollContainerRef.current
+    if (!container) return false
+    cancelProgrammaticScroll()
+    pendingSearchCorrectionRef.current = null
+    const index = findBlockIndexByOffset(model, from)
+    const block = index >= 0 ? model.blocks[index] : undefined
+    if (!block) return false
+    const getTargetTop = () => {
+      if (!mountedRef.current || scrollContainerRef.current !== container) return undefined
+      const element = blockRefs.current.get(index)
+      const rangeElement = element ?? (requiresWholeDocumentRender ? rootRef.current : null)
+      const exactTop = rangeElement
+        ? getMountedSourceRangeTop(rangeElement, container, from, Math.min(block.endOffset, Math.max(from + 1, to)))
+        : undefined
+      if (typeof exactTop === 'number') return Math.max(0, exactTop - 24)
+      if (element) {
+        const blockTop = element.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+        return Math.max(0, blockTop - 24)
+      }
+      const localSource = model.rawContent.slice(block.startOffset, Math.max(block.startOffset, from))
+      const line = block.startLine + (localSource.match(/\r\n|\r|\n/g)?.length ?? 0)
+      const top = getEstimatedPreviewTopForLine(model, line, estimateBlockHeight, measuredHeightsRef.current)
+      return typeof top === 'number' ? Math.max(0, top - 24) : undefined
+    }
+    if (typeof getTargetTop() !== 'number') return false
+
+    const initiallyMounted = Boolean(blockRefs.current.get(index) || (requiresWholeDocumentRender && rootRef.current))
+    let transitionSettled = false
+    let correctionReady = initiallyMounted
+    let applied = false
+    const applyOnce = () => {
+      if (applied) return
+      if (!transitionSettled) {
+        correctionReady = true
+        return
+      }
+      applied = true
+      onApplied?.()
+    }
+    if (!initiallyMounted) {
+      pendingSearchCorrectionRef.current = {
+        from,
+        to,
+        blockId: block.blockId,
+        onApplied: () => {
+          correctionReady = true
+          applyOnce()
+        },
+      }
+    }
+
+    let cleanup: (() => void) | null = null
+    cleanup = startHeadingScroll({
+      container,
+      fadeElement: container,
+      forceDirect: true,
+      getTargetTop,
+      onSettled: () => {
+        transitionSettled = true
+        if (initiallyMounted || correctionReady) applyOnce()
+        if (cleanup && headingScrollCancelRef.current === cleanup) headingScrollCancelRef.current = null
+      },
+    })
+    if (cleanup) headingScrollCancelRef.current = cleanup
+    return true
+  }, [cancelProgrammaticScroll, estimateBlockHeight, model, requiresWholeDocumentRender])
+
+  const revealSourceLinesInternal = useCallback((request: MarkdownPreviewSourceRevealRequest): boolean => {
+    if (request.documentKey !== documentKey) return false
+    if (request.documentVersion !== undefined && request.documentVersion !== documentVersion) return false
+    const { startLine, endLine = startLine } = request
+    const currentModel = modelRef.current
+    const normalizedStartLine = Math.max(1, Math.min(startLine, endLine))
+    const normalizedEndLine = Math.max(normalizedStartLine, Math.max(startLine, endLine))
+    const startBlockIndex = findBlockIndexByLine(currentModel, normalizedStartLine)
+    const endBlockIndex = findBlockIndexByLine(currentModel, normalizedEndLine)
+    if (startBlockIndex < 0 || endBlockIndex < 0) return false
+    const from = getSourceOffsetForLine(currentModel, normalizedStartLine)
+      ?? currentModel.blocks[startBlockIndex].startOffset
+    const to = getSourceOffsetForLine(currentModel, normalizedEndLine + 1)
+      ?? currentModel.blocks[endBlockIndex].endOffset
+    if (to <= from) return false
+
+    const reveal = { from, to }
+    sourceRevealRangeRef.current = reveal
+    syncAllMountedBlocks({ search: false, selection: false, sourceReveal: true, readingMarks: false })
+    const finishReveal = () => {
+      if (sourceRevealRangeRef.current !== reveal) return
+      if (sourceRevealTimerRef.current !== null) window.clearTimeout(sourceRevealTimerRef.current)
+      sourceRevealTimerRef.current = window.setTimeout(() => {
+        sourceRevealTimerRef.current = null
+        if (sourceRevealRangeRef.current !== reveal) return
+        sourceRevealRangeRef.current = null
+        syncAllMountedBlocks({ search: false, selection: false, sourceReveal: true, readingMarks: false })
+      }, SOURCE_REVEAL_DURATION_MS)
+      request.onApplied?.()
+    }
+    const applied = scrollToSourceRangeDirect(from, to, finishReveal)
+    if (!applied) {
+      sourceRevealRangeRef.current = null
+      syncAllMountedBlocks({ search: false, selection: false, sourceReveal: true, readingMarks: false })
+    }
+    return applied
+  }, [documentKey, documentVersion, scrollToSourceRangeDirect, syncAllMountedBlocks])
 
   // Expose scrollToLine for EditorArea to use with TOC jumps
   useImperativeHandle(ref, () => ({
@@ -745,9 +1523,12 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       return getSourceOffsetForLine(model, line)
     },
     scrollToLine(line: number) {
+      cancelPendingAnchorRestore()
       scrollToLineInternal(line)
     },
+    revealSourceLines: revealSourceLinesInternal,
     scrollToOffset(offset: number) {
+      cancelPendingAnchorRestore()
       cancelProgrammaticScroll()
       const index = findBlockIndexByOffset(model, offset)
       const block = index >= 0 ? model.blocks[index] : undefined
@@ -809,7 +1590,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       selectionAnchorRef.current = null
       applySelection(null)
     },
-  }), [cancelProgrammaticScroll, model, estimateBlockHeight, requiresWholeDocumentRender, scrollToLineInternal, setSearchStateImpl, applySelection])
+    navigateToReadingMark: navigateToReadingMarkInternal,
+  }), [cancelProgrammaticScroll, cancelPendingAnchorRestore, model, estimateBlockHeight, requiresWholeDocumentRender, scrollToLineInternal, revealSourceLinesInternal, setSearchStateImpl, applySelection, navigateToReadingMarkInternal])
 
   // Visible range
   const visible = useMemo(
@@ -824,19 +1606,69 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
 
   // Measure real heights of mounted blocks
   useLayoutEffect(() => {
-    let changed = false
+    const container = scrollContainerRef.current
+    const before = container
+      ? computeVisibleRange(
+          model,
+          container.scrollTop,
+          container.scrollTop + container.clientHeight,
+          measuredHeightsRef.current,
+          estimateBlockHeight,
+          0,
+        )
+      : null
+    const anchorIndex = before?.startIndex ?? visible.startIndex
+    const anchorElement = blockRefs.current.get(anchorIndex)
+    const anchorTopBefore = anchorElement && container
+      ? anchorElement.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+      : before?.blockTops[anchorIndex] ?? 0
+    const previousHeights = measuredHeightsRef.current
+    const nextHeights = new Map(previousHeights)
+    const candidateIndices = new Set<number>()
+    for (const [index, pending] of pendingObservedHeightsRef.current) {
+      const block = model.blocks[index]
+      if (!block || block.blockId !== pending.blockId) continue
+      nextHeights.set(block.blockId, pending.height)
+      candidateIndices.add(index)
+    }
+    pendingObservedHeightsRef.current.clear()
     for (let i = visible.startIndex; i < visible.endIndex; i += 1) {
       const el = blockRefs.current.get(i)
       const blk = model.blocks[i]
       if (!el || !blk) continue
-      const h = el.getBoundingClientRect().height
-      if (h > 0 && measuredHeightsRef.current.get(blk.blockId) !== h) {
-        measuredHeightsRef.current.set(blk.blockId, h)
-        changed = true
+      const h = normalizeMeasuredBlockHeight(el.getBoundingClientRect().height)
+      if (h > 0 && nextHeights.get(blk.blockId) !== h) {
+        nextHeights.set(blk.blockId, h)
+        candidateIndices.add(i)
       }
     }
-    if (changed) setScrollState((state) => ({ ...state }))
-  }, [visible.startIndex, visible.endIndex, model.blocks, scrollState.viewportWidth])
+    const changedIndices = Array.from(candidateIndices).filter((index) => {
+      const block = model.blocks[index]
+      return block && previousHeights.get(block.blockId) !== nextHeights.get(block.blockId)
+    })
+    if (changedIndices.length === 0) return
+    measuredHeightsRef.current = nextHeights
+    if (container && before) {
+      const after = computeVisibleRange(
+        model,
+        container.scrollTop,
+        container.scrollTop + container.clientHeight,
+        nextHeights,
+        estimateBlockHeight,
+        0,
+      )
+      const anchorDelta = (after.blockTops[anchorIndex] ?? anchorTopBefore) - anchorTopBefore
+      const changedBeforeAnchor = changedIndices.some((index) => index < anchorIndex)
+      const userScrollingDown = userScrollRef.current.direction === 'down'
+        && userScrollRef.current.activeUntil > performance.now()
+      if (changedBeforeAnchor && !headingScrollCancelRef.current && !pendingSearchCorrectionRef.current && !userScrollingDown && anchorDelta !== 0) {
+        container.scrollTop = Math.max(0, container.scrollTop + anchorDelta)
+      }
+      setScrollState({ scrollTop: container.scrollTop, viewportHeight: container.clientHeight, viewportWidth: container.clientWidth })
+      return
+    }
+    setScrollState((state) => ({ ...state }))
+  }, [estimateBlockHeight, measurementRevision, model, visible.startIndex, visible.endIndex, scrollState.viewportWidth])
 
   // 未挂载搜索目标的单次幂等校正：目标块进入虚拟窗口后，优先按真实 DOM Range
   // 对齐关键词；无精确标注时退回块顶部，不重新计算全文估算位置。
@@ -854,16 +1686,24 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       : element.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
     if (pending.appliedTop !== undefined && Math.abs(pending.appliedTop - targetTop) < 1) {
       pendingSearchCorrectionRef.current = null
+      pending.onApplied?.()
       return
     }
-    const appliedPending = { ...pending, appliedTop: targetTop }
+    const appliedPending = { ...pending, appliedTop: targetTop, onApplied: undefined }
     pendingSearchCorrectionRef.current = appliedPending
     const desired = Math.max(0, targetTop - 24)
     if (Math.abs(container.scrollTop - desired) >= 1) container.scrollTop = desired
+    pending.onApplied?.()
     requestAnimationFrame(() => {
       if (pendingSearchCorrectionRef.current === appliedPending) pendingSearchCorrectionRef.current = null
     })
   }, [model, scrollState.scrollTop, visible.blockTops, visible.startIndex, visible.endIndex])
+
+  useEffect(() => {
+    if (pendingSelectionUi?.mode !== 'text') return
+    const frame = window.requestAnimationFrame(() => textInputRef.current?.focus())
+    return () => window.cancelAnimationFrame(frame)
+  }, [pendingSelectionUi?.mode])
 
   const overlayRectRef = useRef<{ top: number; left: number; width: number } | null>(null)
 
@@ -895,13 +1735,6 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
 
   const closeActiveEdit = useCallback((edit: ActiveBlockEdit) => {
     if (!mountedRef.current) return
-    const scrollContainer = rootRef.current?.parentElement
-    if (scrollContainer) {
-      scrollRestoreRef.current = {
-        scrollTop: scrollContainer.scrollTop,
-        container: scrollContainer,
-      }
-    }
     if (activeEditRef.current?.documentKey === edit.documentKey && activeEditRef.current.block.blockId === edit.block.blockId) {
       activeEditRef.current = null
     }
@@ -919,6 +1752,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
 
   const submitEdit = useCallback(async (edit: ActiveBlockEdit): Promise<boolean> => {
     const draft = draftRef.current
+    const viewportAnchor = captureViewportAnchor()
+    const scrollAnchorGeneration = scrollAnchorGenerationRef.current
     if (!onBlockCommit) {
       closeActiveEdit(edit)
       return true
@@ -944,6 +1779,24 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       + draft
       + edit.contentSnapshot.slice(edit.block.endOffset)
     )
+    if (
+      nextContent !== edit.contentSnapshot
+      && modelRef.current.rawContent === edit.contentSnapshot
+    ) {
+      const originalBlockLength = edit.block.endOffset - edit.block.startOffset
+      const replacementLength = Math.max(0, nextContent.length - (edit.contentSnapshot.length - originalBlockLength))
+      pendingPreviewPatchRef.current = {
+        previousModel: modelRef.current,
+        nextContent,
+        documentKey: edit.documentKey,
+        editedBlockId: edit.block.blockId,
+        replacementStart: edit.block.startOffset,
+        replacementEnd: edit.block.endOffset,
+        replacementLength,
+        anchor: viewportAnchor,
+        generation: scrollAnchorGeneration,
+      }
+    }
     const pending = optimisticContentRef.current
     const nextOptimisticContent: OptimisticPreviewContent = {
       content: nextContent,
@@ -955,7 +1808,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     setOptimisticContent(nextOptimisticContent)
     closeActiveEdit(edit)
     return true
-  }, [closeActiveEdit, onBlockCommit])
+  }, [captureViewportAnchor, closeActiveEdit, onBlockCommit])
 
   const submitEditRef = useRef(submitEdit)
   submitEditRef.current = submitEdit
@@ -1015,6 +1868,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       const adjustedIdx = findBlockIndexByOffset(snapshotModel, adjustedStartOffset)
       block = adjustedIdx >= 0 ? snapshotModel.blocks[adjustedIdx] : requestedBlock
     }
+    cancelPendingAnchorRestore()
 
     const mappedClickedLine = Number.isFinite(clickedLine)
       ? block.startLine + (clickedLine - requestedBlock.startLine)
@@ -1046,10 +1900,11 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
         })
       }
     }
-  }, [model.blocks, content, displayedContent, documentKey, inlineEditEnabled, onBlockCommit, submitActiveEdit])
+  }, [cancelPendingAnchorRestore, model.blocks, content, displayedContent, documentKey, inlineEditEnabled, onBlockCommit, submitActiveEdit])
 
   const handlePointerDownCapture = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     cancelProgrammaticScroll()
+    cancelPendingAnchorRestore()
     if (!event.altKey || !inlineEditEnabled || activeEditRef.current && (event.target as Element).closest('.gm-inline-markdown-editor')) return
     const target = event.target
     if (!(target instanceof Element)) return
@@ -1065,7 +1920,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       target,
       moved: false,
     }
-  }, [cancelProgrammaticScroll, inlineEditEnabled])
+  }, [cancelPendingAnchorRestore, cancelProgrammaticScroll, inlineEditEnabled])
 
   const handlePointerMoveCapture = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const intent = altPointerRef.current
@@ -1151,6 +2006,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
 
     const handleMouseDown = (event: MouseEvent) => {
       if (event.button !== 0 || event.altKey) return
+      annotationOverlayRef?.current?.hide()
       activePreviewRoot = root
       const offset = resolveCaretOffsetRef.current(event.clientX, event.clientY)
       if (offset === null) return
@@ -1170,6 +2026,18 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       applySelection(anchor === offset ? null : { from: anchor, to: offset })
     }
 
+    const cancelDragOnSecondaryMouseDown = (event: MouseEvent) => {
+      if (event.button === 0) return
+      const drag = dragStateRef.current
+      if (!drag || (event.buttons & 1) === 0) return
+      event.preventDefault()
+      dragStateRef.current = null
+      if (drag.rafId !== 0) cancelAnimationFrame(drag.rafId)
+      selectionAnchorRef.current = null
+      applySelection(null)
+      window.getSelection()?.removeAllRanges()
+    }
+
     const handleMouseMove = (event: MouseEvent) => {
       const drag = dragStateRef.current
       if (!drag || (event.buttons & 1) === 0) return
@@ -1180,12 +2048,28 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     const handleMouseUp = (event: MouseEvent) => {
       const drag = dragStateRef.current
       if (!drag) return
+      if (event.button !== 0 && (event.buttons & 1) !== 0) return
       dragStateRef.current = null
       if (drag.rafId !== 0) cancelAnimationFrame(drag.rafId)
       const offset = resolveCaretOffsetRef.current(event.clientX, event.clientY)
       const focus = offset ?? drag.focusOffset
       selectionAnchorRef.current = drag.anchorOffset
-      applySelection(drag.anchorOffset === focus ? null : { from: drag.anchorOffset, to: focus })
+      const normalized = drag.anchorOffset === focus ? null : (drag.anchorOffset <= focus ? { from: drag.anchorOffset, to: focus } : { from: focus, to: drag.anchorOffset })
+      applySelection(normalized)
+      if (normalized) {
+        const selection = getSelectionSnapshot()
+        if (selection && selection.text) {
+          const fallback = { top: event.clientY, right: event.clientX, bottom: event.clientY, left: event.clientX, triggerPoint: { x: event.clientX, y: event.clientY } }
+          const anchorRect = getSourceRangeAnchorRect(root, selection.from, selection.to, fallback)
+          const conflict = findReadingMarkConflict(readingMarkIndexRef.current, selection.from, selection.to) ?? undefined
+          const next = { selection, anchorRect, expanded: false, mode: 'colors' as const, color: 'yellow' as const, textDraft: '', creatingText: false, savingText: false, conflict }
+          pendingSelectionRef.current = next
+          setPendingSelectionUi(next)
+        }
+      } else {
+        pendingSelectionRef.current = null
+        setPendingSelectionUi(null)
+      }
     }
 
     const handleDoubleClick = (event: MouseEvent) => {
@@ -1195,15 +2079,26 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       if (word) {
         selectionAnchorRef.current = word.from
         applySelection(word)
+        const selection = getSelectionSnapshot()
+        if (selection && selection.text) {
+          const fallback = { top: event.clientY, right: event.clientX, bottom: event.clientY, left: event.clientX, triggerPoint: { x: event.clientX, y: event.clientY } }
+          const anchorRect = getSourceRangeAnchorRect(root, selection.from, selection.to, fallback)
+          const conflict = findReadingMarkConflict(readingMarkIndexRef.current, selection.from, selection.to) ?? undefined
+          const next = { selection, anchorRect, expanded: false, mode: 'colors' as const, color: 'yellow' as const, textDraft: '', creatingText: false, savingText: false, conflict }
+          pendingSelectionRef.current = next
+          setPendingSelectionUi(next)
+        }
       }
     }
 
     root.addEventListener('mousedown', handleMouseDown)
+    document.addEventListener('mousedown', cancelDragOnSecondaryMouseDown, true)
     document.addEventListener('mousemove', handleMouseMove, true)
     document.addEventListener('mouseup', handleMouseUp, true)
     root.addEventListener('dblclick', handleDoubleClick)
     return () => {
       root.removeEventListener('mousedown', handleMouseDown)
+      document.removeEventListener('mousedown', cancelDragOnSecondaryMouseDown, true)
       document.removeEventListener('mousemove', handleMouseMove, true)
       document.removeEventListener('mouseup', handleMouseUp, true)
       root.removeEventListener('dblclick', handleDoubleClick)
@@ -1211,7 +2106,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       if (drag && drag.rafId !== 0) cancelAnimationFrame(drag.rafId)
       dragStateRef.current = null
     }
-  }, [applySelection])
+  }, [annotationOverlayRef, applySelection, getSelectionSnapshot])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1244,6 +2139,50 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     return () => document.removeEventListener('keydown', handleKeyDown, true)
   }, [applySelection])
 
+  useEffect(() => {
+    const closeOnOutside = (event: MouseEvent) => {
+      if (event.button !== 0) return
+      const target = event.target
+      if (target instanceof Element && target.closest('.gm-reading-mark-toolbar, .gm-reading-mark-popover, [data-annotation-hover-overlay="true"]')) return
+      const hadPendingSelection = pendingSelectionRef.current !== null
+      dismissReadingMarkUi()
+      if (hadPendingSelection) {
+        selectionAnchorRef.current = null
+        applySelection(null)
+      }
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      const pending = pendingSelectionRef.current
+      if (pending?.mode === 'text') {
+        event.preventDefault()
+        if (!pending.creatingText && !pending.savingText) returnToColorMode()
+      } else {
+        dismissReadingMarkUi()
+      }
+    }
+    document.addEventListener('mousedown', closeOnOutside, true)
+    document.addEventListener('keydown', closeOnEscape, true)
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutside, true)
+      document.removeEventListener('keydown', closeOnEscape, true)
+    }
+  }, [applySelection, dismissReadingMarkUi, returnToColorMode])
+
+  useEffect(() => () => cancelReadingMarkClose(), [cancelReadingMarkClose])
+
+  useEffect(() => {
+    dismissReadingMarkUi()
+  }, [dismissReadingMarkUi, documentKey, displayedContent, resource])
+
+  useEffect(() => {
+    const container = scrollContainerRef.current
+    if (!container) return
+    const close = () => dismissReadingMarkUi()
+    container.addEventListener('scroll', close, { passive: true })
+    return () => container.removeEventListener('scroll', close)
+  }, [dismissReadingMarkUi, scrollState.viewportHeight])
+
   const rehypePlugins = useMemo(
     () => [
       ...(!skipHtml && hasEmbeddedHtml && htmlRehypePlugins ? htmlRehypePlugins : []),
@@ -1252,8 +2191,13 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     [hasEmbeddedHtml, htmlRehypePlugins, skipHtml],
   )
   const wholeDocumentRehypePlugins = useMemo(
-    () => [...rehypePlugins, createSourceOffsetAnnotator(0), createMarkdownBlockWrapperPlugin(model.blocks)],
-    [model.blocks, rehypePlugins],
+    () => [
+      ...rehypePlugins,
+      createSourceOffsetAnnotator(0, normalizedContent),
+      createReadingMarkHitRegionAnnotator(readingMarkHitRanges),
+      createMarkdownBlockWrapperPlugin(model.blocks),
+    ],
+    [model.blocks, normalizedContent, readingMarkHitRanges, rehypePlugins],
   )
 
   const components = useMemo<Partial<Components>>(() => {
@@ -1390,6 +2334,15 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
             const isBlock = Boolean(language) || code.endsWith('\n')
             if (isBlock && language === 'mermaid') {
               return <MermaidBlock code={code.replace(/\n$/, '')} startLine={getNodeStartLine(node, base)} endLine={getNodeEndLine(node, base)} />
+            }
+            if (isBlock && language === 'echarts') {
+              const startLine = getNodeStartLine(node, base)
+              const endLine = getNodeEndLine(node, base)
+              return (
+                <Suspense fallback={<div className="my-4 rounded-xl border border-gm-border bg-gm-surface-elevated p-4 text-caption text-gm-text-tertiary" style={{ height: 392 }} data-md-line={startLine} data-md-end-line={endLine}>正在加载 ECharts…</div>}>
+                  <LazyEChartsBlock code={code.replace(/\n$/, '')} startLine={startLine} endLine={endLine} />
+                </Suspense>
+              )
             }
             if (isBlock) {
               return (
@@ -1563,12 +2516,13 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       onPointerMoveCapture={handlePointerMoveCapture}
       onPointerUpCapture={handlePointerUpCapture}
       onClickCapture={handleClickCapture}
-      onWheelCapture={cancelProgrammaticScroll}
+      onWheelCapture={handleWheelCapture}
     >
       {requiresWholeDocumentRender ? (
-        <StableMarkdownContent
-          baseLine={0}
-          markdown={normalizedContent}
+          <StableMarkdownContent
+            baseLine={0}
+            markdown={normalizedContent}
+            readingMarkRanges={readingMarkHitRanges}
           skipHtml={skipHtml || (hasEmbeddedHtml && !htmlRehypePlugins)}
           rehypePlugins={wholeDocumentRehypePlugins}
           components={components}
@@ -1588,6 +2542,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
                 globalIndex={globalIndex}
                 top={visible.blockTops[globalIndex]}
                 onElement={setBlockElement}
+                readingMarkRanges={readingMarkHitRangesByBlock.get(block.blockId)}
                 baseLine={block.startLine - 1}
                 renderFootnoteSection={false}
                 footnoteReferenceSuffix={`block-${globalIndex}`}
@@ -1613,6 +2568,92 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
           />
         </div>
       )}
+      {pendingSelectionUi && filePath && onCreateReadingMark && (
+        <ReadingMarkToolbarShell
+          anchor={pendingSelectionUi.anchorRect}
+          variant="create"
+          mode={pendingSelectionUi.mode}
+          expanded={pendingSelectionUi.expanded}
+          layoutDeleteConfirm={Boolean(pendingSelectionUi.conflict && pendingSelectionUi.expanded)}
+          className={pendingSelectionUi.conflict ? 'is-conflict' : undefined}
+          expandOnHover
+          onExpandedChange={(expanded) => updatePendingSelection((state) => ({ ...state, expanded }))}
+          onReducedMotionChange={(reducedMotion) => { readingMarkReducedMotionRef.current = reducedMotion }}
+          renderContent={({ textContentMotion, colorContentMotion, triggerMotion, actionsMotion }) => pendingSelectionUi.conflict ? (
+            <motion.div
+              className="gm-reading-mark-toolbar-view"
+              {...colorContentMotion}
+            >
+              <motion.button
+                type="button"
+                className="gm-reading-mark-toolbar-trigger"
+                {...triggerMotion}
+                style={{ color: 'var(--gm-primary)' }}
+                title="添加批注"
+                aria-label="添加批注"
+                aria-expanded={pendingSelectionUi.expanded}
+                aria-hidden={pendingSelectionUi.expanded}
+                tabIndex={pendingSelectionUi.expanded ? -1 : 0}
+                onClick={() => updatePendingSelection((state) => ({ ...state, expanded: !state.expanded }))}
+              >
+                <Highlighter aria-hidden="true" size={16} strokeWidth={2} />
+              </motion.button>
+              <motion.div className={`gm-reading-mark-toolbar-actions ${pendingSelectionUi.expanded ? 'is-expanded' : ''} is-conflict`} {...actionsMotion} aria-hidden={!pendingSelectionUi.expanded}>
+                <div className="gm-reading-mark-conflict" role="alert">
+                  <span>与已有标记重叠</span>
+                  <button
+                    type="button"
+                    style={{ color: 'var(--gm-primary)' }}
+                    tabIndex={pendingSelectionUi.expanded ? 0 : -1}
+                    onClick={() => {
+                      const conflict = pendingSelectionUi.conflict
+                      if (!conflict) return
+                      pendingSelectionRef.current = null
+                      setPendingSelectionUi(null)
+                      applySelection(null)
+                      annotationOverlayRef?.current?.open(conflict.mark, pendingSelectionUi.anchorRect)
+                    }}
+                  >
+                    查看已有标记
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          ) : (
+            <ReadingMarkToolbarContent
+              variant="create"
+              mode={pendingSelectionUi.mode}
+              expanded={pendingSelectionUi.expanded}
+              color={pendingSelectionUi.color}
+              textDraft={pendingSelectionUi.textDraft}
+              saving={pendingSelectionUi.creatingText || pendingSelectionUi.savingText}
+              deleteConfirm={false}
+              hasNote={false}
+              textInputRef={textInputRef}
+              colorActionRef={colorActionRef}
+              textContentMotion={textContentMotion}
+              colorContentMotion={colorContentMotion}
+              triggerMotion={triggerMotion}
+              actionsMotion={actionsMotion}
+              onTriggerClick={() => updatePendingSelection((state) => ({ ...state, expanded: !state.expanded }))}
+              onEnterText={enterTextMode}
+              onReturnToColors={returnToColorMode}
+              onSubmitText={() => void submitText()}
+              onTextChange={(value) => updatePendingSelection((state) => ({ ...state, textDraft: value }))}
+              onSelectColor={(color) => {
+                if (pendingSelectionRef.current?.mode === 'text') {
+                  updatePendingSelection((state) => ({ ...state, color }))
+                } else {
+                  void createMarkFromSelection(color)
+                }
+              }}
+              onDelete={() => undefined}
+              onConfirmDelete={() => undefined}
+              onCancelDelete={() => undefined}
+            />
+          )}
+        />
+      )}
       {activeEdit && overlayRect && (
         <div
           ref={overlayRef}
@@ -1637,7 +2678,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
               onDraftChange={(draft) => { draftRef.current = draft }}
               onSubmit={(draft) => {
                 draftRef.current = draft
-                void submitActiveEdit()
+                return submitActiveEdit()
               }}
               onCopyDraft={(draft) => void navigator.clipboard.writeText(draft)}
             />
@@ -1697,6 +2738,8 @@ function estimatePreviewBlockHeight(block: PreviewBlock, fontSize: number, lineH
       const codeLines = block.codeMeta?.lines ?? lines
       return Math.max(40, codeLines * fontSize * 1.25 + 36)
     }
+    case 'echarts':
+      return 392
     case 'table': {
       const rows = block.tableMeta?.rows ?? lines
       return Math.max(48, rows * (baseLinePx + 8) + 32)

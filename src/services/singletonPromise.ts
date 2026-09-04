@@ -188,7 +188,6 @@ export const SINGLETON_IDS = {
   CHAT_AI: 'chat-ai',
   EMBEDDING_AI: 'embedding-ai',
   VECTOR_STORE: 'vector-store',
-  LEGACY_FILE_ACCESS: 'legacy-file-access',
   LEGACY_DATA_DETECTION: 'legacy-data-detection',
   AI_STATUS: 'ai-status',
 } as const
@@ -197,6 +196,5 @@ export const SINGLETON_IDS = {
 singletonManager.register(SINGLETON_IDS.CHAT_AI, 2)
 singletonManager.register(SINGLETON_IDS.EMBEDDING_AI, 2)
 singletonManager.register(SINGLETON_IDS.VECTOR_STORE, 1)
-singletonManager.register(SINGLETON_IDS.LEGACY_FILE_ACCESS, 1)
 singletonManager.register(SINGLETON_IDS.LEGACY_DATA_DETECTION, 1)
 singletonManager.register(SINGLETON_IDS.AI_STATUS, 1)

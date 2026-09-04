@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
+use std::io::Read;
 #[cfg(target_os = "windows")]
 use std::process::Command;
 use std::{
@@ -7,7 +8,7 @@ use std::{
     ffi::OsString,
     fs,
     path::{Component, Path, PathBuf},
-    sync::Mutex,
+    sync::{Condvar, Mutex},
     time::Duration,
 };
 use tauri::{Emitter, Manager, State};
@@ -32,6 +33,7 @@ const ALLOWED_IMAGE_FILE_EXTENSIONS: [&str; 7] =
     ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
 const OPEN_FILES_EVENT: &str = "guanmo:open-files";
 const MAIN_WINDOW_REVEAL_FALLBACK_TIMEOUT: Duration = Duration::from_secs(10);
+const FILE_TOO_LARGE_PREFIX: &str = "FILE_TOO_LARGE|";
 
 fn reveal_main_window<R: tauri::Runtime>(window: &tauri::Window<R>) {
     if let Err(err) = window.show() {
@@ -48,6 +50,7 @@ fn reveal_main_window<R: tauri::Runtime>(window: &tauri::Window<R>) {
 
 #[derive(Default)]
 struct FsAccessState {
+    restore: FileAccessRestoreGate,
     workspaces: Mutex<HashSet<PathBuf>>,
     selected_files: Mutex<HashSet<PathBuf>>,
     markdown_asset_dirs: Mutex<HashSet<PathBuf>>,
@@ -56,6 +59,53 @@ struct FsAccessState {
     legacy_migration: Mutex<()>,
     pending_legacy_workspaces: Mutex<HashSet<PathBuf>>,
     pending_legacy_files: Mutex<HashSet<PathBuf>>,
+}
+
+#[derive(Default)]
+struct FileAccessRestoreGate {
+    completed: Mutex<Option<bool>>,
+    wake: Condvar,
+}
+
+impl FileAccessRestoreGate {
+    fn wait_until_completed(&self) -> bool {
+        let mut completed = self
+            .completed
+            .lock()
+            .expect("file access restore state is poisoned");
+        loop {
+            if let Some(result) = *completed {
+                return result;
+            }
+            completed = self
+                .wake
+                .wait(completed)
+                .expect("file access restore state is poisoned");
+        }
+    }
+
+    fn complete(&self, result: bool) {
+        let mut completed = self
+            .completed
+            .lock()
+            .expect("file access restore state is poisoned");
+        *completed = Some(result);
+        self.wake.notify_all();
+    }
+}
+
+fn report_file_access_failure(stage: &str) {
+    eprintln!("[file-access] {stage} failed");
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileAccessRestoreStatus {
+    restore_succeeded: bool,
+    legacy_migration_completed: bool,
+    workspace_count: usize,
+    selected_file_count: usize,
+    pending_count: usize,
 }
 
 #[derive(Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
@@ -498,6 +548,12 @@ fn register_workspace_internal(
 }
 
 fn register_workspace(app: &tauri::AppHandle, path: PathBuf) -> Result<PathBuf, String> {
+    let state = app.state::<FsAccessState>();
+    state.restore.wait_until_completed();
+    let _migration_guard = state
+        .legacy_migration
+        .lock()
+        .map_err(|_| "legacy migration lock is poisoned".to_string())?;
     register_workspace_internal(app, path, true)
 }
 
@@ -550,6 +606,12 @@ fn register_selected_file_internal(
 }
 
 fn register_selected_file(app: &tauri::AppHandle, path: PathBuf) -> Result<PathBuf, String> {
+    let state = app.state::<FsAccessState>();
+    state.restore.wait_until_completed();
+    let _migration_guard = state
+        .legacy_migration
+        .lock()
+        .map_err(|_| "legacy migration lock is poisoned".to_string())?;
     register_selected_file_internal(app, path, true)
 }
 
@@ -559,7 +621,12 @@ fn restore_persisted_file_access(app: &tauri::AppHandle) -> Result<(), String> {
         .legacy_migration
         .lock()
         .map_err(|_| "legacy migration lock is poisoned".to_string())?;
-    let grants = read_persisted_file_access(&file_access_grants_path(app)?)?;
+    let grants_path = file_access_grants_path(app).inspect_err(|_| {
+        report_file_access_failure("restore.grants-path");
+    })?;
+    let grants = read_persisted_file_access(&grants_path).inspect_err(|_| {
+        report_file_access_failure("restore.grants-read");
+    })?;
     let PersistedFileAccess {
         workspaces,
         selected_files,
@@ -584,7 +651,14 @@ fn restore_persisted_file_access(app: &tauri::AppHandle) -> Result<(), String> {
         .extend(pending_legacy_files);
     for workspace in workspaces {
         if workspace.exists() {
-            let _ = register_workspace_internal(app, workspace, false);
+            if register_workspace_internal(app, workspace.clone(), false).is_err() {
+                report_file_access_failure("restore.workspace-normalize");
+                state
+                    .pending_legacy_workspaces
+                    .lock()
+                    .map_err(|_| "pending legacy workspace state is poisoned".to_string())?
+                    .insert(workspace);
+            }
         } else if ensure_safe_path(&workspace).is_ok() {
             state
                 .pending_legacy_workspaces
@@ -595,7 +669,14 @@ fn restore_persisted_file_access(app: &tauri::AppHandle) -> Result<(), String> {
     }
     for file in selected_files {
         if file.is_file() {
-            let _ = register_selected_file_internal(app, file, false);
+            if register_selected_file_internal(app, file.clone(), false).is_err() {
+                report_file_access_failure("restore.file-normalize");
+                state
+                    .pending_legacy_files
+                    .lock()
+                    .map_err(|_| "pending legacy file state is poisoned".to_string())?
+                    .insert(file);
+            }
         } else if !file.exists()
             && ensure_safe_path(&file).is_ok()
             && ensure_allowed_text_or_image_file_path(&file).is_ok()
@@ -646,14 +727,19 @@ fn retry_pending_legacy_file_access(
             continue;
         }
         let remove_from_pending = match canonical_dir(&path) {
-            Ok(path) => {
-                register_workspace_internal(app, path, false)?;
-                workspace_count += 1;
-                true
-            }
+            Ok(path) => match register_workspace_internal(app, path, false) {
+                Ok(_) => {
+                    workspace_count += 1;
+                    true
+                }
+                Err(_) => {
+                    report_file_access_failure("migration.workspace-register");
+                    false
+                }
+            },
             Err(_) => {
-                ignored_count += 1;
-                true
+                report_file_access_failure("migration.workspace-normalize");
+                false
             }
         };
         if remove_from_pending {
@@ -680,14 +766,19 @@ fn retry_pending_legacy_file_access(
             continue;
         }
         let remove_from_pending = match canonical_existing_file(&path) {
-            Ok(path) => {
-                register_selected_file_internal(app, path, false)?;
-                file_count += 1;
-                true
-            }
+            Ok(path) => match register_selected_file_internal(app, path, false) {
+                Ok(_) => {
+                    file_count += 1;
+                    true
+                }
+                Err(_) => {
+                    report_file_access_failure("migration.file-register");
+                    false
+                }
+            },
             Err(_) => {
-                ignored_count += 1;
-                true
+                report_file_access_failure("migration.file-normalize");
+                false
             }
         };
         if remove_from_pending {
@@ -715,12 +806,44 @@ fn pending_legacy_path_count(state: &FsAccessState) -> Result<usize, String> {
     Ok(workspace_count + file_count)
 }
 
+fn file_access_restore_status(
+    state: &FsAccessState,
+    restore_succeeded: bool,
+) -> Result<FileAccessRestoreStatus, String> {
+    let workspace_count = state
+        .workspaces
+        .lock()
+        .map_err(|_| "workspace access state is poisoned".to_string())?
+        .len();
+    let selected_file_count = state
+        .selected_files
+        .lock()
+        .map_err(|_| "selected file access state is poisoned".to_string())?
+        .len();
+    let legacy_migration_completed = *state
+        .legacy_migration_completed
+        .lock()
+        .map_err(|_| "legacy migration state is poisoned".to_string())?;
+    Ok(FileAccessRestoreStatus {
+        restore_succeeded,
+        legacy_migration_completed,
+        workspace_count,
+        selected_file_count,
+        pending_count: pending_legacy_path_count(state)?,
+    })
+}
+
+fn wait_for_file_access_restore_state(state: &FsAccessState) {
+    state.restore.wait_until_completed();
+}
+
 fn migrate_legacy_file_access_blocking(
     app: tauri::AppHandle,
     workspace_paths: Vec<String>,
     file_paths: Vec<String>,
 ) -> Result<LegacyFileAccessMigrationResult, String> {
     let state = app.state::<FsAccessState>();
+    wait_for_file_access_restore_state(state.inner());
     let _migration_guard = state
         .legacy_migration
         .lock()
@@ -805,6 +928,23 @@ async fn migrate_legacy_file_access(
     })
     .await
     .map_err(|err| format!("file access migration task failed: {err}"))?
+}
+
+#[tauri::command]
+async fn wait_for_file_access_restore(
+    app: tauri::AppHandle,
+) -> Result<FileAccessRestoreStatus, String> {
+    let restore_succeeded = tauri::async_runtime::spawn_blocking({
+        let app = app.clone();
+        move || {
+            let state = app.state::<FsAccessState>();
+            state.restore.wait_until_completed()
+        }
+    })
+    .await
+    .map_err(|err| format!("file access restore wait failed: {err}"))?;
+    let state = app.state::<FsAccessState>();
+    file_access_restore_status(state.inner(), restore_succeeded)
 }
 
 fn secret_file_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -929,30 +1069,81 @@ fn delete_secret(app: tauri::AppHandle, key: String) -> Result<(), String> {
 
 #[tauri::command]
 fn authorize_workspace_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
-    let path = canonical_dir(&PathBuf::from(path))?;
+    let path = canonical_dir(&PathBuf::from(path)).inspect_err(|_| {
+        report_file_access_failure("authorize.workspace-normalize");
+    })?;
     if !app.fs_scope().is_allowed(&path) {
         return Err("workspace was not selected by the user".into());
     }
-    register_workspace(&app, path).map(|_| ())
+    register_workspace(&app, path)
+        .map(|_| ())
+        .inspect_err(|_| report_file_access_failure("authorize.workspace-register"))
 }
 
 #[tauri::command]
 fn authorize_selected_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let path = PathBuf::from(path);
-    ensure_allowed_text_or_image_file_path(&path)?;
-    let normalized = normalized_target_path(&path)?;
+    ensure_allowed_text_or_image_file_path(&path).inspect_err(|_| {
+        report_file_access_failure("authorize.file-validate");
+    })?;
+    let normalized = normalized_target_path(&path).inspect_err(|_| {
+        report_file_access_failure("authorize.file-normalize");
+    })?;
     if !app.fs_scope().is_allowed(&normalized) {
         return Err("file was not selected by the user".into());
     }
-    register_selected_file(&app, normalized).map(|_| ())
+    register_selected_file(&app, normalized)
+        .map(|_| ())
+        .inspect_err(|_| report_file_access_failure("authorize.file-register"))
+}
+
+fn read_bytes_with_limit<R: Read>(mut reader: R, limit: u64) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    reader
+        .by_ref()
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|err| err.to_string())?;
+    if bytes.len() as u64 > limit {
+        return Err(format!("{FILE_TOO_LARGE_PREFIX}{}|{limit}", bytes.len()));
+    }
+    Ok(bytes)
+}
+
+fn read_text_file_with_limit(path: &Path, max_bytes: Option<u64>) -> Result<String, String> {
+    let mut file = fs::File::open(path).map_err(|err| err.to_string())?;
+    let bytes = if let Some(limit) = max_bytes {
+        let actual_bytes = file.metadata().map_err(|err| err.to_string())?.len();
+        if actual_bytes > limit {
+            return Err(format!("{FILE_TOO_LARGE_PREFIX}{actual_bytes}|{limit}"));
+        }
+        read_bytes_with_limit(file, limit)?
+    } else {
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .map_err(|err| err.to_string())?;
+        bytes
+    };
+    String::from_utf8(bytes).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
-fn read_text_file_by_path(app: tauri::AppHandle, path: String) -> Result<String, String> {
+fn read_text_file_by_path(
+    app: tauri::AppHandle,
+    path: String,
+    max_bytes: Option<u64>,
+) -> Result<String, String> {
     let state = app.state::<FsAccessState>();
+    wait_for_file_access_restore_state(state.inner());
     let path =
-        ensure_allowed_existing_text_file(&state, &PathBuf::from(path), FileAction::ReadText)?;
-    fs::read_to_string(path).map_err(|err| err.to_string())
+        ensure_allowed_existing_text_file(&state, &PathBuf::from(path), FileAction::ReadText)
+            .inspect_err(|_| report_file_access_failure("read.text-authorize"))?;
+    read_text_file_with_limit(&path, max_bytes).map_err(|err| {
+        if !err.starts_with(FILE_TOO_LARGE_PREFIX) {
+            report_file_access_failure("read.text");
+        }
+        err.to_string()
+    })
 }
 
 #[tauri::command]
@@ -962,6 +1153,7 @@ fn write_text_file_by_path(
     content: String,
 ) -> Result<(), String> {
     let state = app.state::<FsAccessState>();
+    wait_for_file_access_restore_state(state.inner());
     let path =
         ensure_allowed_target_text_file(&state, &PathBuf::from(path), FileAction::WriteText)?;
     fs::write(path, content).map_err(|err| err.to_string())
@@ -970,9 +1162,14 @@ fn write_text_file_by_path(
 #[tauri::command]
 fn read_binary_file_by_path(app: tauri::AppHandle, path: String) -> Result<Vec<u8>, String> {
     let state = app.state::<FsAccessState>();
+    wait_for_file_access_restore_state(state.inner());
     let path =
-        ensure_allowed_existing_image_file(&state, &PathBuf::from(path), FileAction::ReadBinary)?;
-    fs::read(path).map_err(|err| err.to_string())
+        ensure_allowed_existing_image_file(&state, &PathBuf::from(path), FileAction::ReadBinary)
+            .inspect_err(|_| report_file_access_failure("read.binary-authorize"))?;
+    fs::read(path).map_err(|err| {
+        report_file_access_failure("read.binary");
+        err.to_string()
+    })
 }
 
 #[tauri::command]
@@ -982,6 +1179,7 @@ fn write_binary_file_by_path(
     content: Vec<u8>,
 ) -> Result<(), String> {
     let state = app.state::<FsAccessState>();
+    wait_for_file_access_restore_state(state.inner());
     let path =
         ensure_allowed_target_image_file(&state, &PathBuf::from(path), FileAction::WriteBinary)?;
     fs::write(path, content).map_err(|err| err.to_string())
@@ -990,6 +1188,7 @@ fn write_binary_file_by_path(
 #[tauri::command]
 fn create_text_file_by_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let state = app.state::<FsAccessState>();
+    wait_for_file_access_restore_state(state.inner());
     let path =
         ensure_allowed_target_text_file(&state, &PathBuf::from(path), FileAction::CreateFile)?;
     OpenOptions::new()
@@ -1003,6 +1202,7 @@ fn create_text_file_by_path(app: tauri::AppHandle, path: String) -> Result<(), S
 #[tauri::command]
 fn path_exists(app: tauri::AppHandle, path: String) -> Result<bool, String> {
     let state = app.state::<FsAccessState>();
+    wait_for_file_access_restore_state(state.inner());
     let path = ensure_allowed_target_path(&state, &PathBuf::from(path), FileAction::Exists)?;
     Ok(path.exists())
 }
@@ -1010,6 +1210,11 @@ fn path_exists(app: tauri::AppHandle, path: String) -> Result<bool, String> {
 #[tauri::command]
 fn remove_file_by_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let state = app.state::<FsAccessState>();
+    wait_for_file_access_restore_state(state.inner());
+    let _migration_guard = state
+        .legacy_migration
+        .lock()
+        .map_err(|_| "legacy migration lock is poisoned".to_string())?;
     let path =
         ensure_allowed_existing_supported_file(&state, &PathBuf::from(path), FileAction::Remove)?;
     fs::remove_file(&path).map_err(|err| err.to_string())?;
@@ -1027,6 +1232,11 @@ fn remove_file_by_path(app: tauri::AppHandle, path: String) -> Result<(), String
 #[tauri::command]
 fn create_dir_by_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let state = app.state::<FsAccessState>();
+    wait_for_file_access_restore_state(state.inner());
+    let _migration_guard = state
+        .legacy_migration
+        .lock()
+        .map_err(|_| "legacy migration lock is poisoned".to_string())?;
     let path = PathBuf::from(path);
     let parent = path
         .parent()
@@ -1036,12 +1246,13 @@ fn create_dir_by_path(app: tauri::AppHandle, path: String) -> Result<(), String>
         .ok_or_else(|| "directory name is missing".to_string())?;
     let path = ensure_allowed_dir(&state, parent, FileAction::CreateDir)?.join(dir_name);
     fs::create_dir(&path).map_err(|err| err.to_string())?;
-    register_workspace(&app, path).map(|_| ())
+    register_workspace_internal(&app, path, true).map(|_| ())
 }
 
 #[tauri::command]
 fn prepare_markdown_assets_dir(app: tauri::AppHandle, markdown_path: String) -> Result<(), String> {
     let state = app.state::<FsAccessState>();
+    wait_for_file_access_restore_state(state.inner());
     let markdown_path = ensure_allowed_existing_text_file(
         &state,
         &PathBuf::from(markdown_path),
@@ -1063,10 +1274,45 @@ fn prepare_markdown_assets_dir(app: tauri::AppHandle, markdown_path: String) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        is_authorized_for_action, snapshot_persisted_file_access, FileAction, FsAccessState,
-        PersistedFileAccess,
+        is_authorized_for_action, read_bytes_with_limit, read_text_file_with_limit,
+        snapshot_persisted_file_access, FileAccessRestoreGate, FileAction, FsAccessState,
+        PersistedFileAccess, FILE_TOO_LARGE_PREFIX,
     };
+    use std::io::Cursor;
     use std::path::{Path, PathBuf};
+    use std::sync::{mpsc, Arc};
+    use std::thread;
+
+    #[test]
+    fn bounded_text_read_rejects_over_limit_and_preserves_unbounded_compatibility() {
+        let path = std::env::temp_dir().join(format!(
+            "guanmo-issue-28-{}-{}.md",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, "12345").unwrap();
+
+        assert_eq!(read_text_file_with_limit(&path, Some(5)).unwrap(), "12345");
+        assert_eq!(
+            read_text_file_with_limit(&path, Some(4)).unwrap_err(),
+            format!("{FILE_TOO_LARGE_PREFIX}5|4")
+        );
+        assert_eq!(read_text_file_with_limit(&path, None).unwrap(), "12345");
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn bounded_text_read_rejects_bytes_arriving_after_size_check() {
+        let grown_content = Cursor::new(b"123456".to_vec());
+        assert_eq!(
+            read_bytes_with_limit(grown_content, 5).unwrap_err(),
+            format!("{FILE_TOO_LARGE_PREFIX}6|5")
+        );
+    }
 
     #[test]
     fn rejects_every_file_action_for_unauthorized_paths() {
@@ -1218,6 +1464,33 @@ mod tests {
         assert!(decoded.pending_legacy_workspaces.is_empty());
         assert!(decoded.pending_legacy_files.is_empty());
     }
+
+    #[test]
+    fn file_access_restore_gate_blocks_until_completion() {
+        let gate = Arc::new(FileAccessRestoreGate::default());
+        let waiter_gate = Arc::clone(&gate);
+        let (started_tx, started_rx) = mpsc::channel();
+        let waiter = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            waiter_gate.wait_until_completed()
+        });
+
+        started_rx.recv().unwrap();
+        assert!(!waiter.is_finished());
+
+        gate.complete(true);
+        assert!(waiter.join().unwrap());
+    }
+
+    #[test]
+    fn file_access_restore_gate_releases_failed_restore_without_deadlock() {
+        let gate = Arc::new(FileAccessRestoreGate::default());
+        let waiter_gate = Arc::clone(&gate);
+        let waiter = thread::spawn(move || waiter_gate.wait_until_completed());
+
+        gate.complete(false);
+        assert!(!waiter.join().unwrap());
+    }
 }
 
 #[tauri::command]
@@ -1227,6 +1500,11 @@ fn rename_text_file_by_path(
     new_path: String,
 ) -> Result<(), String> {
     let state = app.state::<FsAccessState>();
+    wait_for_file_access_restore_state(state.inner());
+    let _migration_guard = state
+        .legacy_migration
+        .lock()
+        .map_err(|_| "legacy migration lock is poisoned".to_string())?;
     let old_path = ensure_allowed_existing_text_file(
         &state,
         &PathBuf::from(old_path),
@@ -1259,8 +1537,13 @@ fn rename_text_file_by_path(
 #[tauri::command]
 fn read_dir_by_path(app: tauri::AppHandle, path: String) -> Result<Vec<DirectoryEntry>, String> {
     let state = app.state::<FsAccessState>();
-    let canonical = ensure_allowed_dir(&state, &PathBuf::from(path), FileAction::ReadDir)?;
-    let entries = fs::read_dir(canonical).map_err(|err| err.to_string())?;
+    wait_for_file_access_restore_state(state.inner());
+    let canonical = ensure_allowed_dir(&state, &PathBuf::from(path), FileAction::ReadDir)
+        .inspect_err(|_| report_file_access_failure("read.directory-authorize"))?;
+    let entries = fs::read_dir(canonical).map_err(|err| {
+        report_file_access_failure("read.directory");
+        err.to_string()
+    })?;
     entries
         .map(|entry| {
             let entry = entry.map_err(|err| err.to_string())?;
@@ -1277,6 +1560,7 @@ fn read_dir_by_path(app: tauri::AppHandle, path: String) -> Result<Vec<Directory
 #[tauri::command]
 fn reveal_file_in_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let state = app.state::<FsAccessState>();
+    wait_for_file_access_restore_state(state.inner());
     let path =
         ensure_allowed_existing_supported_file(&state, &PathBuf::from(path), FileAction::Reveal)?;
 
@@ -1442,7 +1726,12 @@ pub fn run() {
             }
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn_blocking(move || {
-                if let Err(err) = restore_persisted_file_access(&app_handle) {
+                let result = restore_persisted_file_access(&app_handle);
+                app_handle
+                    .state::<FsAccessState>()
+                    .restore
+                    .complete(result.is_ok());
+                if let Err(err) = result {
                     eprintln!("failed to restore persisted file access: {err}");
                 }
             });
@@ -1471,6 +1760,7 @@ pub fn run() {
             authorize_workspace_path,
             authorize_selected_path,
             migrate_legacy_file_access,
+            wait_for_file_access_restore,
             prepare_markdown_assets_dir,
             read_text_file_by_path,
             write_text_file_by_path,
@@ -1496,6 +1786,11 @@ pub fn run() {
             database_transactions::confirm_memory_candidate_transaction,
             database_transactions::import_backup_transaction,
             database_transactions::remove_knowledge_document_by_path,
+            database_transactions::upsert_reading_mark,
+            database_transactions::get_reading_mark,
+            database_transactions::load_reading_marks,
+            database_transactions::load_reading_marks_page,
+            database_transactions::delete_reading_mark,
             rag_index::get_rag_index_state,
             rag_index::initialize_rag_index,
             rag_index::cancel_rag_index_initialization,

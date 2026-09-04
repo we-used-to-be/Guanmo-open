@@ -77,25 +77,14 @@ async function hydrateSettingsSecretsOnce(): Promise<void> {
     loadSecret(WEB_SEARCH_API_KEY_SECRET),
     loadSecret(EMBEDDING_API_KEY_SECRET),
   ])
-  const current = useSettingsStore.getState()
-  useSettingsStore.setState({
-    ai: {
-      ...current.ai,
-      ...(apiKey && current.ai.apiKey === initialApiKey ? { apiKey } : {}),
-      embedding: {
-        ...current.ai.embedding,
-        ...(embeddingApiKey && current.ai.embedding.apiKey === initialEmbeddingApiKey
-          ? { apiKey: embeddingApiKey }
-          : {}),
-      },
+  useSettingsStore.getState().hydrateSecrets(
+    { apiKey, embeddingApiKey, webSearchApiKey },
+    {
+      apiKey: initialApiKey,
+      embeddingApiKey: initialEmbeddingApiKey,
+      webSearchApiKey: initialWebSearchApiKey,
     },
-    webSearch: {
-      ...current.webSearch,
-      ...(webSearchApiKey && current.webSearch.apiKey === initialWebSearchApiKey
-        ? { apiKey: webSearchApiKey }
-        : {}),
-    },
-  })
+  )
   updateSearchConfig(useSettingsStore.getState().webSearch)
 }
 

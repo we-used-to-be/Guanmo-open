@@ -4,12 +4,13 @@ import { isWorkspaceDisplayFile } from '@/services/fileTree'
 import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
-import { readRememberedFile } from '@/services/persistedFileAccess'
+import { readRememberedMarkdownFileForOpen } from '@/services/markdownFileOpenPolicy'
 import { toast } from '@/services/toast'
 import { useEditorStore } from '@/stores/editorStore'
 import { RecentFiles } from '@/components/file-tree/FileTree'
 import { WorkspaceRoots } from '@/components/file-tree/WorkspaceRoots'
 import { Button, Collapse } from 'animal-island-ui'
+import { getRuntimeCapabilities } from '@/services/runtimeCapabilities'
 
 interface FullscreenFileDrawerProps {
   open: boolean
@@ -57,15 +58,15 @@ export function FullscreenFileDrawer({
   const openFileByPath = useCallback(async (path: string, fallbackName?: string) => {
     try {
       if (!isWorkspaceDisplayFile(path)) return
-      const content = await readRememberedFile(path)
       const name = fallbackName || path.split(/[/\\]/).pop() || 'untitled.md'
       const state = useEditorStore.getState()
       const existing = state.tabs.find((t) => isSameFilePath(t.filePath, path))
       if (existing) {
         state.setActiveTab(existing.id)
-      } else {
-        state.addTab(path, name, content)
+        return
       }
+      const content = await readRememberedMarkdownFileForOpen(path)
+      state.addTab(path, name, content)
       scheduleMarkdownDocumentIndex(path, name, content)
     } catch (err) {
       if (err instanceof Error && err.message === 'Not running in Tauri') {
@@ -135,12 +136,12 @@ export function FullscreenFileDrawer({
 
         {/* Content */}
         <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2">
-          {!isTauri() ? (
-            <div className="text-caption text-gm-text-tertiary text-center py-4">
-              浏览器模式下本地文件列表不可用
+          {!isTauri() && !getRuntimeCapabilities().browserFileSystem && (
+            <div className="mb-2 rounded-lg border border-gm-border bg-gm-surface-elevated px-2 py-2 text-caption text-gm-text-tertiary">
+              当前浏览器不支持目录工作区；仍可通过“打开文件”选择单个 Markdown 并下载保存。
             </div>
-          ) : (
-            <>
+          )}
+          <>
               <Collapse
                 question="最近文件"
                 defaultExpanded
@@ -173,8 +174,7 @@ export function FullscreenFileDrawer({
                   <WorkspaceRoots onOpenFile={handleOpenFileFromTree} />
                 }
               />
-            </>
-          )}
+          </>
         </div>
       </aside>
     </div>

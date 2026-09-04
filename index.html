@@ -7,13 +7,20 @@
     <script id="guanmo-startup-theme">
       performance.mark('guanmo:startup:html-start');performance.mark('guanmo:startup:frontend-bootstrap');
       (() => {
-        const themeIds = ['warm', 'light', 'dark', 'paper', 'github-light']
+        // 只内嵌启动首屏所需的可序列化 descriptor 子集；完整定义由运行时 registry 提供。
+        const themeBootstrap = {
+          warm: { colorScheme: 'light', startupCanvas: '#f8f4e8' },
+          light: { colorScheme: 'light', startupCanvas: '#ffffff' },
+          dark: { colorScheme: 'dark', startupCanvas: '#15130f' },
+          paper: { colorScheme: 'light', startupCanvas: '#f1eadc' },
+          'github-light': { colorScheme: 'light', startupCanvas: '#f5f7f9' },
+        }
         let themeId = 'warm'
         let hasPersistedTheme = false
         try {
           const persisted = JSON.parse(localStorage.getItem('guanmo-settings') || 'null')
           const appearance = persisted && persisted.state && persisted.state.appearance
-          if (appearance && themeIds.includes(appearance.themeId)) {
+          if (appearance && appearance.themeId && Object.prototype.hasOwnProperty.call(themeBootstrap, appearance.themeId)) {
             themeId = appearance.themeId
             hasPersistedTheme = true
           } else if (appearance && appearance.theme === 'dark') {
@@ -35,9 +42,11 @@
           }
         }
         const root = document.documentElement
+        const bootstrap = themeBootstrap[themeId]
         root.dataset.themeId = themeId
-        root.dataset.theme = themeId === 'dark' ? 'dark' : 'light'
-        root.style.colorScheme = themeId === 'dark' ? 'dark' : 'light'
+        root.dataset.theme = bootstrap.colorScheme
+        root.style.colorScheme = bootstrap.colorScheme
+        root.style.setProperty('--gmss-canvas', bootstrap.startupCanvas)
       })()
     </script>
     <!-- Startup Shell 样式不能内联：Tauri 会给内联 <style> 注入 CSP nonce，

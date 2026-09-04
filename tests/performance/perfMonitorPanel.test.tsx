@@ -11,14 +11,22 @@ vi.mock('@/hooks/usePerfMonitor', () => ({ usePerfMonitor: vi.fn() }))
 
 import { PerfMonitorPanel } from '@/components/devtools/PerfMonitorPanel'
 import type { PerfData } from '@/services/perfTypes'
-import { usePerfStore } from '@/stores/perfStore'
+import { recordPerfSample, usePerfStore } from '@/stores/perfStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 
 describe('PerfMonitorPanel export', () => {
   beforeEach(() => {
     fileApi.saveFileDialog.mockResolvedValue('C:\\Temp\\perf-report.json')
     fileApi.writeFile.mockResolvedValue(undefined)
-    usePerfStore.setState({ isCollapsed: false, baseline: null })
+    usePerfStore.getState().clearHistory()
+    usePerfStore.setState({
+      current: null,
+      isCollapsed: false,
+      baseline: null,
+      testStartedAt: null,
+      testPeaks: {},
+      isPaused: false,
+    })
   })
 
   it('通过系统保存对话框导出 JSON 到授权路径', async () => {
@@ -54,6 +62,25 @@ describe('PerfMonitorPanel export', () => {
     const report = JSON.parse(fileApi.writeFile.mock.calls[0][1] as string)
 
     expect(report.testContext.modePerformancePolicy).toBe('speed')
+  })
+
+  it('性能采样通过 perfStore action 发布当前值和峰值', () => {
+    const sample = {
+      timestamp: 1,
+      appPrivateWorkingSetKb: 10,
+      webviewPrivateWorkingSetKb: 20,
+      rustPrivateWorkingSetKb: 30,
+    } as PerfData
+    usePerfStore.setState({ current: null, isPaused: false, testStartedAt: 1, testPeaks: {} })
+
+    recordPerfSample(sample)
+
+    expect(usePerfStore.getState().current).toBe(sample)
+    expect(usePerfStore.getState().testPeaks).toMatchObject({
+      appPrivateWorkingSetKb: 10,
+      webviewPrivateWorkingSetKb: 20,
+      rustPrivateWorkingSetKb: 30,
+    })
   })
 
   it('重挂面板后仍导出基线并脱敏用户操作', async () => {

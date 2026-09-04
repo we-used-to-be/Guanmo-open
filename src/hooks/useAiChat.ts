@@ -5,25 +5,23 @@ import { selectPrimaryWorkspacePath, useAppStore } from '@/stores/appStore'
 import { getAiClient, getEmbeddingClient, getEmbeddingConfig, initAiClient, initEmbeddingClient, isAiReady, isEmbeddingReady, isLocalApi } from '@/services/ai/aiClient'
 import { SYSTEM_TEMPERATURE, type ChatMessage } from '@/services/ai/types'
 import { initAgent, runAgent } from '@/services/agent'
-import { shouldIncludeFullDocumentContext } from '@/services/agent/intentDetector'
-import { makeRoutingDecision } from '@/services/agent/routingService'
 import type { AgentStep, AgentTaskContext } from '@/services/agent/types'
 import type { SourceReferenceRegistry } from '@/services/ai/sourceReferences'
 import { createAgentTaskContext, decodeAgentStepEvent, decodeKnowledgeSearchOutcome } from '@/services/agent/session'
 import { createActionProposal } from '@/services/agent/actionProposal'
 import type { ContextTag } from '@/types/contextTag'
-import { buildContextFromTags } from '@/services/contextBuilder'
-import { readFile as readTauriFile } from '@/hooks/useTauri'
+import { readRememberedMarkdownFileForOpen } from '@/services/markdownFileOpenPolicy'
 import { setAgentScopeContext } from '@/services/aiScope'
 import { resolveDirectRagSources, searchScopedKnowledge, shouldTriggerScopedRag, streamFinalAnswer } from '@/services/aiChatFlow'
-import { buildAgentFinalAnswerMessages, buildChatMessageTags, buildMessagesForModel, buildSupplementalAiContext, countRagSourcesInContext, createContextMeta, createUserChatMessage, prepareChatHistoryForModel, resolveAiAnswerMode } from '@/services/aiChatMessages'
+import { buildAgentFinalAnswerMessages, buildMessagesForModel, buildSupplementalAiContext, countRagSourcesInContext, createContextMeta, prepareChatHistoryForModel, resolveAiAnswerMode } from '@/services/aiChatMessages'
 import { hideLikelyToolJsonPrefix, stripToolCallJson } from '@/services/agent/toolCallParser'
 import { buildMemoryContext, isPersonalizedRewriteMemoryIntent, processMemoryCandidateExtraction, searchMemories } from '@/services/memory/memoryService'
 import type { ManualCapability } from '@/components/ai/ManualToolToggle'
 import { ensureSettingsSecretsHydrated } from '@/services/settingsSecrets'
 import { singletonManager, SINGLETON_IDS } from '@/services/singletonPromise'
 import { promoteTask } from '@/services/idleScheduler'
-import { buildAgentRunRequest, buildRoutingAppContext } from '@/services/agent/requestBuilder'
+import { prepareConversationContext, prepareConversationRouting } from '@/services/agent/conversationRequest'
+import { buildAgentRunRequest } from '@/services/agent/requestBuilder'
 import {
   buildScopedAgentResultPresentation,
   resolveAgentAnswerSources,
@@ -227,18 +225,11 @@ export function useAiChat() {
         setStreaming(false)
       }
 
-      // 构建 contextTags 的上下文文本
-      let tagContext = ''
-      if (hasTags) {
-        tagContext = await buildContextFromTags({
-          tags: contextTags || [],
-          readFile: readTauriFile,
-          maxChars: shouldIncludeFullDocumentContext(content) ? 30000 : 8000,
-        })
-      }
-
-      const tagMetadata = buildChatMessageTags(contextTags || [])
-      const userMsg = createUserChatMessage(content, tagContext, tagMetadata)
+      const { tagContext, tagMetadata, userMessage: userMsg } = await prepareConversationContext({
+        content,
+        contextTags,
+        readFile: readRememberedMarkdownFileForOpen,
+      })
       if (!isCurrentRequest()) return
       addMessage(userMsg)
       addMessage({
@@ -262,21 +253,19 @@ export function useAiChat() {
       updateRequestMessage('正在初始化模型连接...')
 
       // Agent 自动切换：统一路由决策
-      const tagCount = contextTags?.length || 0
       const latestVisibleAssistant = [...messages].reverse().find(
         (msg) => msg.role === 'assistant' && !msg.hidden && !msg.sessionId
       )
       const hasRecentEditContext = Boolean(latestVisibleAssistant?.editConfirmation)
 
-      const appContext = buildRoutingAppContext(contextTags, hasRecentEditContext)
-
       // 统一路由决策（一次性生成，消除 useAiChat 与 executor 的重复判断）
-      const routingDecision = makeRoutingDecision(content.trim(), appContext, {
+      const routingDecision = prepareConversationRouting({
+        content,
+        contextTags,
         forceAgent,
         manualCapabilities,
         agentTaskContext,
         hasRecentEditContext,
-        contextTagCount: tagCount,
         messages,
       })
 
@@ -443,11 +432,7 @@ export function useAiChat() {
                 id: `action-${Date.now()}-${pendingActionCount}`,
                 messageId: targetMessageId,
               })
-              useChatStore.setState((state) => ({
-                messages: state.messages.map((message) => message.id === targetMessageId
-                  ? { ...message, actionProposal: proposal }
-                  : message),
-              }))
+              useChatStore.getState().updateMessageActionProposal(targetMessageId, proposal)
             }
           }
         }

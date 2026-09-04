@@ -13,15 +13,15 @@ import {
   type ReadingArtifactReference,
   type SourceAnchorStatus,
   buildReadingArtifactReferences,
-  persistReadingArtifact,
-  loadReadingArtifactById,
-  loadReadingArtifactsPage,
-  deleteReadingArtifact,
-  checkReadingArtifactSource,
   mergeReadingArtifactQuestionMetadata,
   mergeReadingArtifactReferencesMetadata,
-} from '@/services/database/readingArtifacts'
-import { loadDocumentContentHashByPath } from '@/services/database/persistence'
+  checkReadingArtifactSourceCommand,
+  deleteReadingArtifactCommand,
+  loadReadingArtifactByIdCommand,
+  loadReadingArtifactsPageCommand,
+  loadReadingArtifactSourceContentHash,
+  persistReadingArtifactCommand,
+} from '@/services/agent/artifactCommands'
 
 export type ReadingArtifactFilter = ReadingArtifactType | 'all'
 
@@ -29,6 +29,9 @@ export const READING_ARTIFACT_PAGE_SIZE = 20
 
 interface ReadingArtifactsState {
   artifacts: ReadingArtifact[]
+  allArtifacts: ReadingArtifact[]
+  allLoaded: boolean
+  allLoading: boolean
   filter: ReadingArtifactFilter
   query: string
   page: number
@@ -38,8 +41,10 @@ interface ReadingArtifactsState {
   selectedId: string | null
   /** 已校验的来源锚点状态缓存：artifactId -> status */
   anchorStatuses: Record<string, SourceAnchorStatus>
+  dataRevision: number
 
   loadArtifacts: () => Promise<void>
+  loadAllArtifacts: () => Promise<void>
   setFilter: (filter: ReadingArtifactFilter) => void
   setQuery: (query: string) => void
   setPage: (page: number) => void
@@ -86,7 +91,7 @@ function buildAnchorFromReferences(
   }
   return {
     source,
-    contentHashPromise: loadDocumentContentHashByPath(localSource.filePath),
+    contentHashPromise: loadReadingArtifactSourceContentHash(localSource.filePath),
   }
 }
 
@@ -102,9 +107,25 @@ function normalizePage(value: number): number {
 }
 
 let loadRequestSequence = 0
+let loadAllRequestSequence = 0
+
+function replaceArtifact(list: ReadingArtifact[], artifact: ReadingArtifact): ReadingArtifact[] {
+  const index = list.findIndex((item) => item.id === artifact.id)
+  if (index < 0) return [...list, artifact]
+  const next = list.slice()
+  next[index] = artifact
+  return next
+}
+
+function refreshInterruptedAllCache(get: () => ReadingArtifactsState, interrupted: boolean): void {
+  if (interrupted && !get().allLoading) void get().loadAllArtifacts()
+}
 
 export const useReadingArtifactsStore = create<ReadingArtifactsState>((set, get) => ({
   artifacts: [],
+  allArtifacts: [],
+  allLoaded: false,
+  allLoading: false,
   filter: 'all',
   query: '',
   page: 1,
@@ -113,13 +134,14 @@ export const useReadingArtifactsStore = create<ReadingArtifactsState>((set, get)
   loading: false,
   selectedId: null,
   anchorStatuses: {},
+  dataRevision: 0,
 
   loadArtifacts: async () => {
     const requestId = ++loadRequestSequence
     const { filter, query, page, pageSize } = get()
     set({ loading: true })
     try {
-      const result = await loadReadingArtifactsPage({
+      const result = await loadReadingArtifactsPageCommand({
         type: filter === 'all' ? undefined : filter,
         status: 'active',
         query,
@@ -140,6 +162,28 @@ export const useReadingArtifactsStore = create<ReadingArtifactsState>((set, get)
     }
   },
 
+  loadAllArtifacts: async () => {
+    const requestId = ++loadAllRequestSequence
+    set({ allLoading: true })
+    try {
+      const artifacts: ReadingArtifact[] = []
+      const pageSize = 100
+      for (let offset = 0; ; offset += pageSize) {
+        const result = await loadReadingArtifactsPageCommand({
+          status: 'active',
+          limit: pageSize,
+          offset,
+        })
+        artifacts.push(...result.artifacts)
+        if (artifacts.length >= result.total || result.artifacts.length < pageSize) break
+      }
+      if (requestId !== loadAllRequestSequence) return
+      set({ allArtifacts: artifacts, allLoaded: true, allLoading: false })
+    } catch {
+      if (requestId === loadAllRequestSequence) set({ allLoading: false })
+    }
+  },
+
   setFilter: (filter) => set({ filter, page: 1 }),
 
   setQuery: (query) => set({ query, page: 1 }),
@@ -149,14 +193,20 @@ export const useReadingArtifactsStore = create<ReadingArtifactsState>((set, get)
   setSelected: (id) => set({ selectedId: id }),
 
   deleteArtifact: async (id) => {
-    await deleteReadingArtifact(id)
+    await deleteReadingArtifactCommand(id)
+    const interruptedAllLoad = get().allLoading
+    if (interruptedAllLoad) loadAllRequestSequence += 1
     set((state) => ({
+      allArtifacts: state.allArtifacts.filter((artifact) => artifact.id !== id),
+      allLoading: false,
       selectedId: state.selectedId === id ? null : state.selectedId,
       anchorStatuses: Object.fromEntries(
         Object.entries(state.anchorStatuses).filter(([key]) => key !== id),
       ),
+      dataRevision: state.dataRevision + 1,
     }))
     await get().loadArtifacts()
+    refreshInterruptedAllCache(get, interruptedAllLoad)
   },
 
   saveArtifactFromMessage: async (input) => {
@@ -170,7 +220,7 @@ export const useReadingArtifactsStore = create<ReadingArtifactsState>((set, get)
     const contentHash = await contentHashPromise.catch(() => undefined)
     if (source && contentHash) source.contentHash = contentHash
     const id = generateArtifactId()
-    await persistReadingArtifact({
+    await persistReadingArtifactCommand({
       id,
       type: input.type,
       title: input.title,
@@ -181,8 +231,16 @@ export const useReadingArtifactsStore = create<ReadingArtifactsState>((set, get)
       ),
       source,
     })
-    const saved = await loadReadingArtifactById(id)
+    const saved = await loadReadingArtifactByIdCommand(id)
+    const interruptedAllLoad = get().allLoading
+    if (interruptedAllLoad) loadAllRequestSequence += 1
+    set((state) => ({
+      ...(saved ? { allArtifacts: replaceArtifact(state.allArtifacts, saved) } : {}),
+      allLoading: false,
+      dataRevision: state.dataRevision + 1,
+    }))
     await get().loadArtifacts()
+    refreshInterruptedAllCache(get, interruptedAllLoad)
     return saved
   },
 
@@ -193,10 +251,7 @@ export const useReadingArtifactsStore = create<ReadingArtifactsState>((set, get)
       }))
       return
     }
-    const status = await checkReadingArtifactSource(
-      artifact.source,
-      loadDocumentContentHashByPath,
-    )
+    const status = await checkReadingArtifactSourceCommand(artifact.source)
     set((state) => ({
       anchorStatuses: { ...state.anchorStatuses, [artifact.id]: status.status },
     }))

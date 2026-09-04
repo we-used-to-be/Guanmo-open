@@ -9,7 +9,7 @@ import type { ContextTag } from '@/types/contextTag'
 import type { ChatMessage, ChatMessageTag } from '@/services/ai/types'
 import { searchMemories, buildMemoryContext } from '@/services/memory/memoryService'
 import { loadAllMemories, listEmbeddingJobs } from '@/services/database/persistence'
-import { readFile } from '@/hooks/useTauri'
+import { readRememberedMarkdownFileForOpen } from '@/services/markdownFileOpenPolicy'
 import type { TextRange } from './editTarget'
 import { normalizeFilePath } from '@/services/pathIdentity'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -356,7 +356,7 @@ export function registerBuiltinTools() {
         ) || initialRange
       } else {
         try {
-          content = await readFile(tag.filePath)
+          content = await readRememberedMarkdownFileForOpen(tag.filePath)
         } catch (readErr) {
           const message = readErr instanceof Error ? readErr.message : String(readErr)
           return `读取选区上下文失败：${message}`
@@ -446,7 +446,7 @@ export function registerBuiltinTools() {
       }
 
       try {
-        const content = await readFile(path)
+        const content = await readRememberedMarkdownFileForOpen(path)
         const returnedContent = content.slice(0, maxLength)
         const truncated = content.length > maxLength
         return JSON.stringify({

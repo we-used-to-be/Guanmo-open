@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   removeWorkspace: vi.fn(),
   refreshWorkspaceRoot: vi.fn(),
   pickDirectory: vi.fn(),
-  indexWorkspaceMarkdown: vi.fn(),
+  indexWorkspaceDocuments: vi.fn(),
 }))
 
 vi.mock('@/hooks/useWorkspaceFileTree', () => ({
@@ -28,7 +28,7 @@ vi.mock('@/hooks/useWorkspaceFileTree', () => ({
 }))
 vi.mock('@/hooks/useTauri', () => ({ isTauri: () => true }))
 vi.mock('@/services/fileSystem', () => ({ pickDirectory: mocks.pickDirectory }))
-vi.mock('@/services/rag/indexer', () => ({ indexWorkspaceMarkdown: mocks.indexWorkspaceMarkdown }))
+vi.mock('@/services/workspaceIndex', () => ({ indexWorkspaceDocuments: mocks.indexWorkspaceDocuments }))
 vi.mock('@/services/toast', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 vi.mock('@/components/file-tree/FileTree', () => ({
   FileTree: ({ workspacePath }: { workspacePath: string }) => <div data-testid={`tree-${workspacePath}`} />,
@@ -40,7 +40,7 @@ describe('WorkspaceRoots', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.addWorkspaceRoot.mockReturnValue(true)
-    mocks.indexWorkspaceMarkdown.mockResolvedValue({ indexed: 1, skipped: 0, failed: 0, errors: [] })
+    mocks.indexWorkspaceDocuments.mockResolvedValue({ indexed: 1, skipped: 0, failed: 0, errors: [] })
   })
 
   it('renders three roots and collapses them independently', () => {
@@ -68,7 +68,7 @@ describe('WorkspaceRoots', () => {
     render(<WorkspaceRoots onOpenFile={vi.fn()} />)
 
     fireEvent.click(screen.getAllByRole('button', { name: '索引' })[1])
-    await waitFor(() => expect(mocks.indexWorkspaceMarkdown).toHaveBeenCalledWith('E:/Study'))
+    await waitFor(() => expect(mocks.indexWorkspaceDocuments).toHaveBeenCalledWith('E:/Study'))
     expect(screen.queryByRole('button', { name: '清理失效索引' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '重建索引' })).not.toBeInTheDocument()
 

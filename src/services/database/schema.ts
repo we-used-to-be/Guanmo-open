@@ -162,6 +162,28 @@ CREATE TABLE IF NOT EXISTS reading_reminders (
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
+-- Stable source-anchored reading marks. DOM ranges are never persisted.
+CREATE TABLE IF NOT EXISTS reading_marks (
+  id TEXT PRIMARY KEY,
+  document_id TEXT NOT NULL,
+  document_path TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('highlight', 'annotation')),
+  start_block_id TEXT NOT NULL,
+  start_block_offset INTEGER NOT NULL,
+  end_block_id TEXT NOT NULL,
+  end_block_offset INTEGER NOT NULL,
+  start_offset INTEGER NOT NULL,
+  end_offset INTEGER NOT NULL,
+  quote TEXT NOT NULL,
+  context_before TEXT NOT NULL DEFAULT '',
+  context_after TEXT NOT NULL DEFAULT '',
+  color TEXT NOT NULL CHECK (color IN ('yellow', 'green', 'blue', 'pink')),
+  note TEXT,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  CHECK (start_offset >= 0 AND end_offset > start_offset)
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON chunks(document_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_content_hash ON chunks(content_hash);
@@ -175,6 +197,7 @@ CREATE INDEX IF NOT EXISTS idx_reading_artifacts_status ON reading_artifacts(sta
 CREATE INDEX IF NOT EXISTS idx_reading_artifacts_source ON reading_artifacts(source_file_path);
 CREATE INDEX IF NOT EXISTS idx_reading_reminders_status ON reading_reminders(status);
 CREATE INDEX IF NOT EXISTS idx_reading_reminders_due_at ON reading_reminders(due_at_utc);
+CREATE INDEX IF NOT EXISTS idx_reading_marks_document_id ON reading_marks(document_id);
 `
 
 export const DB_MIGRATIONS = [
@@ -268,7 +291,7 @@ export const DB_MIGRATIONS = [
   },
 ] as const
 
-export const CURRENT_DB_SCHEMA_VERSION = 1
+export const CURRENT_DB_SCHEMA_VERSION = 2
 
 export const DB_LEGACY_BACKFILL_STATEMENTS = [
   `WITH ordered_messages AS (

@@ -7,7 +7,6 @@
 
 import {
   isTauri,
-  readFile,
   writeFile,
   openFileDialog,
   saveFileDialog,
@@ -21,6 +20,20 @@ import {
 import { isWorkspaceDisplayFile } from '@/services/fileTree'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { eventMarker } from '@/services/eventMarker'
+import { readMarkdownFileForOpen } from '@/services/markdownFileOpenPolicy'
+import {
+  browserFileExists,
+  createBrowserFile,
+  createBrowserFolder,
+  listBrowserDirectory,
+  openBrowserFile,
+  pickBrowserDirectory,
+  removeBrowserEntry,
+  renameBrowserFile,
+  saveBrowserFileAs,
+  supportsBrowserFileSystem,
+  writeBrowserFile,
+} from '@/services/browserFileSystem'
 
 export interface FileHandle {
   path: string
@@ -41,35 +54,18 @@ export async function openFile(): Promise<FileHandle | null> {
       eventMarker.mark('open-file-complete', { rejected: true })
       return null
     }
-    const content = await readFile(path)
+    const content = await readMarkdownFileForOpen(path)
     const name = path.split(/[/\\]/).pop() || 'untitled.md'
     eventMarker.mark('open-file-read-complete', { fileKind: 'disk', charCount: content.length })
     eventMarker.mark('open-file-complete', { fileKind: 'disk' })
     return { path, name, content }
   }
 
-  // Web fallback: use input element
-  return new Promise((resolve) => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = '.md'
-    input.onchange = async () => {
-      const file = input.files?.[0]
-      if (!file) {
-        resolve(null)
-        return
-      }
-      if (!isWorkspaceDisplayFile(file.name)) {
-        resolve(null)
-        return
-      }
-      const content = await file.text()
-      eventMarker.mark('open-file-read-complete', { fileKind: 'browser', charCount: content.length })
-      eventMarker.mark('open-file-complete', { fileKind: 'browser' })
-      resolve({ path: file.name, name: file.name, content })
-    }
-    input.click()
-  })
+  const result = await openBrowserFile()
+  if (!result) return null
+  eventMarker.mark('open-file-read-complete', { fileKind: 'browser', charCount: result.content.length })
+  eventMarker.mark('open-file-complete', { fileKind: 'browser' })
+  return result
 }
 
 export async function saveFile(path: string, content: string): Promise<void> {
@@ -78,12 +74,22 @@ export async function saveFile(path: string, content: string): Promise<void> {
     return
   }
 
+  if (supportsBrowserFileSystem()) {
+    try {
+      await writeBrowserFile(path, content)
+      return
+    } catch {
+      // Permission may have been revoked; use the safe download fallback.
+    }
+  }
+
   // Web fallback: trigger download
   const blob = new Blob([content], { type: 'text/markdown' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = path || 'untitled.md'
+  const fallbackName = decodeURIComponent(path.split('/').pop() || '')
+  a.download = fallbackName || 'untitled.md'
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -100,6 +106,9 @@ export async function saveFileAs(content: string): Promise<FileHandle | null> {
     return { path, name, content }
   }
 
+  const picked = await saveBrowserFileAs(content, 'untitled.md')
+  if (picked) return picked
+
   // Web fallback
   const name = prompt('文件名:', 'untitled.md')
   if (!name) return null
@@ -114,25 +123,29 @@ export async function listDirectory(dirPath: string): Promise<DirEntry[]> {
   if (isTauri()) {
     return readDir(dirPath)
   }
-  throw new Error('目录浏览仅在桌面模式下可用')
+  if (!supportsBrowserFileSystem()) throw new Error('当前浏览器不支持目录浏览')
+  return listBrowserDirectory(dirPath)
 }
 
 export async function pickDirectory(): Promise<string | null> {
   if (isTauri()) {
     return openDirectoryDialog()
   }
-  return null
+  if (!supportsBrowserFileSystem()) return null
+  return (await pickBrowserDirectory())?.path ?? null
 }
 
 /**
  * 在指定目录下创建新文件
  */
 export async function createFile(dirPath: string, fileName: string): Promise<string> {
-  if (!isTauri()) {
-    throw new Error('浏览器模式下无法创建文件，请下载桌面版')
-  }
   if (!isWorkspaceDisplayFile(fileName)) {
     throw new Error('仅支持创建 .md 文件')
+  }
+  if (!isTauri()) {
+    if (!supportsBrowserFileSystem()) throw new Error('当前浏览器不支持创建文件')
+    if (await browserFileExists(`${dirPath}/${fileName}`)) throw new Error('同一文件夹下已存在同名文件或文件夹')
+    return createBrowserFile(dirPath, fileName)
   }
   const { join } = await import('@tauri-apps/api/path')
   const fullPath = await join(dirPath, fileName)
@@ -152,7 +165,9 @@ export async function createFile(dirPath: string, fileName: string): Promise<str
  */
 export async function createFolder(dirPath: string, folderName: string): Promise<string> {
   if (!isTauri()) {
-    throw new Error('浏览器模式下无法创建文件夹，请下载桌面版')
+    if (!supportsBrowserFileSystem()) throw new Error('当前浏览器不支持创建文件夹')
+    if (await browserFileExists(`${dirPath}/${folderName}`)) throw new Error('同一文件夹下已存在同名文件或文件夹')
+    return createBrowserFolder(dirPath, folderName)
   }
   const { join } = await import('@tauri-apps/api/path')
   const fullPath = await join(dirPath, folderName)
@@ -165,4 +180,30 @@ export async function createFolder(dirPath: string, folderName: string): Promise
     throw new Error(describeFileOperationError(err, '创建文件夹失败'))
   }
   return fullPath
+}
+
+export async function fileExistsEntry(path: string): Promise<boolean> {
+  if (isTauri()) return fileExists(path)
+  return supportsBrowserFileSystem() ? browserFileExists(path) : false
+}
+
+export async function removeFileEntry(path: string): Promise<void> {
+  if (isTauri()) {
+    const { removeFile } = await import('@/hooks/useTauri')
+    await removeFile(path)
+    return
+  }
+  if (!supportsBrowserFileSystem()) throw new Error('当前浏览器不支持删除文件')
+  await removeBrowserEntry(path)
+}
+
+export async function renameFileEntryInFileSystem(path: string, nextName: string): Promise<string> {
+  if (isTauri()) {
+    const { basenamePath, dirnamePath, joinPath, renameFile } = await import('@/hooks/useTauri')
+    if (await basenamePath(path) === nextName) return path
+    const nextPath = await joinPath(await dirnamePath(path), nextName)
+    await renameFile(path, nextPath)
+    return nextPath
+  }
+  return renameBrowserFile(path, nextName)
 }

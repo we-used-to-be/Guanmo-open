@@ -55,6 +55,43 @@ pub struct BackupPayloadInput {
     artifacts: Vec<ReadingArtifactInput>,
     #[serde(default, rename = "readingReminders")]
     reading_reminders: Vec<ReadingReminderInput>,
+    #[serde(default, rename = "readingMarks")]
+    reading_marks: Vec<ReadingMarkInput>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadingMarkInput {
+    id: String,
+    document_id: String,
+    document_path: String,
+    #[serde(rename = "type")]
+    mark_type: String,
+    anchor: ReadingMarkAnchorInput,
+    color: String,
+    note: Option<String>,
+    created_at: i64,
+    updated_at: i64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadingMarkAnchorInput {
+    range: ReadingMarkRangeInput,
+    start_offset: i64,
+    end_offset: i64,
+    quote: String,
+    context_before: String,
+    context_after: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadingMarkRangeInput {
+    start_block_id: String,
+    start_offset: i64,
+    end_block_id: String,
+    end_offset: i64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -157,6 +194,8 @@ pub struct BackupImportSummary {
     artifacts: usize,
     #[serde(default, rename = "readingReminders")]
     reading_reminders: usize,
+    #[serde(default, rename = "readingMarks")]
+    reading_marks: usize,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -401,6 +440,227 @@ pub async fn confirm_memory_candidate_transaction(
     run_confirm_memory_candidate(&pool, &id).await
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadingMarkOutput {
+    id: String,
+    document_id: String,
+    document_path: String,
+    #[serde(rename = "type")]
+    mark_type: String,
+    anchor: ReadingMarkAnchorOutput,
+    color: String,
+    note: Option<String>,
+    created_at: i64,
+    updated_at: i64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadingMarkAnchorOutput {
+    range: ReadingMarkRangeOutput,
+    start_offset: i64,
+    end_offset: i64,
+    quote: String,
+    context_before: String,
+    context_after: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadingMarkRangeOutput {
+    start_block_id: String,
+    start_offset: i64,
+    end_block_id: String,
+    end_offset: i64,
+}
+
+fn validate_reading_mark(mark: &ReadingMarkInput) -> Result<(), String> {
+    if mark.id.trim().is_empty()
+        || mark.document_id.trim().is_empty()
+        || mark.document_path.trim().is_empty()
+    {
+        return Err("批注身份和文档路径不能为空".into());
+    }
+    if !matches!(mark.mark_type.as_str(), "highlight" | "annotation") {
+        return Err("不支持的批注类型".into());
+    }
+    if !matches!(mark.color.as_str(), "yellow" | "green" | "blue" | "pink") {
+        return Err("不支持的批注颜色".into());
+    }
+    if mark.anchor.quote.is_empty()
+        || mark.anchor.start_offset < 0
+        || mark.anchor.end_offset <= mark.anchor.start_offset
+    {
+        return Err("批注锚点 offset 不合法".into());
+    }
+    if mark.anchor.range.start_offset < 0 || mark.anchor.range.end_offset < 0 {
+        return Err("批注块内 offset 不合法".into());
+    }
+    Ok(())
+}
+
+async fn read_reading_mark(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<Option<ReadingMarkOutput>, String> {
+    let row = sqlx::query("SELECT * FROM reading_marks WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(row.map(|row| ReadingMarkOutput {
+        id: row.get("id"),
+        document_id: row.get("document_id"),
+        document_path: row.get("document_path"),
+        mark_type: row.get("type"),
+        anchor: ReadingMarkAnchorOutput {
+            range: ReadingMarkRangeOutput {
+                start_block_id: row.get("start_block_id"),
+                start_offset: row.get("start_block_offset"),
+                end_block_id: row.get("end_block_id"),
+                end_offset: row.get("end_block_offset"),
+            },
+            start_offset: row.get("start_offset"),
+            end_offset: row.get("end_offset"),
+            quote: row.get("quote"),
+            context_before: row.get("context_before"),
+            context_after: row.get("context_after"),
+        },
+        color: row.get("color"),
+        note: row.get("note"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }))
+}
+
+async fn upsert_reading_mark_row(
+    pool: &SqlitePool,
+    mark: ReadingMarkInput,
+) -> Result<ReadingMarkOutput, String> {
+    validate_reading_mark(&mark)?;
+    sqlx::query(
+        "INSERT INTO reading_marks (id, document_id, document_path, type, start_block_id, start_block_offset, end_block_id, end_block_offset, start_offset, end_offset, quote, context_before, context_after, color, note, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch() * 1000) \
+         ON CONFLICT(id) DO UPDATE SET document_id = excluded.document_id, document_path = excluded.document_path, type = excluded.type, \
+         start_block_id = excluded.start_block_id, start_block_offset = excluded.start_block_offset, end_block_id = excluded.end_block_id, end_block_offset = excluded.end_block_offset, \
+         start_offset = excluded.start_offset, end_offset = excluded.end_offset, quote = excluded.quote, context_before = excluded.context_before, context_after = excluded.context_after, color = excluded.color, note = excluded.note, updated_at = unixepoch() * 1000",
+    )
+    .bind(&mark.id)
+    .bind(&mark.document_id)
+    .bind(&mark.document_path)
+    .bind(&mark.mark_type)
+    .bind(&mark.anchor.range.start_block_id)
+    .bind(mark.anchor.range.start_offset)
+    .bind(&mark.anchor.range.end_block_id)
+    .bind(mark.anchor.range.end_offset)
+    .bind(mark.anchor.start_offset)
+    .bind(mark.anchor.end_offset)
+    .bind(&mark.anchor.quote)
+    .bind(&mark.anchor.context_before)
+    .bind(&mark.anchor.context_after)
+    .bind(&mark.color)
+    .bind(&mark.note)
+    .bind(mark.created_at)
+    .execute(pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    read_reading_mark(pool, &mark.id)
+        .await?
+        .ok_or_else(|| "批注写入后无法读取".into())
+}
+
+#[tauri::command]
+pub async fn upsert_reading_mark(
+    app: AppHandle,
+    mark: ReadingMarkInput,
+) -> Result<ReadingMarkOutput, String> {
+    let pool = open_write_pool(database_path(&app)?).await?;
+    upsert_reading_mark_row(&pool, mark).await
+}
+
+#[tauri::command]
+pub async fn get_reading_mark(app: AppHandle, id: String) -> Result<ReadingMarkOutput, String> {
+    let pool = open_write_pool(database_path(&app)?).await?;
+    read_reading_mark(&pool, &id)
+        .await?
+        .ok_or_else(|| "找不到批注".into())
+}
+
+#[tauri::command]
+pub async fn load_reading_marks(
+    app: AppHandle,
+    document_id: String,
+) -> Result<Vec<ReadingMarkOutput>, String> {
+    if document_id.trim().is_empty() {
+        return Err("文档身份不能为空".into());
+    }
+    let pool = open_write_pool(database_path(&app)?).await?;
+    let rows =
+        sqlx::query("SELECT id FROM reading_marks WHERE document_id = ? ORDER BY created_at ASC")
+            .bind(document_id)
+            .fetch_all(&pool)
+            .await
+            .map_err(|error| error.to_string())?;
+    let mut marks = Vec::with_capacity(rows.len());
+    for row in rows {
+        let id: String = row.get("id");
+        if let Some(mark) = read_reading_mark(&pool, &id).await? {
+            marks.push(mark);
+        }
+    }
+    Ok(marks)
+}
+
+async fn load_reading_marks_page_rows(
+    pool: &SqlitePool,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<ReadingMarkOutput>, String> {
+    let safe_limit = limit.clamp(1, 500);
+    let safe_offset = offset.max(0);
+    let rows = sqlx::query(
+        "SELECT id FROM reading_marks ORDER BY created_at ASC, id ASC LIMIT ? OFFSET ?",
+    )
+    .bind(safe_limit)
+    .bind(safe_offset)
+    .fetch_all(pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    let mut marks = Vec::with_capacity(rows.len());
+    for row in rows {
+        let id: String = row.get("id");
+        if let Some(mark) = read_reading_mark(pool, &id).await? {
+            marks.push(mark);
+        }
+    }
+    Ok(marks)
+}
+
+#[tauri::command]
+pub async fn load_reading_marks_page(
+    app: AppHandle,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<ReadingMarkOutput>, String> {
+    let pool = open_write_pool(database_path(&app)?).await?;
+    load_reading_marks_page_rows(&pool, limit, offset).await
+}
+
+#[tauri::command]
+pub async fn delete_reading_mark(app: AppHandle, id: String) -> Result<(), String> {
+    if id.trim().is_empty() {
+        return Err("批注 ID 不能为空".into());
+    }
+    let pool = open_write_pool(database_path(&app)?).await?;
+    sqlx::query("DELETE FROM reading_marks WHERE id = ?")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 async fn import_backup_rows(
     transaction: &mut Transaction<'_, Sqlite>,
     payload: BackupPayloadInput,
@@ -409,6 +669,7 @@ async fn import_backup_rows(
     let memory_count = payload.memories.len();
     let artifact_count = payload.artifacts.len();
     let reading_reminder_count = payload.reading_reminders.len();
+    let reading_mark_count = payload.reading_marks.len();
     let mut message_count = 0;
     for item in payload.sessions {
         sqlx::query(
@@ -538,12 +799,39 @@ async fn import_backup_rows(
         .await?;
     }
 
+    for mark in &payload.reading_marks {
+        validate_reading_mark(mark).map_err(sqlx::Error::Protocol)?;
+        sqlx::query(
+            "INSERT OR REPLACE INTO reading_marks (id, document_id, document_path, type, start_block_id, start_block_offset, end_block_id, end_block_offset, start_offset, end_offset, quote, context_before, context_after, color, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&mark.id)
+        .bind(&mark.document_id)
+        .bind(&mark.document_path)
+        .bind(&mark.mark_type)
+        .bind(&mark.anchor.range.start_block_id)
+        .bind(mark.anchor.range.start_offset)
+        .bind(&mark.anchor.range.end_block_id)
+        .bind(mark.anchor.range.end_offset)
+        .bind(mark.anchor.start_offset)
+        .bind(mark.anchor.end_offset)
+        .bind(&mark.anchor.quote)
+        .bind(&mark.anchor.context_before)
+        .bind(&mark.anchor.context_after)
+        .bind(&mark.color)
+        .bind(&mark.note)
+        .bind(mark.created_at)
+        .bind(mark.updated_at)
+        .execute(&mut **transaction)
+        .await?;
+    }
+
     Ok(BackupImportSummary {
         sessions: session_count,
         messages: message_count,
         memories: memory_count,
         artifacts: artifact_count,
         reading_reminders: reading_reminder_count,
+        reading_marks: reading_mark_count,
     })
 }
 
@@ -660,6 +948,7 @@ mod tests {
             "CREATE TABLE memories (id TEXT PRIMARY KEY, content TEXT NOT NULL, category TEXT NOT NULL, source TEXT NOT NULL, locked INTEGER NOT NULL, status TEXT NOT NULL, scope_type TEXT NOT NULL, scope_key TEXT, subject TEXT, fact_key TEXT, fact_value TEXT, confidence REAL NOT NULL, evidence TEXT, supersedes_id TEXT, embedding TEXT, embedding_model TEXT, content_hash TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
             "CREATE TABLE reading_artifacts (id TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL, structured_content TEXT, source_file_path TEXT, source_file_name TEXT, source_content_hash TEXT, source_heading_path TEXT, source_start_line INTEGER, source_end_line INTEGER, source_quote TEXT, source_message_id TEXT, source_scope TEXT, status TEXT NOT NULL DEFAULT 'active', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
             "CREATE TABLE reading_reminders (id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT, due_at_utc INTEGER NOT NULL, created_timezone TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', source_artifact_id TEXT, source_file_path TEXT, source_message_id TEXT, notification_id INTEGER, error_code TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+            "CREATE TABLE reading_marks (id TEXT PRIMARY KEY, document_id TEXT NOT NULL, document_path TEXT NOT NULL, type TEXT NOT NULL, start_block_id TEXT NOT NULL, start_block_offset INTEGER NOT NULL, end_block_id TEXT NOT NULL, end_block_offset INTEGER NOT NULL, start_offset INTEGER NOT NULL, end_offset INTEGER NOT NULL, quote TEXT NOT NULL, context_before TEXT NOT NULL, context_after TEXT NOT NULL, color TEXT NOT NULL, note TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
         ] {
             sqlx::query(statement).execute(&pool).await.unwrap();
         }
@@ -728,6 +1017,7 @@ mod tests {
             memories: Vec::new(),
             artifacts: Vec::new(),
             reading_reminders: Vec::new(),
+            reading_marks: Vec::new(),
         }
     }
 
@@ -846,6 +1136,88 @@ mod tests {
         assert_eq!(timezone, "Asia/Shanghai");
         assert_eq!(status, "scheduled");
         assert_eq!(notification_id, 42);
+    }
+
+    #[tokio::test]
+    async fn reading_mark_upsert_and_backup_round_trip() {
+        let pool = test_pool().await;
+        let mark = ReadingMarkInput {
+            id: "mark-1".into(),
+            document_id: "path:c:/anonymous/note.md".into(),
+            document_path: "C:/anonymous/note.md".into(),
+            mark_type: "annotation".into(),
+            anchor: ReadingMarkAnchorInput {
+                range: ReadingMarkRangeInput {
+                    start_block_id: "pb-1".into(),
+                    start_offset: 2,
+                    end_block_id: "pb-1".into(),
+                    end_offset: 8,
+                },
+                start_offset: 12,
+                end_offset: 18,
+                quote: "匿名引用".into(),
+                context_before: "前文".into(),
+                context_after: "后文".into(),
+            },
+            color: "pink".into(),
+            note: Some("我的批注".into()),
+            created_at: 1,
+            updated_at: 2,
+        };
+        let inserted = upsert_reading_mark_row(&pool, mark.clone()).await.unwrap();
+        assert_eq!(inserted.id, "mark-1");
+        assert_eq!(inserted.anchor.quote, "匿名引用");
+        let updated = upsert_reading_mark_row(
+            &pool,
+            ReadingMarkInput {
+                note: Some("更新".into()),
+                color: "blue".into(),
+                ..mark
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.anchor.quote, "匿名引用");
+        assert_eq!(updated.color, "blue");
+        assert_eq!(updated.created_at, inserted.created_at);
+        sqlx::query("DELETE FROM reading_marks WHERE id = 'mark-1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(read_reading_mark(&pool, "mark-1").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn reading_mark_page_is_stable_and_clamps_boundaries() {
+        let pool = test_pool().await;
+        for (id, created_at) in [("mark-b", 2), ("mark-a", 1), ("mark-c", 2)] {
+            sqlx::query(
+                "INSERT INTO reading_marks (id, document_id, document_path, type, start_block_id, start_block_offset, end_block_id, end_block_offset, start_offset, end_offset, quote, context_before, context_after, color, note, created_at, updated_at) VALUES (?, 'path:c:/anonymous/note.md', 'C:/anonymous/note.md', 'highlight', 'b1', 0, 'b1', 1, 0, 1, 'x', '', '', 'yellow', NULL, ?, ?)",
+            )
+            .bind(id)
+            .bind(created_at)
+            .bind(created_at)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let first = load_reading_marks_page_rows(&pool, 2, -5).await.unwrap();
+        let second = load_reading_marks_page_rows(&pool, 2, 2).await.unwrap();
+        assert_eq!(
+            first
+                .iter()
+                .map(|mark| mark.id.as_str())
+                .collect::<Vec<_>>(),
+            ["mark-a", "mark-b"]
+        );
+        assert_eq!(
+            second
+                .iter()
+                .map(|mark| mark.id.as_str())
+                .collect::<Vec<_>>(),
+            ["mark-c"]
+        );
     }
 
     #[tokio::test]

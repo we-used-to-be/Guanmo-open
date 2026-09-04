@@ -34,9 +34,9 @@ import {
 import { markStartupPoint } from '@/services/startupPerformance'
 import { hasBootSnapshotContent } from '@/services/bootSnapshot'
 
-const AiPanel = lazy(() => import('../ai/AiPanel').then((module) => ({ default: module.AiPanel })))
+const AiPanel = lazy(() => import('@/components/ai/AiPanel').then((module) => ({ default: module.AiPanel })))
 const EditorArea = lazy(() => import('../editor/EditorArea').then((module) => ({ default: module.EditorArea })))
-const SettingsPage = lazy(() => import('@/features/settings/SettingsPage').then((module) => ({ default: module.SettingsPage })))
+const SettingsPage = lazy(() => import('@settings-entry').then((module) => ({ default: module.SettingsPage })))
 const FeatureIntroModal = lazy(() => import('@/features/featureIntro/FeatureIntroModal').then((module) => ({ default: module.FeatureIntroModal })))
 const ProductTourOverlay = lazy(() => import('@/features/productTour/ProductTourOverlay').then((module) => ({ default: module.ProductTourOverlay })))
 
@@ -145,7 +145,7 @@ export function AppLayout() {
       if (snapshot.createdDemoTab && editor.tabs.some((tab) => tab.id === PRODUCT_TOUR_DEMO_TAB_ID)) {
         editor.closeTab(PRODUCT_TOUR_DEMO_TAB_ID)
       }
-      useEditorStore.setState({
+      editor.restoreProductTourState({
         viewMode: snapshot.viewMode,
         previewVisible: snapshot.previewVisible,
         rightPaneTabId: snapshot.rightPaneTabId,

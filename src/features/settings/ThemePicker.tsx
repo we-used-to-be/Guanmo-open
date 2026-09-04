@@ -1,13 +1,8 @@
-import type { ThemeId } from '@/stores/settingsStore'
+import { appearanceRegistry } from '@/services/appearance/appearanceRegistry'
+import type { ThemeId } from '@/services/appearance/appearanceSchema'
 import './theme-picker.css'
 
-const THEME_OPTIONS: Array<{ key: ThemeId; label: string; description: string }> = [
-  { key: 'warm', label: '暖色', description: '观墨经典暖色' },
-  { key: 'light', label: '浅色', description: '清爽通用浅色' },
-  { key: 'dark', label: '深色', description: '沉浸夜间写作' },
-  { key: 'paper', label: 'Paper', description: '舒适长文阅读' },
-  { key: 'github-light', label: 'GitHub Light', description: '技术文档与代码' },
-]
+const THEME_OPTIONS = appearanceRegistry.builtInThemes
 
 export function ThemePicker({
   value,
@@ -20,14 +15,14 @@ export function ThemePicker({
     <div className="gm-theme-picker" role="radiogroup" aria-label="主题">
       {THEME_OPTIONS.map((option) => (
         <button
-          key={option.key}
+          key={option.id}
           type="button"
           className="gm-theme-card"
-          data-preview-theme={option.key}
-          data-active={value === option.key}
+          data-preview-theme={option.id}
+          data-active={value === option.id}
           role="radio"
-          aria-checked={value === option.key}
-          onClick={() => onChange(option.key)}
+          aria-checked={value === option.id}
+          onClick={() => onChange(option.id)}
         >
           <span className="gm-theme-card__preview" aria-hidden="true">
             <span className="gm-theme-card__surface">

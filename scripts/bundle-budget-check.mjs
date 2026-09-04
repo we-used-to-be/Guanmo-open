@@ -25,14 +25,16 @@ const jsBytes = totalBytes(jsFiles)
 const cssBytes = totalBytes(cssFiles)
 
 if (mode === 'web') {
-  assert.ok(entryBytes <= 180_000, `Web 入口脚本超出 180 KB：${entryBytes} bytes`)
-  assert.ok(jsBytes <= 180_000, `Web JS 总量超出 180 KB：${jsBytes} bytes`)
-  assert.ok(cssBytes <= 95_000, `Web CSS 总量超出 95 KB：${cssBytes} bytes`)
-  assert.ok(jsFiles.length <= 2, `Web JS 分块过多：${jsFiles.length}`)
-  assert.equal(fontFiles.length, 0, `Web 构建不应包含字体资源：${fontFiles.join(', ')}`)
+  // Web 端现在复用桌面编辑器、预览和布局；预算与桌面首屏/总包保持同一量级。
+  assert.ok(entryBytes <= 1_350_000, `Web 入口脚本超出 1.35 MB：${entryBytes} bytes`)
+  assert.ok(jsBytes <= 7_500_000, `Web JS 总量超出 7.5 MB：${jsBytes} bytes`)
+  assert.ok(cssBytes <= 180_000, `Web CSS 总量超出 180 KB：${cssBytes} bytes`)
   assert.ok(!html.includes('modulepreload'), 'Web 构建不应预加载桌面模块')
-  const forbiddenAssets = files.filter((file) => /codemirror|mermaid|markdownPreview|katex|mascot|icon-/i.test(file))
-  assert.deepEqual(forbiddenAssets, [], `Web 构建包含桌面资源：${forbiddenAssets.join(', ')}`)
+  const webSources = await Promise.all(jsFiles.map((file) => readFile(join(dist, 'assets', file), 'utf8')))
+  const webBundle = webSources.join('\n')
+  assert.doesNotMatch(webBundle, /@tauri-apps|tauri:\/\//i, 'Web 构建不得包含 Tauri 运行时')
+  assert.doesNotMatch(webBundle, /indexedDB|indexeddb/i, 'Web 构建不得包含 IndexedDB')
+  assert.doesNotMatch(webBundle, /sqlite:/i, 'Web 构建不得包含 SQLite 数据库连接')
 } else {
   const oversized = jsFiles.filter((file) => (fileSizes.get(file) || 0) > 1_350_000)
   const preloadFiles = Array.from(html.matchAll(/rel="modulepreload"[^>]+href="\.\/assets\/([^"]+\.js)"/g), (match) => match[1])
@@ -78,6 +80,24 @@ if (mode === 'web') {
     previewSource,
     /import\(["']\.\/InlineMarkdownBlockEditor-.*\.js["']\)/,
     'MarkdownPreview 必须保留 InlineMarkdownBlockEditor 的动态 import 边界',
+  )
+
+  const echartsChunks = jsFiles.filter((file) => /^EChartsBlock-.*\.js$/.test(file))
+  assert.equal(echartsChunks.length, 1, `未找到唯一 EChartsBlock chunk：${echartsChunks.join(', ')}`)
+  assert.doesNotMatch(
+    previewSource,
+    /from["']\.\/EChartsBlock-.*\.js["']/,
+    'MarkdownPreview 不得静态 import EChartsBlock chunk',
+  )
+  assert.match(
+    previewSource,
+    /import\(["']\.\/EChartsBlock-.*\.js["']\)/,
+    'MarkdownPreview 必须保留 EChartsBlock 的动态 import 边界',
+  )
+  assert.equal(
+    preloadFiles.includes(echartsChunks[0]),
+    false,
+    'EChartsBlock 不得进入桌面首屏 modulepreload',
   )
 
   assert.ok(entryBytes <= 1_350_000, `桌面入口脚本超出 1.35 MB：${entryBytes} bytes`)

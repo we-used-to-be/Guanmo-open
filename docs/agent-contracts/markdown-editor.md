@@ -11,3 +11,8 @@
 - “预览内源码编辑”设置默认开启；Alt+点击由预览容器事件委托处理，块编辑器只维护局部 draft，退出时才写回完整文档。
 - 大文档编辑继续使用 `EditorArea` 的预览更新防抖，目录跳转、任务列表行号和滚动同步沿用现有 DOM 行号标记。
 - 桌面构建不得产出 `markdownPreview.worker-*` 独立脚本，回归检查由 `npm run build:desktop` 执行。
+
+## ReadingMark
+
+- 批注 anchor 必须由一次 `PreviewSelectionSnapshot` 生成，保存全文 UTF-16 offset、`DocumentRange`、可见 quote 与上下文；不得持久化 DOM 节点或 DOM Range。
+- `previewHighlightRegistry` 按 kind 隔离 ReadingMark、搜索和普通选区。虚拟块卸载只清理该块 DOM Range，重挂载按完整 ReadingMark 索引恢复；不可依赖块是否当前挂载来判断批注存在。

@@ -9,7 +9,8 @@ const mockLoadMemoryCount = vi.fn()
 const mockRemoveMemory = vi.fn()
 const mockConfirmMemoryCandidate = vi.fn()
 
-vi.mock('@/hooks/useTauri', () => ({
+vi.mock('@/hooks/useTauri', async (importOriginal) => ({
+  ...(await importOriginal()),
   isTauri: () => true,
 }))
 
