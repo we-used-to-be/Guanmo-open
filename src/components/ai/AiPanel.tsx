@@ -5,6 +5,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import type { RagSource, TimelineItem, PendingEdit } from '@/stores/chatStore'
 import { useAiChat } from '@/hooks/useAiChat'
 import { Button } from 'animal-island-ui'
+import { BookOpen } from 'lucide-react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { AssistantVisual } from '@/components/ai/AssistantVisual'
@@ -564,7 +565,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
       {/* Header */}
       <div
         className={`flex items-center border-b border-gm-border-subtle bg-gm-surface relative z-10 ${
-          fullscreenDragHandleProps ? 'h-9 cursor-grab touch-none px-3 active:cursor-grabbing' : 'h-11 px-4'
+          fullscreenDragHandleProps ? 'h-9 cursor-grab touch-none px-3 active:cursor-grabbing' : 'h-10 px-4'
         }`}
         aria-label={fullscreenDragHandleProps ? '拖动 AI 助手' : undefined}
         {...fullscreenDragHandleProps}
@@ -585,12 +586,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
             disabled={!databaseEnabled}
             onClick={() => { if (databaseEnabled) setPanelView('artifacts') }}
             title={databaseEnabled ? '阅读成果' : '阅读成果仅桌面版可用'}
-            icon={
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M4 19.5A2.5 2.5 0 016.5 17H20" />
-                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
-              </svg>
-            }
+            icon={<BookOpen size={15} strokeWidth={1.7} aria-hidden="true" />}
           />
           <Button
             type={panelView === 'reminders' ? 'default' : 'text'}

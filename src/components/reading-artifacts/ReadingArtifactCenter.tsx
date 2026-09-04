@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink, FileText, Filter } from 'lucide-react'
+import { Check, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, FileText, Filter } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import ReactMarkdown from 'react-markdown'
@@ -577,8 +577,8 @@ function DocumentView({ summaries, availability, onOpen }: { summaries: ReturnTy
 
 function DetailView({ independent, filter, sort, onFilter, onSort, positioned, other, renderCard }: { independent: boolean; filter: DetailFilter; sort: 'source' | 'time'; onFilter: (value: DetailFilter) => void; onSort: (value: 'source' | 'time') => void; positioned: ReadingArtifactItem[]; other: ReadingArtifactItem[]; renderCard: (item: ReadingArtifactItem) => React.ReactNode }) {
   return <>
-    <div className="mb-3 flex min-h-8 items-center justify-between gap-3">
-      <nav aria-label="成果分类" role="tablist" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+    <div className="mb-3 flex min-h-8 flex-wrap items-start gap-2">
+      <nav aria-label="成果分类" role="tablist" className="flex min-w-0 flex-[1_1_12rem] flex-wrap items-center gap-1">
         {(['all', 'highlight', 'annotation', 'ai'] as const).map((value) => (
           <button
             key={value}
@@ -592,20 +592,81 @@ function DetailView({ independent, filter, sort, onFilter, onSort, positioned, o
           </button>
         ))}
       </nav>
-      {!independent && (
-        <label className="flex shrink-0 items-center gap-1.5 text-micro text-gm-text-tertiary">
-          <span>排序</span>
-          <select aria-label="排序" value={sort} onChange={(event) => onSort(event.target.value as 'source' | 'time')} className="h-8 rounded-md border border-gm-border bg-gm-surface px-2 text-micro text-gm-text-secondary outline-none focus:border-gm-primary">
-            <option value="source">原文顺序</option>
-            <option value="time">时间顺序</option>
-          </select>
-        </label>
-      )}
+      {!independent && <SortMenu value={sort} onChange={onSort} />}
     </div>
     <div className="space-y-2">{positioned.map(renderCard)}</div>
     {other.length > 0 && <section className="mt-5 pt-1"><h3 className="mb-2 text-micro font-bold tracking-wide text-gm-text-tertiary">其他成果</h3><div className="space-y-2">{other.map(renderCard)}</div></section>}
     {positioned.length === 0 && other.length === 0 && <EmptyState text="当前条件下没有阅读成果" />}
   </>
+}
+
+function SortMenu({ value, onChange }: { value: 'source' | 'time'; onChange: (value: 'source' | 'time') => void }) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const label = value === 'source' ? '原文顺序' : '时间顺序'
+
+  useEffect(() => {
+    if (!open) return
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setOpen(false)
+      triggerRef.current?.focus()
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePointer)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
+
+  const select = (next: 'source' | 'time') => {
+    onChange(next)
+    setOpen(false)
+    triggerRef.current?.focus()
+  }
+
+  return (
+    <div ref={rootRef} className="relative ml-auto shrink-0">
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label={`排序：${label}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+        className="flex h-8 items-center gap-1.5 rounded-md border border-gm-border bg-gm-surface px-2.5 text-micro font-bold text-gm-text-secondary outline-none transition-colors hover:bg-gm-surface-hover focus-visible:border-gm-primary focus-visible:ring-1 focus-visible:ring-gm-primary/30"
+      >
+        <span>{label}</span>
+        <ChevronDown size={14} strokeWidth={1.8} className={`transition-transform duration-150 ${open ? 'rotate-180' : ''}`} aria-hidden="true" />
+      </button>
+      {open && (
+        <div role="menu" aria-label="排序方式" className="absolute right-0 top-full z-30 mt-1 min-w-full whitespace-nowrap rounded-lg border border-gm-border bg-gm-surface-elevated p-1 shadow-lg">
+          {(['source', 'time'] as const).map((option) => {
+            const optionLabel = option === 'source' ? '原文顺序' : '时间顺序'
+            const selected = value === option
+            return (
+              <button
+                key={option}
+                type="button"
+                role="menuitemradio"
+                aria-checked={selected}
+                onClick={() => select(option)}
+                className={`flex w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-micro outline-none transition-colors hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover ${selected ? 'font-bold text-gm-primary' : 'text-gm-text-secondary'}`}
+              >
+                <span>{optionLabel}</span>
+                <Check size={13} strokeWidth={2} className={selected ? 'opacity-100' : 'opacity-0'} aria-hidden="true" />
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function ArtifactCard({ item, availability, anchorStatus, currentDocument, reducedMotion, expanded, onToggleExpand, onNavigateMark, onUpdateMark, onDeleteMark, onDeleteAi, onOpenAiSource }: { item: ReadingArtifactItem; availability: Record<string, DocumentAvailability>; anchorStatus?: SourceAnchorStatus; currentDocument?: ReadingArtifactDocumentRef | null; reducedMotion: boolean; expanded: boolean; onToggleExpand?: () => void; onNavigateMark: () => void; onUpdateMark: (color?: ReadingMarkColor, note?: string) => Promise<unknown>; onDeleteMark: () => Promise<void>; onDeleteAi: () => Promise<void>; onOpenAiSource: (ref: ReadingArtifactDocumentRef) => void | Promise<void> }) {
