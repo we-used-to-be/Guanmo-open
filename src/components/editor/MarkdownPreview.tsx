@@ -786,7 +786,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       selectionRangeRef.current = normalized
     }
     // 只同步选区高亮：ref 驱动 + 块级增量，不触发任何 React 重渲染
-    syncAllMountedBlocks({ search: false, selection: true })
+    syncAllMountedBlocks({ search: false, selection: true, sourceReveal: false, readingMarks: false })
   }, [syncAllMountedBlocks])
 
   const getSelectionSnapshot = useCallback((): PreviewSelectionSnapshot | null => {

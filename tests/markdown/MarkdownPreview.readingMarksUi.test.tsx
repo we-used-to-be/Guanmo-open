@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { MutableRefObject } from 'react'
+import { useState, type MutableRefObject } from 'react'
+import { flushSync } from 'react-dom'
 import { MarkdownPreview } from '@/components/editor/MarkdownPreview'
 import { AnnotationHoverOverlay, type AnnotationHoverOverlayHandle } from '@/components/editor/AnnotationHoverOverlay'
 import { createMarkdownPreviewModel } from '@/services/markdownPreviewModel'
@@ -71,6 +72,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllGlobals()
   vi.restoreAllMocks()
   if (host) host.remove()
   ;(document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }).caretRangeFromPoint = originalCaretRangeFromPoint
@@ -368,6 +370,58 @@ describe('MarkdownPreview 批注浮层', () => {
     expect(screen.queryByRole('button', { name: '删除标记' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '创建黄色高亮' }))
     await waitFor(() => expect(onCreateReadingMark).toHaveBeenCalledTimes(1))
+  })
+
+  it('创建成功后清除临时选区不会覆盖刚回流的 ReadingMark 高亮', async () => {
+    const highlights = new Map<string, { ranges: Set<globalThis.Range>; add: (range: globalThis.Range) => void; delete: (range: globalThis.Range) => void }>()
+    class FakeHighlight {
+      readonly ranges = new Set<globalThis.Range>()
+      add(range: globalThis.Range): void { this.ranges.add(range) }
+      delete(range: globalThis.Range): void { this.ranges.delete(range) }
+    }
+    vi.stubGlobal('CSS', { highlights })
+    vi.stubGlobal('Highlight', FakeHighlight)
+
+    const created = makeMark('created-immediate-highlight', '第一段批注目标', '')
+    const onCreateReadingMark = vi.fn(async () => ({ status: 'created' as const, mark: created }))
+    const caretRangeFromPoint = document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
+    caretRangeFromPoint.caretRangeFromPoint = (x) => {
+      const textNode = host?.querySelector('[data-md-block-index]')?.querySelector('p span')?.firstChild
+      if (!textNode) return null
+      const range = document.createRange()
+      const offset = x < 50 ? 0 : (textNode.textContent?.length ?? 0)
+      range.setStart(textNode, offset)
+      range.setEnd(textNode, offset)
+      return range
+    }
+
+    function Harness() {
+      const [marks, setMarks] = useState<ReadingMark[]>([])
+      return (
+        <MarkdownPreview
+          content={content}
+          documentKey="doc-immediate-highlight"
+          documentVersion={1}
+          filePath={documentPath}
+          readingMarks={marks}
+          onCreateReadingMark={async (...args) => {
+            const result = await onCreateReadingMark(...args)
+            flushSync(() => setMarks([result.mark]))
+            return result
+          }}
+        />
+      )
+    }
+
+    render(<Harness />, { container: host! })
+    const block = host!.querySelector<HTMLElement>('[data-md-block-index]')!
+    fireEvent.mouseDown(block, { button: 0, clientX: 4, clientY: 110 })
+    fireEvent.mouseUp(document, { clientX: 120, clientY: 110 })
+    fireEvent.mouseEnter(await screen.findByRole('button', { name: '添加批注' }).then((button) => button.closest('.gm-reading-mark-toolbar')!))
+    fireEvent.click(screen.getByRole('button', { name: '创建黄色高亮' }))
+
+    await waitFor(() => expect(onCreateReadingMark).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(highlights.get('reading-mark-yellow')?.ranges.size).toBeGreaterThan(0))
   })
 
   it('添加文字批注在同一胶囊内形变、聚焦并提交后关闭', async () => {
