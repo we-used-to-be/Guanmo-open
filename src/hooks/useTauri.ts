@@ -116,6 +116,16 @@ export async function prepareMarkdownAssetsDir(markdownPath: string): Promise<vo
   await invoke<void>('prepare_markdown_assets_dir', { markdownPath: nativePath })
 }
 
+export async function prepareMarkdownImage(markdownPath: string, imagePath: string): Promise<string> {
+  if (!isTauri()) throw new Error('Not running in Tauri')
+  await waitForFileAccessRestore()
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<string>('prepare_markdown_image', {
+    markdownPath: toNativeFilePath(markdownPath),
+    imagePath: toNativeFilePath(imagePath),
+  })
+}
+
 export async function writeFile(path: string, content: string): Promise<void> {
   if (!isTauri()) throw new Error('Not running in Tauri')
   await waitForFileAccessRestore()

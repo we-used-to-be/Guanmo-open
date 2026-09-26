@@ -8,8 +8,12 @@ import { Highlighter } from 'lucide-react'
 import { motion } from 'motion/react'
 import { createContext, forwardRef, isValidElement, lazy, memo, Suspense, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { convertFileSrc } from '@tauri-apps/api/core'
+import { MarkdownImage } from './MarkdownImage'
+import { rehypeWindowsImagePaths } from '@/services/markdownImagePaths'
+import { rehypeLocalLinkPaths } from '@/services/markdownLinks'
 import { isTauri } from '@/hooks/useTauri'
+import { toast } from '@/services/toast'
+import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { createHeadingId } from '@/services/markdownToc'
 import { remarkStandaloneDisplayMath } from '@/services/markdownMath'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -2343,6 +2347,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
 
   const rehypePlugins = useMemo(
     () => [
+      rehypeWindowsImagePaths,
+      rehypeLocalLinkPaths,
       ...(!skipHtml && hasEmbeddedHtml && htmlRehypePlugins ? htmlRehypePlugins : []),
       ...MARKDOWN_REHYPE_PLUGINS,
     ],
@@ -2361,7 +2367,16 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const components = useMemo<Partial<Components>>(() => {
     const headingIds = new Map<string, number>()
     const handleAnchorClick = (href?: string, isFootnoteBackref?: boolean) => (event: React.MouseEvent<HTMLAnchorElement>) => {
-      if (!href?.startsWith('#')) return
+      if (!href?.startsWith('#')) {
+        if (!href || isTauri()) {
+          event.preventDefault()
+          const label = event.currentTarget.textContent || '图片'
+          void import('@/services/markdownLinkActions')
+            .then(({ followMarkdownLink }) => followMarkdownLink(href, filePath, label, setZoomImage))
+            .catch((error) => toast.error(describeFileOperationError(error, '打开链接失败')))
+        }
+        return
+      }
       event.preventDefault()
       cancelProgrammaticScroll()
       const id = href.slice(1)
@@ -2542,11 +2557,12 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
               <a
                 {...props}
                 id={anchorId}
-                href={href}
+                  href={href || undefined}
                 className="text-gm-primary hover:underline font-bold transition-colors hover:text-gm-primary-hover"
-                target={isHashLink ? undefined : '_blank'}
+                  target={isHashLink || !href || isTauri() ? undefined : '_blank'}
                 rel={isHashLink ? undefined : 'noopener noreferrer'}
-                onClick={handleAnchorClick(href, isFootnoteBackref)}
+                  onClick={handleAnchorClick(href, isFootnoteBackref)}
+                  onAuxClick={(event) => { if (event.button === 1) handleAnchorClick(href, isFootnoteBackref)(event) }}
               >
                 {isFootnoteBackref ? (children && String(children).trim() ? children : '↩ 返回正文') : children}
               </a>
@@ -2601,28 +2617,17 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
           img: ({ src, alt, title, width, height, node }) => {
             // eslint-disable-next-line react-hooks/rules-of-hooks
             const base = useBlockLineBase()
-            const resolvedSrc = resolveImageSrc(src, filePath)
-            const altText = alt || ''
             return (
-              <button
-                type="button"
-                className="gm-markdown-image my-4 block max-w-full cursor-zoom-in rounded-xl border border-gm-border bg-transparent p-0 text-left"
-                onClick={() => setZoomImage({ src: resolvedSrc, alt: altText })}
-                title="点击放大图片"
-                data-md-line={getNodeStartLine(node, base)}
-              >
-                <img
-                  src={resolvedSrc}
-                  alt={altText}
-                  title={title}
-                  width={width}
-                  height={height}
-                  referrerPolicy="no-referrer"
-                  loading="lazy"
-                  decoding="async"
-                  className="max-w-full rounded-xl"
-                />
-              </button>
+              <MarkdownImage
+                src={src}
+                alt={alt}
+                title={title}
+                width={width}
+                height={height}
+                filePath={filePath}
+                line={getNodeStartLine(node, base)}
+                onZoom={setZoomImage}
+              />
             )
           },
           del: ({ children }) => (
@@ -3046,37 +3051,6 @@ function CodeBlock({
       </div>
     </div>
   )
-}
-
-function resolveImageSrc(src: string | undefined, filePath?: string | null): string {
-  if (!src) return ''
-  if (/^(https?:|data:|blob:|asset:|file:)/i.test(src) || src.startsWith('#')) return src
-  if (!filePath || !isTauri()) return src
-
-  const normalizedSrc = decodeLocalImagePath(src).replace(/\\/g, '/')
-  const absolutePath = /^[a-zA-Z]:\//.test(normalizedSrc) || normalizedSrc.startsWith('//')
-    ? normalizedSrc
-    : joinPreviewPath(dirnamePreviewPath(filePath), normalizedSrc)
-  return convertFileSrc(absolutePath)
-}
-
-function decodeLocalImagePath(path: string): string {
-  try {
-    return decodeURI(path)
-  } catch {
-    return path
-  }
-}
-
-function dirnamePreviewPath(path: string): string {
-  const normalized = path.replace(/\\/g, '/')
-  const index = normalized.lastIndexOf('/')
-  return index >= 0 ? normalized.slice(0, index) : normalized
-}
-
-function joinPreviewPath(baseDir: string, relativePath: string): string {
-  const cleanRelative = relativePath.replace(/^\.\//, '')
-  return `${baseDir.replace(/\/$/, '')}/${cleanRelative}`
 }
 
 function getText(node: React.ReactNode): string {

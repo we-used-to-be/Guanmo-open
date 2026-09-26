@@ -1250,6 +1250,60 @@ fn create_dir_by_path(app: tauri::AppHandle, path: String) -> Result<(), String>
     register_workspace_internal(&app, path, true).map(|_| ())
 }
 
+fn resolve_markdown_preview_image(
+    state: &FsAccessState,
+    markdown_path: &Path,
+    image_path: &Path,
+) -> Result<PathBuf, String> {
+    let markdown = ensure_allowed_existing_text_file(state, markdown_path, FileAction::ReadText)?;
+    if !is_markdown_file_path(&markdown) {
+        return Err("path is not a Markdown file".into());
+    }
+    ensure_allowed_image_file_path(image_path)?;
+    // Relative references may legitimately contain `..`. Resolve the real target
+    // first, then enforce containment/explicit grants (including symlink targets).
+    if !image_path.is_absolute() {
+        return Err("image path must be absolute".into());
+    }
+    let image = image_path.canonicalize().map_err(|err| err.to_string())?;
+    if !image.is_file() {
+        return Err("image path is not a file".into());
+    }
+    // Check both the requested extension and the canonical target (symlinks).
+    ensure_allowed_image_file_path(&image)?;
+    let directory = markdown
+        .parent()
+        .ok_or_else(|| "path parent is missing".to_string())?;
+    if is_inside(directory, &image)
+        || is_authorized_for_action(state, &image, FileAction::ReadBinary)?
+    {
+        Ok(image)
+    } else {
+        Err("image is outside the Markdown directory and authorized locations".into())
+    }
+}
+
+#[tauri::command]
+fn prepare_markdown_image(
+    app: tauri::AppHandle,
+    markdown_path: String,
+    image_path: String,
+) -> Result<String, String> {
+    let state = app.state::<FsAccessState>();
+    wait_for_file_access_restore_state(state.inner());
+    let image = resolve_markdown_preview_image(
+        &state,
+        &PathBuf::from(markdown_path),
+        &PathBuf::from(image_path),
+    )?;
+    // Preview-only, exact-file grant: do not authorize directory browsing, writes,
+    // or a persistent selected-file grant just because a document references it.
+    app.asset_protocol_scope()
+        .allow_file(&image)
+        .map_err(|err| err.to_string())?;
+    Ok(image.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 fn prepare_markdown_assets_dir(app: tauri::AppHandle, markdown_path: String) -> Result<(), String> {
     let state = app.state::<FsAccessState>();
@@ -1276,13 +1330,100 @@ fn prepare_markdown_assets_dir(app: tauri::AppHandle, markdown_path: String) -> 
 mod tests {
     use super::{
         is_authorized_for_action, read_bytes_with_limit, read_text_file_with_limit,
-        snapshot_persisted_file_access, FileAccessRestoreGate, FileAction, FsAccessState,
-        PersistedFileAccess, FILE_TOO_LARGE_PREFIX,
+        resolve_markdown_preview_image, snapshot_persisted_file_access, FileAccessRestoreGate,
+        FileAction, FsAccessState, PersistedFileAccess, FILE_TOO_LARGE_PREFIX,
     };
     use std::io::Cursor;
     use std::path::{Path, PathBuf};
     use std::sync::{mpsc, Arc};
     use std::thread;
+
+    #[test]
+    fn markdown_preview_image_is_available_without_picker_and_does_not_grant_file_actions() {
+        let root = std::env::temp_dir().join(format!(
+            "guanmo-image-preview-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let notes = root.join("notes");
+        std::fs::create_dir_all(notes.join("figures")).unwrap();
+        let markdown = notes.join("test.md");
+        let sibling = notes.join("模型111极图_文献配色.png");
+        let nested = notes.join("figures/figure.png");
+        let outside = root.join("private.png");
+        let text = notes.join("secret.txt");
+        for path in [&markdown, &sibling, &nested, &outside, &text] {
+            std::fs::write(path, b"test").unwrap();
+        }
+        let state = FsAccessState::default();
+        assert!(resolve_markdown_preview_image(&state, &markdown, &sibling).is_err());
+        state
+            .selected_files
+            .lock()
+            .unwrap()
+            .insert(markdown.canonicalize().unwrap());
+
+        // This reproduces the old mismatch: ordinary binary reads have no grant,
+        // even though the image is a valid sibling of the selected Markdown file.
+        assert!(!is_authorized_for_action(
+            &state,
+            &sibling.canonicalize().unwrap(),
+            FileAction::ReadBinary
+        )
+        .unwrap());
+        assert_eq!(
+            resolve_markdown_preview_image(&state, &markdown, &sibling).unwrap(),
+            sibling.canonicalize().unwrap()
+        );
+        assert_eq!(
+            resolve_markdown_preview_image(&state, &markdown, &nested).unwrap(),
+            nested.canonicalize().unwrap()
+        );
+        assert_eq!(
+            resolve_markdown_preview_image(
+                &state,
+                &markdown,
+                &notes.join("figures/../模型111极图_文献配色.png")
+            )
+            .unwrap(),
+            sibling.canonicalize().unwrap()
+        );
+        assert!(resolve_markdown_preview_image(&state, &markdown, &outside).is_err());
+        assert!(resolve_markdown_preview_image(&state, &markdown, &text).is_err());
+        assert!(
+            resolve_markdown_preview_image(&state, &markdown, &notes.join("missing.png")).is_err()
+        );
+        assert!(
+            resolve_markdown_preview_image(&state, &markdown, &notes.join("../private.png"))
+                .is_err()
+        );
+        assert!(resolve_markdown_preview_image(&state, &text, &sibling).is_err());
+        for action in [
+            FileAction::ReadBinary,
+            FileAction::WriteBinary,
+            FileAction::Remove,
+        ] {
+            assert!(
+                !is_authorized_for_action(&state, &sibling.canonicalize().unwrap(), action)
+                    .unwrap()
+            );
+        }
+        // Explicitly selected external images retain their existing behavior.
+        state
+            .selected_files
+            .lock()
+            .unwrap()
+            .insert(outside.canonicalize().unwrap());
+        assert_eq!(
+            resolve_markdown_preview_image(&state, &markdown, &outside).unwrap(),
+            outside.canonicalize().unwrap()
+        );
+        // Remove only the unique temporary fixture created by this test.
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn bounded_text_read_rejects_over_limit_and_preserves_unbounded_compatibility() {
@@ -1763,6 +1904,7 @@ pub fn run() {
             migrate_legacy_file_access,
             wait_for_file_access_restore,
             prepare_markdown_assets_dir,
+            prepare_markdown_image,
             read_text_file_by_path,
             write_text_file_by_path,
             read_binary_file_by_path,
