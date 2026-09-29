@@ -548,6 +548,7 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
     getStoredEditorTop,
     saveEditorPositionForTab,
     savePreviewReadingPosition,
+    schedulePreviewReadingPositionSave,
     allowPreviewPositionUpdates,
     scheduleFlush,
     restoreEditorReadingPosition,
@@ -1220,16 +1221,14 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
     if (viewModeRef.current === 'edit-preview' && scrollSyncSessionRef.current.source === 'editor') return
     if (isRestoringScrollRef.current) return
     if (viewModeRef.current === 'edit-preview') setTocFocus('preview')
-    savePreviewReadingPosition(activeTab.id, leftPreviewRef.current, leftMarkdownPreviewRef.current, 'left')
-    scheduleFlush()
-  }, [activeTab?.id, savePreviewReadingPosition, scheduleFlush])
+    schedulePreviewReadingPositionSave(activeTab.id, leftPreviewRef.current, leftMarkdownPreviewRef.current, 'left')
+  }, [activeTab?.id, schedulePreviewReadingPositionSave])
 
   const handleRightPreviewScroll = useCallback(() => {
     if (!rightTab?.id) return
     if (isRestoringScrollRef.current) return
-    savePreviewReadingPosition(rightTab.id, rightPreviewRef.current, rightMarkdownPreviewRef.current, 'right')
-    scheduleFlush()
-  }, [rightTab?.id, savePreviewReadingPosition, scheduleFlush])
+    schedulePreviewReadingPositionSave(rightTab.id, rightPreviewRef.current, rightMarkdownPreviewRef.current, 'right')
+  }, [rightTab?.id, schedulePreviewReadingPositionSave])
 
   const jumpToLine = useCallback((line: number) => {
     const view = editorViewRef.current

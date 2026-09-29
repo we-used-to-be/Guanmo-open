@@ -768,6 +768,9 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
 
       act(() => {
         result.current.restorePreviewReadingPosition('tab-a', container, 'left')
+        result.current.readingPositionsRef.current.save('tab-a', { previewScrollTop: 0, topLine: 1 })
+        result.current.restorePreviewReadingPosition('tab-a', container, 'left')
+        expect(container.scrollTop).toBe(400)
         vi.advanceTimersByTime(50)
       })
       expect(restoredKeys.current.left).toBe('tab-a')
@@ -821,6 +824,48 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
       })
 
       expect(useEditorStore.getState().readingPositions[tabA.id]?.previewScrollTop).toBe(520)
+    })
+
+    it('saves only after scrolling stops and captures the final position before switching tabs', async () => {
+      const tabA = anonymousTab('tab-a', '# 文档 A\n\n' + '正文 A\n\n'.repeat(100))
+      const tabB = anonymousTab('tab-b', '# 文档 B')
+      setupEditor([tabA, tabB], tabA.id, 'preview')
+      const { container } = render(<EditorArea />)
+      await settleLazyEditorModules()
+      act(() => vi.advanceTimersByTime(50))
+      const preview = getLeftPreviewContainer(container)!
+      const log = vi.spyOn(console, 'info').mockImplementation(() => {})
+      const savedCount = () => log.mock.calls.filter(([label, data]) =>
+        label === '[阅读位置][预览保存]' && data?.success === true).length
+      try {
+        act(() => {
+          fireEvent.wheel(preview, { deltaY: 120 })
+          preview.scrollTop = 100
+          fireEvent.scroll(preview)
+        })
+        expect(savedCount()).toBe(0)
+        act(() => vi.advanceTimersByTime(100))
+        act(() => {
+          preview.scrollTop = 300
+          fireEvent.scroll(preview)
+        })
+        act(() => vi.advanceTimersByTime(149))
+        expect(savedCount()).toBe(0)
+        act(() => vi.advanceTimersByTime(1))
+        expect(savedCount()).toBe(1)
+
+        act(() => {
+          preview.scrollTop = 400
+          fireEvent.scroll(preview)
+          preview.scrollTop = 500
+          fireEvent.scroll(preview)
+          expect(savedCount()).toBe(1)
+          useEditorStore.getState().setActiveTab(tabB.id)
+        })
+        expect(useEditorStore.getState().readingPositions[tabA.id]?.previewScrollTop).toBe(500)
+      } finally {
+        log.mockRestore()
+      }
     })
 
     it('does not replace a restored position with a later layout scroll before user input', async () => {
