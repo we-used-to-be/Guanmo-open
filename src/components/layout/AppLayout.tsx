@@ -144,7 +144,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
   const toggleDiffPreview = useEditorStore((s) => s.toggleDiffPreview)
   const setViewMode = useEditorStore((s) => s.setViewMode)
   const { handleNewFile, handleOpenFile, handleSaveFile } = useFileOperations()
-  const { isFullscreen, toggleFullscreen, exitFullscreen } = useFullscreen()
+  const { isFullscreen, toggleFullscreen, enterFullscreen, exitFullscreen } = useFullscreen()
   const customCursorEnabled = useSettingsStore((s) => s.appearance.customCursorEnabled)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [commandPaletteMode, setCommandPaletteMode] = useState<'commands' | 'files'>('commands')
@@ -159,6 +159,8 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
   const [productTourStep, setProductTourStep] = useState(0)
   const productTourSteps = useMemo(() => productTourTopic === 'topics' ? [] : getProductTourSteps(productTourTopic, getRuntimeCapabilities().isWeb), [productTourTopic])
   const productTourSnapshotRef = useRef<{
+    isFullscreen: boolean
+    fullscreenFileDrawerOpen: boolean
     activeTabId: string | null
     viewMode: ReturnType<typeof useEditorStore.getState>['viewMode']
     previewVisible: boolean
@@ -192,6 +194,20 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     latestPosition: FullscreenAiPosition
     dragged: boolean
   } | null>(null)
+  const productTourFullscreenTaskRef = useRef<Promise<void> | null>(null)
+  const setProductTourFullscreen = useCallback((next: boolean) => {
+    const change = () => next ? enterFullscreen() : exitFullscreen()
+    const task = productTourFullscreenTaskRef.current
+      ? productTourFullscreenTaskRef.current.then(change, change)
+      : change()
+    productTourFullscreenTaskRef.current = task
+    void task.then(() => {
+      if (productTourFullscreenTaskRef.current === task) productTourFullscreenTaskRef.current = null
+    }, () => {
+      if (productTourFullscreenTaskRef.current === task) productTourFullscreenTaskRef.current = null
+    })
+    return task
+  }, [enterFullscreen, exitFullscreen])
   const fullscreenAiResizeRef = useRef<{
     pointerId: number
     startX: number
@@ -249,25 +265,31 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
       })
       const app = useAppStore.getState()
       if (app.sidebarCollapsed !== snapshot.sidebarCollapsed) app.toggleSidebar()
-      if (app.aiPanelOpen !== snapshot.aiPanelOpen) app.toggleAiPanel()
-      if (snapshot.aiPanelOpen) {
-        if (snapshot.aiPanelView === 'artifacts') requestOpenReadingArtifacts()
-        else if (snapshot.aiPanelView === 'reminders') requestOpenReadingReminders()
-        else requestOpenAiChat()
-      }
       setSettingsSection(snapshot.settingsSection)
       setSettingsOpen(snapshot.settingsOpen)
+      void setProductTourFullscreen(snapshot.isFullscreen).then(() => {
+        const restoredApp = useAppStore.getState()
+        if (restoredApp.aiPanelOpen !== snapshot.aiPanelOpen) restoredApp.toggleAiPanel()
+        if (snapshot.aiPanelOpen) {
+          if (snapshot.aiPanelView === 'artifacts') requestOpenReadingArtifacts()
+          else if (snapshot.aiPanelView === 'reminders') requestOpenReadingReminders()
+          else requestOpenAiChat()
+        }
+        setFullscreenFileDrawerOpen(snapshot.fullscreenFileDrawerOpen)
+      })
     }
     productTourSnapshotRef.current = null
     setProductTourTopic('overview')
     setProductTourStep(0)
-  }, [])
+  }, [setProductTourFullscreen])
 
   const startProductTour = useCallback(() => {
     if (productTourOpen) return
     const editor = useEditorStore.getState()
     const createdDemoTab = editor.tabs.length === 0
     productTourSnapshotRef.current = {
+      isFullscreen: useAppStore.getState().isFullscreen,
+      fullscreenFileDrawerOpen,
       activeTabId: editor.activeTabId,
       viewMode: editor.viewMode,
       previewVisible: editor.previewVisible,
@@ -293,10 +315,18 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
       })
     }
     editor.setViewMode('preview')
+    if (useAppStore.getState().isFullscreen) setProductTourFullscreen(false)
     setProductTourTopic('overview')
     setProductTourStep(0)
     setProductTourOpen(true)
-  }, [productTourOpen, settingsOpen, settingsSection])
+  }, [fullscreenFileDrawerOpen, productTourOpen, setProductTourFullscreen, settingsOpen, settingsSection])
+
+  const changeProductTourTopic = useCallback((topic: ProductTourTopic | 'topics') => {
+    setProductTourFullscreen(topic === 'fullscreen')
+    setFullscreenFileDrawerOpen(false)
+    setProductTourTopic(topic)
+    setProductTourStep(0)
+  }, [setProductTourFullscreen])
 
   const tourSurface = productTourSteps[productTourStep]?.surface
   useEffect(() => {
@@ -309,6 +339,10 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
       if (app.aiPanelOpen) app.closeAiPanel()
       return
     }
+    if (tourSurface === 'fullscreen') {
+      if (!app.sidebarCollapsed) app.toggleSidebar()
+      return
+    }
     const sidebar = tourSurface === 'sidebar'
     if (app.sidebarCollapsed === sidebar) app.toggleSidebar()
     const ai = tourSurface === 'ai-chat' || tourSurface === 'artifacts'
@@ -317,6 +351,17 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     if (tourSurface === 'ai-chat') requestOpenAiChat()
     if (tourSurface === 'artifacts') requestOpenReadingArtifacts()
   }, [productTourOpen, tourSurface])
+
+  useEffect(() => {
+    if (!productTourOpen || productTourTopic !== 'fullscreen' || !isFullscreen) return
+    const app = useAppStore.getState()
+    if (productTourStep === 1) {
+      if (!app.aiPanelOpen) app.toggleAiPanel()
+    } else if (app.aiPanelOpen) {
+      app.closeAiPanel()
+    }
+    setFullscreenFileDrawerOpen(productTourStep === 3)
+  }, [isFullscreen, productTourOpen, productTourStep, productTourTopic])
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -487,6 +532,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
   useEffect(() => {
     if (!isFullscreen || !aiPanelOpen) return
     const handlePointerDown = (e: PointerEvent) => {
+      if ((e.target as Element | null)?.closest('.gm-product-tour')) return
       if (fullscreenAiPanelRef.current?.contains(e.target as Node)) return
       useAppStore.getState().closeAiPanel()
     }
@@ -679,6 +725,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
 
       {isFullscreen && (
         <FullscreenControlBar
+          productTourStep={productTourOpen && productTourTopic === 'fullscreen' ? productTourStep : null}
           fileDrawerOpen={fullscreenFileDrawerOpen}
           onToggleFileDrawer={toggleFullscreenFileDrawer}
           onCloseFileDrawer={closeFullscreenFileDrawer}
@@ -697,6 +744,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
 
       {isFullscreen && aiPanelOpen && (
         <div
+          data-fullscreen-ai-panel="true"
           ref={fullscreenAiPanelRef}
           className="fixed z-[45] flex flex-col overflow-hidden rounded-2xl border border-gm-border bg-gm-surface/92 shadow-lg backdrop-blur-xl animate-slideInRight"
           style={{
@@ -777,7 +825,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
         steps={productTourSteps}
         stepIndex={productTourStep}
         onStepChange={setProductTourStep}
-        onTopicChange={(topic) => { setProductTourTopic(topic); setProductTourStep(0) }}
+        onTopicChange={changeProductTourTopic}
         onClose={finishProductTour}
       /></Suspense>}
 

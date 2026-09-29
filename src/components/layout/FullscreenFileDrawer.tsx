@@ -39,10 +39,13 @@ export function FullscreenFileDrawer({
   useEffect(() => {
     if (!open) return
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    window.setTimeout(() => panelRef.current?.focus(), 0)
+    window.setTimeout(() => {
+      if (!document.querySelector('.gm-product-tour')) panelRef.current?.focus()
+    }, 0)
     const handlePointerDown = (e: PointerEvent) => {
       const target = e.target as HTMLElement | null
       if (!target) return
+      if (target.closest('.gm-product-tour')) return
       if (panelRef.current?.contains(target)) return
       if (target?.closest('[data-fullscreen-control-bar]')) return
       if (target?.closest('[data-context-menu]')) return

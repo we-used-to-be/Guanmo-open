@@ -29,6 +29,7 @@ const PANEL_CONTENT_REVEAL_DELAY = 190
 const FULLSCREEN_PADDING_DEBOUNCE_MS = 150
 
 interface FullscreenControlBarProps {
+  productTourStep: number | null
   fileDrawerOpen: boolean
   onToggleFileDrawer: () => void
   onCloseFileDrawer: () => void
@@ -37,6 +38,7 @@ interface FullscreenControlBarProps {
 }
 
 export function FullscreenControlBar({
+  productTourStep,
   fileDrawerOpen,
   onToggleFileDrawer,
   onCloseFileDrawer,
@@ -127,13 +129,24 @@ export function FullscreenControlBar({
   }, [clearHideTimer, fileDrawerOpen, onCloseFileDrawer, switchPanel])
 
   const scheduleHide = useCallback(() => {
-    if (fileDrawerOpen || paddingCardOpen || themeCardOpen || fileMenuOpen) return
+    if (productTourStep !== null || fileDrawerOpen || paddingCardOpen || themeCardOpen || fileMenuOpen) return
     clearHideTimer()
     hideTimerRef.current = window.setTimeout(() => {
       setVisible(false)
       if (!contextMenu) switchPanel(false)
     }, tabMode ? 2200 : 700)
-  }, [clearHideTimer, contextMenu, fileDrawerOpen, fileMenuOpen, paddingCardOpen, switchPanel, tabMode, themeCardOpen])
+  }, [clearHideTimer, contextMenu, fileDrawerOpen, fileMenuOpen, paddingCardOpen, productTourStep, switchPanel, tabMode, themeCardOpen])
+
+  useEffect(() => {
+    if (productTourStep === null) {
+      setPaddingCardOpen(false)
+      return
+    }
+    clearHideTimer()
+    setVisible(true)
+    setPaddingCardOpen(productTourStep === 2)
+    switchPanel(productTourStep === 3)
+  }, [clearHideTimer, productTourStep, switchPanel])
 
   const handleControlMouseEnter = useCallback(() => {
     pointerWithinControlRef.current = true
@@ -227,6 +240,7 @@ export function FullscreenControlBar({
     if (!paddingCardOpen && !themeCardOpen && !fileMenuOpen) return
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null
+      if (target?.closest('.gm-product-tour')) return
       if (target?.closest('[data-fullscreen-padding-control], [data-fullscreen-theme-control], [data-fullscreen-file-menu]')) return
       setPaddingCardOpen(false)
       setThemeCardOpen(false)

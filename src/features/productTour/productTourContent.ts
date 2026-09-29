@@ -1,6 +1,6 @@
 export type ProductTourPlacement = 'top' | 'right' | 'bottom' | 'left'
-export type ProductTourTopic = 'overview' | 'files' | 'annotations' | 'ai' | 'appearance'
-export type ProductTourSurface = 'collapsed' | 'sidebar' | 'preview' | 'ai-chat' | 'artifacts' | 'settings-ai' | 'settings-general'
+export type ProductTourTopic = 'overview' | 'files' | 'fullscreen' | 'annotations' | 'ai' | 'appearance'
+export type ProductTourSurface = 'collapsed' | 'sidebar' | 'preview' | 'fullscreen' | 'ai-chat' | 'artifacts' | 'settings-ai' | 'settings-general'
 
 export interface ProductTourStep {
   id: string
@@ -15,6 +15,7 @@ export interface ProductTourStep {
 
 export const PRODUCT_TOUR_TOPICS: Array<{ id: ProductTourTopic; title: string; description: string; desktopOnly?: boolean }> = [
   { id: 'files', title: '文件与阅读', description: '文件、侧栏、阅读模式和预览' },
+  { id: 'fullscreen', title: '全屏模式', description: '控制条、AI 小窗、正文边距和文件切换' },
   { id: 'annotations', title: '批注与阅读成果', description: '高亮、文字批注与成果管理', desktopOnly: true },
   { id: 'ai', title: 'AI 助手', description: '对话、选区与模型设置' },
   { id: 'appearance', title: '主题与个性设置', description: '主题选择与自定义' },
@@ -37,6 +38,12 @@ const steps: Record<ProductTourTopic, ProductTourStep[]> = {
     { id: 'reading-modes', target: '[data-product-tour="mode-switcher"]', title: '阅读与编辑模式', content: '编辑用于写作，预览用于阅读；分屏与对照模式适合比较内容。顶部标签可在多个文档间切换。', placement: 'bottom', surface: 'preview' },
     { id: 'preview-actions', target: ['[data-product-tour="preview-area"] :is(h1,h2,p)', '[data-product-tour="preview-area"]'], title: '预览中的操作', content: '预览支持目录、搜索与富内容阅读。按 Alt + 左键定位编辑；需要专注时，可使用右上角全屏按钮。', placement: 'right', surface: 'preview' },
     { id: 'fullscreen', target: '[data-product-tour="fullscreen"]', title: '全屏专注', content: '点击进入全屏阅读；按 F11 或顶部控制区退出。', placement: 'bottom', surface: 'preview' },
+  ],
+  fullscreen: [
+    { id: 'fullscreen-controls', target: '[data-fullscreen-control-bar]', title: '隐藏式顶部控制条', content: '将鼠标移到屏幕顶部，控制条就会出现。这里可以切换阅读模式、打开 AI 助手、调整边距与主题，也可以退出全屏。', placement: 'bottom', surface: 'fullscreen' },
+    { id: 'fullscreen-ai', target: '[data-fullscreen-ai-panel]', title: '随用随开的 AI 助手', content: '点击控制条中的「AI」打开小窗。拖动小窗顶部可调整位置，拖动右下角可调整大小；点击小窗外部即可关闭，即用即走。', placement: 'left', surface: 'fullscreen' },
+    { id: 'fullscreen-padding', target: '#fullscreen-padding-card', title: '调整正文边距', content: '点击「边距」，拖动滑块调整正文左右留白，选择更适合自己的阅读宽度。', placement: 'bottom', surface: 'fullscreen' },
+    { id: 'fullscreen-files', target: '[data-fullscreen-file-drawer]', title: '在全屏中切换文件', content: '点击「标签 / 文件」查看已打开的标签，并点击标签切换文档；文件侧栏还可从最近文件、收藏和工作区继续打开内容。标签栏右侧的「+」可新建或打开文件。', placement: 'right', surface: 'fullscreen' },
   ],
   annotations: [
     { id: 'mark-selection', target: ['[data-product-tour="preview-area"] :is(h1,h2,p)', '[data-product-tour="preview-area"]'], title: '选中文本，添加高亮', content: '在桌面版已打开的 Markdown 文件预览中选中文字，选择颜色即可保存高亮。下方是只读操作示意，不会写入文件或数据库。', placement: 'right', surface: 'preview', example: 'annotation', desktopOnly: true },
