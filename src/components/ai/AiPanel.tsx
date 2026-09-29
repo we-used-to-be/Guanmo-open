@@ -9,6 +9,7 @@ import { BookOpen } from 'lucide-react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { AssistantVisual } from '@/components/ai/AssistantVisual'
+import { SmoothStreamingText } from '@/components/ai/SmoothStreamingText'
 import { PromptComposer } from '@/components/ai/PromptComposer'
 import { readRememberedMarkdownFileForOpen } from '@/services/markdownFileOpenPolicy'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
@@ -1615,7 +1616,7 @@ export const ChatBubble = memo(function ChatBubble({
             </div>
           ) : isUser || (isLast && streaming) ? (
             <div className={`whitespace-pre-wrap overflow-wrap-anywhere ${isAssistantStreaming ? 'gm-streaming-text' : ''}`} style={{ wordBreak: 'normal' }}>
-              <span>{content}</span>
+              {isAssistantStreaming ? <SmoothStreamingText content={content} /> : <span>{content}</span>}
               {isAssistantStreaming && <span className="gm-streaming-caret" aria-hidden="true" />}
             </div>
           ) : (
