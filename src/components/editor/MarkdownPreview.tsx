@@ -2604,25 +2604,16 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
             const resolvedSrc = resolveImageSrc(src, filePath)
             const altText = alt || ''
             return (
-              <button
-                type="button"
-                className="gm-markdown-image my-4 block max-w-full cursor-zoom-in rounded-xl border border-gm-border bg-transparent p-0 text-left"
-                onClick={() => setZoomImage({ src: resolvedSrc, alt: altText })}
-                title="点击放大图片"
-                data-md-line={getNodeStartLine(node, base)}
-              >
-                <img
-                  src={resolvedSrc}
-                  alt={altText}
-                  title={title}
-                  width={width}
-                  height={height}
-                  referrerPolicy="no-referrer"
-                  loading="lazy"
-                  decoding="async"
-                  className="max-w-full rounded-xl"
-                />
-              </button>
+              <MarkdownImage
+                key={resolvedSrc}
+                src={resolvedSrc}
+                alt={altText}
+                title={title}
+                width={width}
+                height={height}
+                line={getNodeStartLine(node, base)}
+                onZoom={() => setZoomImage({ src: resolvedSrc, alt: altText })}
+              />
             )
           },
           del: ({ children }) => (
@@ -3045,6 +3036,62 @@ function CodeBlock({
         {children}
       </div>
     </div>
+  )
+}
+
+function MarkdownImage({ src, alt, title, width, height, line, onZoom }: {
+  src: string
+  alt: string
+  title?: string
+  width?: string | number
+  height?: string | number
+  line?: number
+  onZoom: () => void
+}) {
+  const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>(src ? 'loading' : 'error')
+  const imageWidth = Number(width)
+  const imageHeight = Number(height)
+  const placeholderStyle = imageWidth > 0 && imageHeight > 0
+    ? { width: `min(100%, ${imageWidth}px)`, aspectRatio: `${imageWidth} / ${imageHeight}` }
+    : { width: 'min(100%, 36rem)', aspectRatio: '3 / 2' }
+
+  return (
+    <button
+      type="button"
+      className={`gm-markdown-image relative my-4 block max-w-full overflow-hidden rounded-xl border border-gm-border bg-transparent p-0 text-left${status === 'loaded' ? ' cursor-zoom-in' : ''}`}
+      style={status === 'loaded' ? undefined : placeholderStyle}
+      onClick={onZoom}
+      disabled={status !== 'loaded'}
+      title={status === 'loaded' ? '点击放大图片' : undefined}
+      aria-busy={status === 'loading'}
+      data-md-line={line}
+    >
+      {status !== 'loaded' && (
+        <span
+          className={`absolute inset-0 flex items-center justify-center bg-gm-surface-elevated text-caption text-gm-text-secondary${status === 'loading' ? ' motion-safe:animate-pulse' : ''}`}
+          aria-hidden="true"
+        >
+          {status === 'loading' ? '图片加载中…' : '图片加载失败'}
+        </span>
+      )}
+      <img
+        key={src}
+        ref={(element) => {
+          if (element?.complete) setStatus(element.naturalWidth > 0 ? 'loaded' : 'error')
+        }}
+        src={src}
+        alt={alt}
+        title={title}
+        width={width}
+        height={height}
+        referrerPolicy="no-referrer"
+        loading="lazy"
+        decoding="async"
+        onLoad={() => setStatus('loaded')}
+        onError={() => setStatus('error')}
+        className={status === 'loaded' ? 'max-w-full rounded-xl' : 'absolute inset-0 h-full w-full opacity-0'}
+      />
+    </button>
   )
 }
 
