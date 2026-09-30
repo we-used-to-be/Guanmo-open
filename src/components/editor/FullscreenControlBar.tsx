@@ -514,9 +514,6 @@ export function FullscreenControlBar({
       case 'copyPath':
         if (contextTab?.filePath) await navigator.clipboard.writeText(contextTab.filePath)
         break
-      case 'copyContent':
-        if (contextTab) await navigator.clipboard.writeText(contextTab.content)
-        break
       case 'revealFile':
         if (contextTab?.filePath) {
           try {
@@ -897,10 +894,7 @@ export function FullscreenControlBar({
             添加文件到 AI 上下文
           </ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuGroupTitle>复制与索引</ContextMenuGroupTitle>
-          <ContextMenuItem onClick={() => handleContextAction('copyContent')}>
-            复制内容
-          </ContextMenuItem>
+          <ContextMenuGroupTitle>文件与索引</ContextMenuGroupTitle>
           {contextTab?.filePath && (
             <ContextMenuItem onClick={() => handleContextAction('copyPath')}>
               复制路径

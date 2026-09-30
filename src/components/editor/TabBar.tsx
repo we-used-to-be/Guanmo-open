@@ -148,11 +148,6 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
             }
           }
           break
-        case 'copyContent':
-          if (contextTab) {
-            navigator.clipboard.writeText(contextTab.content)
-          }
-          break
         case 'addToAi':
           if (contextTab) {
             addFileContextTag({
@@ -492,10 +487,7 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
             添加文件到 AI 上下文
           </ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuGroupTitle>复制与索引</ContextMenuGroupTitle>
-          <ContextMenuItem onClick={() => handleContextAction('copyContent')}>
-            复制内容
-          </ContextMenuItem>
+          <ContextMenuGroupTitle>文件与索引</ContextMenuGroupTitle>
           {contextTab?.filePath && (
             <ContextMenuItem onClick={() => handleContextAction('copyPath')}>
               复制路径

@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from 'react'
 import { useEditorStore } from '@/stores/editorStore'
-import { createFile, createFolder, openFile, removeFileEntry } from '@/services/fileSystem'
+import { createFile, createFolder, openFile } from '@/services/fileSystem'
 import type { FileNode } from '@/services/fileTree'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { addFileContextTag, summarizeFileWithAi } from '@/services/aiContext'
@@ -16,6 +16,7 @@ import { readRememberedMarkdownFileForOpen } from '@/services/markdownFileOpenPo
 import { toast } from '@/services/toast'
 import { Tooltip, TruncatedText } from '@/components/common/Tooltip'
 import { useFileRename } from '@/hooks/useFileRename'
+import { revealFileInFolder } from '@/hooks/useTauri'
 import { getRuntimeCapabilities } from '@/services/runtimeCapabilities'
 
 interface FileTreeProps {
@@ -223,6 +224,15 @@ function FileTreeNode({
     }
   }, [node])
 
+  const handleRevealFile = useCallback(async () => {
+    setContextMenu(null)
+    try {
+      await revealFileInFolder(node.path)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '打开文件位置失败')
+    }
+  }, [node.path])
+
   const handleDragStart = useCallback((e: React.DragEvent) => {
     const mime = isFile ? 'application/x-guanmo-file' : 'application/x-guanmo-folder'
     e.dataTransfer.setData(mime, JSON.stringify({ name: node.name, path: node.path }))
@@ -289,21 +299,9 @@ function FileTreeNode({
         <ContextMenu position={contextMenu} onClose={() => setContextMenu(null)} minWidth={176} maxWidth={176}>
           <ContextMenuGroupTitle variant="strong">文件操作</ContextMenuGroupTitle>
           <ContextMenuItem onClick={() => { rename.startRename(node.path, node.name); setContextMenu(null) }}>重命名</ContextMenuItem>
-          <ContextMenuItem onClick={async () => {
-            if (!window.confirm(`确认删除“${node.name}”吗？此操作不可恢复。`)) return
-            setContextMenu(null)
-            try {
-              await removeFileEntry(node.path)
-              if (isFile) {
-                const active = useEditorStore.getState().tabs.find((tab) => isSameFilePath(tab.filePath, node.path))
-                if (active) useEditorStore.getState().closeTab(active.id)
-              }
-              onRefreshWorkspace?.()
-              toast.success('已删除文件')
-            } catch (err) {
-              toast.error(err instanceof Error ? err.message : '删除文件失败')
-            }
-          }}>{isFile ? '删除文件' : '删除文件夹'}</ContextMenuItem>
+          {isFile && (
+            <ContextMenuItem onClick={() => void handleRevealFile()}>打开文件位置</ContextMenuItem>
+          )}
           <ContextMenuItem onClick={handleSaveAs}>另存为</ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuGroupTitle variant="strong">AI 助手</ContextMenuGroupTitle>
