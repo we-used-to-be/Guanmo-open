@@ -16,8 +16,9 @@ import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparat
 import { useFullscreen } from '@/hooks/useFullscreen'
 import { useFileRename } from '@/hooks/useFileRename'
 import { SettingSlider } from '@/components/common/SettingSlider'
-import { isTauri, openFileDialog, readBinaryFile } from '@/hooks/useTauri'
+import { isTauri, openFileDialog } from '@/hooks/useTauri'
 import { deleteReadingBackground, downloadReadingBackground, importReadingBackground, listReadingBackgrounds, OFFICIAL_BACKGROUNDS, readReadingBackground, type BackgroundItem, type BackgroundLibrary } from '@/services/fullscreenBackgrounds'
+import { releaseFullscreenBackground, updateFullscreenBackground, waitForFullscreenVisualIdle } from '@/services/fullscreenBackgroundLayer'
 
 type ViewMode = 'edit' | 'preview' | 'edit-preview' | 'dual-preview' | 'diff-preview'
 
@@ -30,10 +31,6 @@ const MODES: Array<{ key: ViewMode; label: string }> = [
 ]
 const PANEL_CONTENT_REVEAL_DELAY = 190
 const FULLSCREEN_PADDING_DEBOUNCE_MS = 150
-const BACKGROUND_FADE_MS = 380
-
-type BackgroundLayer = { key: string | null; url: string | null }
-
 interface FullscreenControlBarProps {
   productTourStep: number | null
   fileDrawerOpen: boolean
@@ -54,6 +51,7 @@ export function FullscreenControlBar({
   const tabs = useEditorStore((s) => s.tabs)
   const activeTabId = useEditorStore((s) => s.activeTabId)
   const viewMode = useEditorStore((s) => s.viewMode)
+  const backgroundPreviewVisible = viewMode === 'preview' || viewMode === 'edit-preview' || viewMode === 'dual-preview'
   const setActiveTab = useEditorStore((s) => s.setActiveTab)
   const setViewMode = useEditorStore((s) => s.setViewMode)
   const closeTab = useEditorStore((s) => s.closeTab)
@@ -96,15 +94,13 @@ export function FullscreenControlBar({
   const widthBeforeRef = useRef<number>(0)
   const widthAnimatingRef = useRef(false)
   const renderedTabModeRef = useRef(false)
-  const backgroundLayersRef = useRef<[BackgroundLayer, BackgroundLayer]>([{ key: null, url: null }, { key: null, url: null }])
-  const activeBackgroundLayerRef = useRef(0)
-  const backgroundRequestRef = useRef(0)
-  const backgroundFadeRef = useRef<Promise<void> | null>(null)
-  const backgroundFadeTimerRef = useRef<number | null>(null)
-  const backgroundFrameRef = useRef<number | null>(null)
-
   useEffect(() => {
-    if (import.meta.env.MODE !== 'web') void import('@/styles/fullscreenBackground.css')
+    if (import.meta.env.MODE === 'web') return
+    let cancelled = false
+    void waitForFullscreenVisualIdle().then(() => {
+      if (!cancelled) void import('@/styles/fullscreenBackground.css')
+    })
+    return () => { cancelled = true }
   }, [])
 
   const clearHideTimer = useCallback(() => {
@@ -435,9 +431,13 @@ export function FullscreenControlBar({
   }, [backgroundScene, updateAppearanceSettings])
 
   useEffect(() => {
-    if (!backgroundPath || !isTauri()) return
+    if (!backgroundPreviewVisible || !backgroundPath || !isTauri()) return
     let cancelled = false
-    void importReadingBackground(backgroundPath).then((item) => {
+    void waitForFullscreenVisualIdle().then(() => {
+      if (cancelled) return null
+      return importReadingBackground(backgroundPath)
+    }).then((item) => {
+      if (!item) return
       const current = useSettingsStore.getState().appearance
       if (current.fullscreenBackgroundPath !== backgroundPath) {
         void deleteReadingBackground(item.id)
@@ -447,103 +447,21 @@ export function FullscreenControlBar({
       if (!cancelled) setBackgroundRevision((value) => value + 1)
     }).catch(() => undefined)
     return () => { cancelled = true }
-  }, [backgroundPath])
+  }, [backgroundPath, backgroundPreviewVisible])
 
   useEffect(() => {
-    const root = document.documentElement
-    root.style.setProperty('--gm-fullscreen-background-cover', `${100 - backgroundOpacity * 0.75}%`)
-    return () => { root.style.removeProperty('--gm-fullscreen-background-cover') }
-  }, [backgroundOpacity])
-
-  useEffect(() => {
-    const root = document.documentElement
-    const request = ++backgroundRequestRef.current
-    const active = activeBackgroundLayerRef.current
-    if (backgroundFrameRef.current !== null) {
-      window.cancelAnimationFrame(backgroundFrameRef.current)
-      backgroundFrameRef.current = null
-      const pending = 1 - active
-      const layer = backgroundLayersRef.current[pending]
-      if (layer.url) URL.revokeObjectURL(layer.url)
-      backgroundLayersRef.current[pending] = { key: null, url: null }
-      root.style.removeProperty(`--gm-fullscreen-background-image-${pending}`)
-    }
-    const key = backgroundScene === 'custom' ? backgroundPath : backgroundScene
-    if (!backgroundEnabled || !isTauri() || !key) {
-      root.style.setProperty('--gm-fullscreen-background-visible', '0%')
-      return
-    }
-    if (backgroundLayersRef.current[active].key === key) {
-      root.style.setProperty('--gm-fullscreen-background-visible', '100%')
-      return
-    }
-
-    const id = backgroundScene.startsWith('local:') ? backgroundScene.slice(6) : backgroundScene
-    const source = backgroundScene === 'custom' && backgroundPath
-      ? readBinaryFile(backgroundPath, { maxBytes: 20 * 1024 * 1024 })
-      : readReadingBackground(id).then((bytes) => new Uint8Array(bytes))
-    void source.then(async (bytes) => {
-      if (request !== backgroundRequestRef.current) return
-      if (bytes.byteLength > 20 * 1024 * 1024) throw new Error('图片超过 20 MB')
-      const extension = backgroundScene === 'custom' ? backgroundPath?.split('.').pop()?.toLowerCase()
-        : bytes[0] === 0xff ? 'jpg' : bytes[0] === 0x47 ? 'gif' : bytes[0] === 0x52 ? 'webp' : bytes[0] === 0x42 ? 'bmp' : 'png'
-      const mime = extension === 'jpg' ? 'image/jpeg' : `image/${extension}`
-      const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mime }))
-      try {
-        const image = new Image()
-        image.src = url
-        if (image.decode) await image.decode()
-        if (backgroundFadeRef.current) await backgroundFadeRef.current
-        if (request !== backgroundRequestRef.current) return
-        const previous = activeBackgroundLayerRef.current
-        const next = 1 - previous
-        const layers = backgroundLayersRef.current
-        if (layers[next].url) URL.revokeObjectURL(layers[next].url)
-        layers[next] = { key, url }
-        root.style.setProperty(`--gm-fullscreen-background-image-${next}`, `url("${url}")`)
-        backgroundFrameRef.current = window.requestAnimationFrame(() => {
-          backgroundFrameRef.current = null
-          if (request !== backgroundRequestRef.current) {
-            URL.revokeObjectURL(url)
-            layers[next] = { key: null, url: null }
-            root.style.removeProperty(`--gm-fullscreen-background-image-${next}`)
-            return
-          }
-          root.style.setProperty('--gm-fullscreen-background-mix', next === 1 ? '100%' : '0%')
-          root.style.setProperty('--gm-fullscreen-background-visible', '100%')
-          activeBackgroundLayerRef.current = next
-          backgroundFadeRef.current = new Promise<void>((resolve) => {
-            backgroundFadeTimerRef.current = window.setTimeout(() => {
-              backgroundFadeTimerRef.current = null
-              if (layers[previous].url) URL.revokeObjectURL(layers[previous].url)
-              layers[previous] = { key: null, url: null }
-              root.style.removeProperty(`--gm-fullscreen-background-image-${previous}`)
-              backgroundFadeRef.current = null
-              resolve()
-            }, window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : BACKGROUND_FADE_MS)
-          })
-        })
-      } finally {
-        if (backgroundLayersRef.current.every((layer) => layer.url !== url)) URL.revokeObjectURL(url)
-      }
-    }).catch(() => {
-      if (request === backgroundRequestRef.current) toast.error('背景图片无法读取，请重新选择')
+    void updateFullscreenBackground({
+      enabled: backgroundEnabled,
+      path: backgroundPath,
+      scene: backgroundScene,
+      opacity: backgroundOpacity,
+      previewVisible: backgroundPreviewVisible,
     })
-  }, [backgroundEnabled, backgroundPath, backgroundScene])
+  }, [backgroundEnabled, backgroundOpacity, backgroundPath, backgroundPreviewVisible, backgroundScene])
 
   useEffect(() => () => {
-    ++backgroundRequestRef.current
-    if (backgroundFrameRef.current !== null) window.cancelAnimationFrame(backgroundFrameRef.current)
-    if (backgroundFadeTimerRef.current !== null) window.clearTimeout(backgroundFadeTimerRef.current)
-    for (const layer of backgroundLayersRef.current) if (layer.url) URL.revokeObjectURL(layer.url)
-    const root = document.documentElement
-    for (const index of [0, 1]) {
-      root.style.removeProperty(`--gm-fullscreen-background-image-${index}`)
-    }
-    root.style.removeProperty('--gm-fullscreen-background-mix')
-    root.style.removeProperty('--gm-fullscreen-background-visible')
+    void releaseFullscreenBackground()
   }, [])
-
   const selectFileAction = useCallback((action: () => void) => {
     setFileMenuOpen(false)
     onCloseFileDrawer()

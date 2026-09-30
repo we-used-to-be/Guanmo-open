@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FullscreenControlBar } from '@/components/editor/FullscreenControlBar'
+import { useEditorStore } from '@/stores/editorStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 
 const fileDialog = vi.hoisted(() => vi.fn())
@@ -30,7 +31,9 @@ const props = { productTourStep: null, fileDrawerOpen: false, onToggleFileDrawer
 const local = (count: number) => Array.from({ length: count }, (_, index) => ({ id: `00000000-0000-0000-0000-00000000000${index}`, label: `本地 ${index + 1}`, extension: 'png' }))
 
 afterEach(() => {
+  useEditorStore.getState().setViewMode('edit')
   useSettingsStore.getState().updateAppearanceSettings({ fullscreenBackgroundPath: null, fullscreenBackgroundOpacity: 40, fullscreenBackgroundEnabled: false, fullscreenBackgroundScene: 'custom' })
+  delete document.documentElement.dataset.fullscreenTransitionPhase
   vi.unstubAllGlobals()
   vi.clearAllMocks()
 })
@@ -103,6 +106,7 @@ describe('Fullscreen background', () => {
   })
 
   it('shows download progress, enables the preset, and keeps visibility controls', async () => {
+    useEditorStore.getState().setViewMode('preview')
     listBackgrounds.mockResolvedValue({ downloadedOfficialIds: [], localBackgrounds: [] })
     let finish!: () => void
     downloadBackground.mockImplementation((_id: string, onProgress: (value: number) => void) => {
@@ -117,12 +121,13 @@ describe('Fullscreen background', () => {
     finish()
     await waitFor(() => expect(useSettingsStore.getState().appearance.fullscreenBackgroundScene).toBe('snow'))
     fireEvent.change(screen.getByRole('slider', { name: '图片可见度' }), { target: { value: '0' } })
-    expect(document.documentElement.style.getPropertyValue('--gm-fullscreen-background-cover')).toBe('100%')
+    await waitFor(() => expect(document.documentElement.style.getPropertyValue('--gm-fullscreen-background-cover')).toBe('100%'))
     fireEvent.click(screen.getByRole('button', { name: '停用背景' }))
     expect(useSettingsStore.getState().appearance.fullscreenBackgroundEnabled).toBe(false)
   })
 
   it('keeps the old image during a scene fade and fades out when disabled', async () => {
+    useEditorStore.getState().setViewMode('preview')
     listBackgrounds.mockResolvedValue({ downloadedOfficialIds: ['snow', 'sea'], localBackgrounds: [] })
     readBackground.mockResolvedValue([137, 80, 78, 71])
     let imageNumber = 0
@@ -131,8 +136,9 @@ describe('Fullscreen background', () => {
       static revokeObjectURL = vi.fn()
     })
     render(<FullscreenControlBar {...props} />)
-    useSettingsStore.getState().updateAppearanceSettings({ fullscreenBackgroundScene: 'snow', fullscreenBackgroundEnabled: true })
+    act(() => useSettingsStore.getState().updateAppearanceSettings({ fullscreenBackgroundScene: 'snow', fullscreenBackgroundEnabled: true }))
     const root = document.documentElement
+    await waitFor(() => expect(readBackground).toHaveBeenCalledWith('snow'))
     await waitFor(() => expect(root.style.getPropertyValue('--gm-fullscreen-background-visible')).toBe('100%'))
     expect(root.style.getPropertyValue('--gm-fullscreen-background-mix')).toBe('100%')
     expect(root.style.getPropertyValue('--gm-fullscreen-background-image-1')).toContain('blob:scene-1')
@@ -147,5 +153,52 @@ describe('Fullscreen background', () => {
     await waitFor(() => expect(root.style.getPropertyValue('--gm-fullscreen-background-visible')).toBe('0%'))
     expect(root.style.getPropertyValue('--gm-fullscreen-background-image-0')).toContain('blob:scene-2')
     await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:scene-1'))
+  })
+
+  it('does not load a background in edit mode or during the fullscreen transition', async () => {
+    readBackground.mockResolvedValue([137, 80, 78, 71])
+    vi.stubGlobal('URL', class extends URL {
+      static createObjectURL = vi.fn(() => 'blob:deferred-background')
+      static revokeObjectURL = vi.fn()
+    })
+    useSettingsStore.getState().updateAppearanceSettings({ fullscreenBackgroundScene: 'snow', fullscreenBackgroundEnabled: true })
+    const { unmount } = render(<FullscreenControlBar {...props} />)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(readBackground).not.toHaveBeenCalled()
+    unmount()
+
+    useEditorStore.getState().setViewMode('preview')
+    document.documentElement.dataset.fullscreenTransitionPhase = 'switching'
+    const preview = render(<FullscreenControlBar {...props} />)
+    expect(readBackground).not.toHaveBeenCalled()
+    delete document.documentElement.dataset.fullscreenTransitionPhase
+    await waitFor(() => expect(readBackground).toHaveBeenCalledWith('snow'))
+    preview.unmount()
+  })
+
+  it('releases the decoded image after the fullscreen transition', async () => {
+    useEditorStore.getState().setViewMode('preview')
+    useSettingsStore.getState().updateAppearanceSettings({ fullscreenBackgroundScene: 'snow', fullscreenBackgroundEnabled: true })
+    readBackground.mockResolvedValue([137, 80, 78, 71])
+    let imageNumber = 0
+    vi.stubGlobal('URL', class extends URL {
+      static createObjectURL = vi.fn(() => `blob:exit-${++imageNumber}`)
+      static revokeObjectURL = vi.fn()
+    })
+    const { unmount } = render(<FullscreenControlBar {...props} />)
+    const root = document.documentElement
+    await waitFor(() => expect(root.style.getPropertyValue('--gm-fullscreen-background-image-1')).toContain('blob:exit-1'))
+    await waitFor(() => expect(root.style.getPropertyValue('--gm-fullscreen-background-mix')).toBe('100%'))
+    act(() => useSettingsStore.getState().updateAppearanceSettings({ fullscreenBackgroundScene: 'sea' }))
+    await waitFor(() => expect(root.style.getPropertyValue('--gm-fullscreen-background-image-0')).toContain('blob:exit-2'))
+    await waitFor(() => expect(root.style.getPropertyValue('--gm-fullscreen-background-mix')).toBe('0%'))
+    document.documentElement.dataset.fullscreenTransitionPhase = 'switching'
+    unmount()
+    await new Promise((resolve) => setTimeout(resolve, 420))
+    expect(URL.revokeObjectURL).not.toHaveBeenCalledWith('blob:exit-1')
+    expect(URL.revokeObjectURL).not.toHaveBeenCalledWith('blob:exit-2')
+    delete document.documentElement.dataset.fullscreenTransitionPhase
+    await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:exit-1'))
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:exit-2')
   })
 })

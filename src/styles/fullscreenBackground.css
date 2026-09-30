@@ -27,6 +27,9 @@
   background-size: cover;
   background-position: center;
   background-attachment: fixed;
+}
+
+html[data-fullscreen-background-ready] .gm-fullscreen-preview-content {
   transition: --gm-fullscreen-background-mix 380ms ease, --gm-fullscreen-background-visible 380ms ease;
 }
 
