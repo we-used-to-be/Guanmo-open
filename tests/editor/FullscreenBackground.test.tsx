@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FullscreenControlBar } from '@/components/editor/FullscreenControlBar'
 import { useEditorStore } from '@/stores/editorStore'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { fadeOutFullscreenBackground, releaseFullscreenBackground, restoreFullscreenBackground } from '@/services/fullscreenBackgroundLayer'
 
 const fileDialog = vi.hoisted(() => vi.fn())
 const listBackgrounds = vi.hoisted(() => vi.fn())
@@ -153,6 +154,61 @@ describe('Fullscreen background', () => {
     await waitFor(() => expect(root.style.getPropertyValue('--gm-fullscreen-background-visible')).toBe('0%'))
     expect(root.style.getPropertyValue('--gm-fullscreen-background-image-0')).toContain('blob:scene-2')
     await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:scene-1'))
+  })
+
+  it('keeps the decoded image while an exit fade can still be canceled', async () => {
+    useEditorStore.getState().setViewMode('preview')
+    listBackgrounds.mockResolvedValue({ downloadedOfficialIds: ['snow'], localBackgrounds: [] })
+    readBackground.mockResolvedValue([137, 80, 78, 71])
+    let imageNumber = 0
+    vi.stubGlobal('URL', class extends URL {
+      static createObjectURL = vi.fn(() => `blob:exit-cancel-${++imageNumber}`)
+      static revokeObjectURL = vi.fn()
+    })
+    render(<FullscreenControlBar {...props} />)
+    act(() => useSettingsStore.getState().updateAppearanceSettings({ fullscreenBackgroundScene: 'snow', fullscreenBackgroundEnabled: true }))
+    const root = document.documentElement
+    await waitFor(() => expect(root.style.getPropertyValue('--gm-fullscreen-background-image-1')).toContain('blob:exit-cancel'))
+    const selectedUrl = root.style.getPropertyValue('--gm-fullscreen-background-image-1').match(/blob:exit-cancel-\d+/)?.[0]
+    expect(selectedUrl).toBeTruthy()
+
+    const fade = fadeOutFullscreenBackground()
+    await waitFor(() => expect(root.style.getPropertyValue('--gm-fullscreen-background-visible')).toBe('0%'))
+    await fade
+    expect(URL.revokeObjectURL).not.toHaveBeenCalledWith(selectedUrl)
+
+    restoreFullscreenBackground()
+    expect(root.style.getPropertyValue('--gm-fullscreen-background-visible')).toBe('100%')
+    await releaseFullscreenBackground()
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith(selectedUrl)
+  })
+
+  it('completes the exit fade immediately when reduced motion is enabled', async () => {
+    useEditorStore.getState().setViewMode('preview')
+    listBackgrounds.mockResolvedValue({ downloadedOfficialIds: ['snow'], localBackgrounds: [] })
+    readBackground.mockResolvedValue([137, 80, 78, 71])
+    vi.stubGlobal('URL', class extends URL {
+      static createObjectURL = vi.fn(() => 'blob:reduced-motion')
+      static revokeObjectURL = vi.fn()
+    })
+    render(<FullscreenControlBar {...props} />)
+    act(() => useSettingsStore.getState().updateAppearanceSettings({ fullscreenBackgroundScene: 'snow', fullscreenBackgroundEnabled: true }))
+    await waitFor(() => expect(document.documentElement.style.getPropertyValue('--gm-fullscreen-background-image-1')).toContain('blob:reduced-motion'))
+
+    const previousMatchMedia = window.matchMedia
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({ ...previousMatchMedia(query), matches: query.includes('prefers-reduced-motion') }),
+    })
+    try {
+      const startedAt = performance.now()
+      await fadeOutFullscreenBackground()
+      expect(performance.now() - startedAt).toBeLessThan(100)
+    } finally {
+      Object.defineProperty(window, 'matchMedia', { configurable: true, writable: true, value: previousMatchMedia })
+    }
+    await releaseFullscreenBackground()
   })
 
   it('does not load a background in edit mode or during the fullscreen transition', async () => {

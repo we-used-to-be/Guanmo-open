@@ -2,9 +2,11 @@ import { useCallback, useEffect } from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { isTauri } from '@/hooks/useTauri'
+import { fadeOutFullscreenBackground, restoreFullscreenBackground } from '@/services/fullscreenBackgroundLayer'
 
 let shouldRestoreMaximizedAfterFullscreen = false
 let fullscreenTransitionInFlight: Promise<void> | null = null
+let fullscreenStateRevision = 0
 
 type FullscreenTransitionPhase = 'idle' | 'blurring' | 'switching' | 'focusing'
 
@@ -52,6 +54,19 @@ async function restoreMaximizedAfterFullscreenIfNeeded(win: { maximize: () => Pr
   shouldRestoreMaximizedAfterFullscreen = false
   await win.maximize()
   await waitForAnimationFrames(2)
+}
+
+function restoreMaximizedAfterExternalFullscreenExit(): void {
+  if (!isTauri()) return
+  import('@tauri-apps/api/window')
+    .then(({ getCurrentWindow }) => restoreMaximizedAfterFullscreenIfNeeded(getCurrentWindow()))
+    .catch((err) => console.error('Fullscreen: failed to restore maximized state:', err))
+}
+
+function restorePendingFullscreenBackground(): void {
+  if (useSettingsStore.getState().appearance.fullscreenBackgroundEnabled) {
+    restoreFullscreenBackground()
+  }
 }
 
 async function beginDwmTransitionSuppression(): Promise<number | null> {
@@ -138,6 +153,7 @@ async function waitForFullscreenState(next: boolean): Promise<boolean> {
 }
 
 async function runFullscreenChange(next: boolean, setFullscreen: (value: boolean) => void): Promise<void> {
+  fullscreenStateRevision += 1
   let current: boolean
   try {
     current = await readFullscreenState()
@@ -146,6 +162,13 @@ async function runFullscreenChange(next: boolean, setFullscreen: (value: boolean
     return
   }
   if (current === next) {
+    if (!next && useAppStore.getState().isFullscreen) {
+      try {
+        await fadeOutFullscreenBackground()
+      } catch (err) {
+        console.warn('Fullscreen: background fade failed, continuing normally:', err)
+      }
+    }
     setFullscreen(current)
     return
   }
@@ -157,6 +180,15 @@ async function runFullscreenChange(next: boolean, setFullscreen: (value: boolean
     console.warn('Fullscreen: failed to evaluate transition preference, continuing without animation:', err)
   }
   const surface = animated ? document.getElementById('root') : null
+  let backgroundFaded = false
+
+  if (!next) {
+    try {
+      backgroundFaded = await fadeOutFullscreenBackground()
+    } catch (err) {
+      console.warn('Fullscreen: background fade failed, continuing normally:', err)
+    }
+  }
 
   if (surface) {
     try {
@@ -177,14 +209,19 @@ async function runFullscreenChange(next: boolean, setFullscreen: (value: boolean
 
   try {
     await setFullscreenState(next)
-    const settled = await waitForFullscreenState(next)
-    setFullscreen(settled)
-    if (!next && settled && isTauri()) {
+    await waitForFullscreenState(next)
+    const settledState = await readFullscreenState()
+    setFullscreen(settledState)
+    if (!next && backgroundFaded && settledState !== next) {
+      restorePendingFullscreenBackground()
+    }
+    if (!next && settledState === next && isTauri()) {
       const { getCurrentWindow } = await import('@tauri-apps/api/window')
       await restoreMaximizedAfterFullscreenIfNeeded(getCurrentWindow())
     }
   } catch (err) {
     console.error('Fullscreen: change failed:', err)
+    if (!next && backgroundFaded) restorePendingFullscreenBackground()
     try {
       setFullscreen(await readFullscreenState())
     } catch (readErr) {
@@ -220,11 +257,57 @@ export function useFullscreen() {
   useEffect(() => {
     let disposed = false
     let cleanup: (() => void) | undefined
+    let externalExitRequest = 0
+    let externalExitPending = false
+    let externalExitInFlight: Promise<void> | null = null
 
     const sync = () => {
+      const stateRevision = ++fullscreenStateRevision
       readFullscreenState()
         .then((next) => {
-          if (!disposed) setFullscreen(next)
+          if (disposed || stateRevision !== fullscreenStateRevision || fullscreenTransitionInFlight) return
+
+          const appIsFullscreen = useAppStore.getState().isFullscreen
+          if (!next && appIsFullscreen) {
+            if (externalExitInFlight) return
+            externalExitPending = true
+            const request = ++externalExitRequest
+            const task = (async () => {
+              try {
+                const faded = await fadeOutFullscreenBackground()
+                if (!faded || disposed || request !== externalExitRequest) return
+                if (await readFullscreenState()) {
+                  restorePendingFullscreenBackground()
+                  return
+                }
+                setFullscreen(false)
+                restoreMaximizedAfterExternalFullscreenExit()
+              } catch (err) {
+                if (request !== externalExitRequest) return
+                restorePendingFullscreenBackground()
+                console.warn('Fullscreen: external exit background fade failed:', err)
+                if (!disposed) {
+                  setFullscreen(false)
+                  restoreMaximizedAfterExternalFullscreenExit()
+                }
+              } finally {
+                if (request === externalExitRequest) externalExitPending = false
+              }
+            })()
+            externalExitInFlight = task
+            void task.finally(() => {
+              if (externalExitInFlight === task) externalExitInFlight = null
+            }).catch(() => undefined)
+            return
+          }
+
+          if (next && externalExitPending) {
+            externalExitRequest += 1
+            externalExitPending = false
+            restorePendingFullscreenBackground()
+          }
+
+          setFullscreen(next)
           if (!next && isTauri()) {
             import('@tauri-apps/api/window')
               .then(({ getCurrentWindow }) => restoreMaximizedAfterFullscreenIfNeeded(getCurrentWindow()))

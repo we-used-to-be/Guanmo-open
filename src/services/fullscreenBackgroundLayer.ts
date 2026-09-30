@@ -67,9 +67,9 @@ function clearBackground(): void {
   activeLayer = 0
 }
 
-function startFade(onComplete: () => void, onCancel: (() => void) | null = null): void {
+function startFade(onComplete: () => void, onCancel: (() => void) | null = null): Promise<void> {
   stopFade()
-  fadeDone = new Promise<void>((resolve) => {
+  const done = new Promise<void>((resolve) => {
     finishFade = resolve
     fadeOnCancel = onCancel
     fadeTimer = window.setTimeout(() => {
@@ -81,6 +81,37 @@ function startFade(onComplete: () => void, onCancel: (() => void) | null = null)
       resolve()
     }, window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : BACKGROUND_FADE_MS)
   })
+  fadeDone = done
+  return done
+}
+
+function hasDecodedBackground(): boolean {
+  return layers.some((layer) => layer.url !== null)
+}
+
+/**
+ * Hides the current background while retaining the decoded layers.
+ * Callers can release the layers after the fullscreen transition succeeds,
+ * or restore them when the native transition fails/cancels.
+ */
+export async function fadeOutFullscreenBackground(): Promise<boolean> {
+  const request = revision
+  await waitForFullscreenVisualIdle()
+  if (request !== revision) return false
+
+  if (!hasDecodedBackground()) return true
+  const root = document.documentElement
+  root.style.setProperty('--gm-fullscreen-background-visible', '0%')
+  await startFade(() => undefined)
+  return request === revision
+}
+
+/** Restore a background that was hidden for a pending fullscreen exit. */
+export function restoreFullscreenBackground(): void {
+  ++revision
+  stopFade()
+  if (!hasDecodedBackground()) return
+  document.documentElement.style.setProperty('--gm-fullscreen-background-visible', '100%')
 }
 
 export async function updateFullscreenBackground(selection: BackgroundSelection): Promise<void> {
