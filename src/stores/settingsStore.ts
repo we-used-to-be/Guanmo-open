@@ -64,6 +64,10 @@ interface AppearanceSettings extends AppearanceConfigV1 {
   aiAssistantFontSize: AiAssistantFontSize
   fullscreenTransitionEnabled: boolean
   lastLightThemeId: NonDarkThemeId
+  fullscreenBackgroundPath: string | null
+  fullscreenBackgroundOpacity: number
+  fullscreenBackgroundEnabled: boolean
+  fullscreenBackgroundScene: 'snow' | 'sea' | 'custom'
 }
 
 interface KnowledgeSettings {
@@ -155,6 +159,10 @@ const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   aiAssistantFontSize: 14,
   fullscreenTransitionEnabled: true,
   lastLightThemeId: 'warm',
+  fullscreenBackgroundPath: null,
+  fullscreenBackgroundOpacity: 40,
+  fullscreenBackgroundEnabled: false,
+  fullscreenBackgroundScene: 'custom',
 }
 
 function resolveAiAssistantFontSize(value: unknown): AiAssistantFontSize {
@@ -537,6 +545,20 @@ export const useSettingsStore = create<SettingsState>()(
               fullscreenTransitionEnabled: typeof savedAppearance.fullscreenTransitionEnabled === 'boolean'
                 ? savedAppearance.fullscreenTransitionEnabled
                 : current.appearance.fullscreenTransitionEnabled,
+              fullscreenBackgroundPath: typeof savedAppearance.fullscreenBackgroundPath === 'string' && savedAppearance.fullscreenBackgroundPath
+                ? savedAppearance.fullscreenBackgroundPath
+                : null,
+              fullscreenBackgroundOpacity: typeof savedAppearance.fullscreenBackgroundOpacity === 'number' && Number.isFinite(savedAppearance.fullscreenBackgroundOpacity)
+                ? Math.min(100, Math.max(0, savedAppearance.fullscreenBackgroundOpacity))
+                : savedAppearance.fullscreenBackgroundBrightness === 0
+                  ? 0
+                  : current.appearance.fullscreenBackgroundOpacity,
+              fullscreenBackgroundEnabled: typeof savedAppearance.fullscreenBackgroundEnabled === 'boolean'
+                ? savedAppearance.fullscreenBackgroundEnabled
+                : Boolean(savedAppearance.fullscreenBackgroundPath),
+              fullscreenBackgroundScene: savedAppearance.fullscreenBackgroundScene === 'snow' || savedAppearance.fullscreenBackgroundScene === 'sea'
+                ? savedAppearance.fullscreenBackgroundScene
+                : 'custom',
               ...resolved,
               themeId,
               lastLightThemeId,

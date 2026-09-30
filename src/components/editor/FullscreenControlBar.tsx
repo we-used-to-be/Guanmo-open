@@ -15,6 +15,7 @@ import { ContextMenu, ContextMenuGroupTitle, ContextMenuItem, ContextMenuSeparat
 import { useFullscreen } from '@/hooks/useFullscreen'
 import { useFileRename } from '@/hooks/useFileRename'
 import { SettingSlider } from '@/components/common/SettingSlider'
+import { isTauri, openFileDialog, readBinaryFile } from '@/hooks/useTauri'
 
 type ViewMode = 'edit' | 'preview' | 'edit-preview' | 'dual-preview' | 'diff-preview'
 
@@ -58,6 +59,10 @@ export function FullscreenControlBar({
   const toggleAiPanel = useAppStore((s) => s.toggleAiPanel)
   const themeId = useSettingsStore((s) => s.appearance.themeId)
   const themeSlots = useSettingsStore((s) => s.appearance.themeSlots)
+  const backgroundPath = useSettingsStore((s) => s.appearance.fullscreenBackgroundPath)
+  const backgroundOpacity = useSettingsStore((s) => s.appearance.fullscreenBackgroundOpacity)
+  const backgroundEnabled = useSettingsStore((s) => s.appearance.fullscreenBackgroundEnabled)
+  const backgroundScene = useSettingsStore((s) => s.appearance.fullscreenBackgroundScene)
   const fullscreenContentPaddingPercent = useSettingsStore((s) => s.editor.fullscreenContentPaddingPercent)
   const updateAppearanceSettings = useSettingsStore((s) => s.updateAppearanceSettings)
   const updateEditorSettings = useSettingsStore((s) => s.updateEditorSettings)
@@ -72,6 +77,8 @@ export function FullscreenControlBar({
   const rename = useFileRename()
   const [paddingCardOpen, setPaddingCardOpen] = useState(false)
   const [themeCardOpen, setThemeCardOpen] = useState(false)
+  const [backgroundCardOpen, setBackgroundCardOpen] = useState(false)
+  const [hoveredBackgroundScene, setHoveredBackgroundScene] = useState<typeof backgroundScene | null>(null)
   const [fileMenuOpen, setFileMenuOpen] = useState(false)
   const hideTimerRef = useRef<number | null>(null)
   const contentTimerRef = useRef<number | null>(null)
@@ -80,6 +87,10 @@ export function FullscreenControlBar({
   const widthBeforeRef = useRef<number>(0)
   const widthAnimatingRef = useRef(false)
   const renderedTabModeRef = useRef(false)
+
+  useEffect(() => {
+    if (import.meta.env.MODE !== 'web') void import('@/styles/fullscreenBackground.css')
+  }, [])
 
   const clearHideTimer = useCallback(() => {
     if (hideTimerRef.current !== null) {
@@ -129,13 +140,13 @@ export function FullscreenControlBar({
   }, [clearHideTimer, fileDrawerOpen, onCloseFileDrawer, switchPanel])
 
   const scheduleHide = useCallback(() => {
-    if (productTourStep !== null || fileDrawerOpen || paddingCardOpen || themeCardOpen || fileMenuOpen) return
+    if (productTourStep !== null || fileDrawerOpen || paddingCardOpen || themeCardOpen || backgroundCardOpen || fileMenuOpen) return
     clearHideTimer()
     hideTimerRef.current = window.setTimeout(() => {
       setVisible(false)
       if (!contextMenu) switchPanel(false)
     }, tabMode ? 2200 : 700)
-  }, [clearHideTimer, contextMenu, fileDrawerOpen, fileMenuOpen, paddingCardOpen, productTourStep, switchPanel, tabMode, themeCardOpen])
+  }, [backgroundCardOpen, clearHideTimer, contextMenu, fileDrawerOpen, fileMenuOpen, paddingCardOpen, productTourStep, switchPanel, tabMode, themeCardOpen])
 
   useEffect(() => {
     if (productTourStep === null) {
@@ -174,9 +185,9 @@ export function FullscreenControlBar({
   }, [clearHideTimer, contextMenu, fileDrawerOpen, switchPanel])
 
   useEffect(() => {
-    if (!visible || fileDrawerOpen || paddingCardOpen || themeCardOpen || fileMenuOpen) return
+    if (!visible || fileDrawerOpen || paddingCardOpen || themeCardOpen || backgroundCardOpen || fileMenuOpen) return
     if (!pointerWithinControlRef.current) scheduleHide()
-  }, [contextMenu, fileDrawerOpen, fileMenuOpen, paddingCardOpen, scheduleHide, themeCardOpen, visible])
+  }, [backgroundCardOpen, contextMenu, fileDrawerOpen, fileMenuOpen, paddingCardOpen, scheduleHide, themeCardOpen, visible])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -204,6 +215,12 @@ export function FullscreenControlBar({
         e.preventDefault()
         e.stopPropagation()
         setThemeCardOpen(false)
+        return
+      }
+      if (backgroundCardOpen) {
+        e.preventDefault()
+        e.stopPropagation()
+        setBackgroundCardOpen(false)
         return
       }
       if (fileDrawerOpen) {
@@ -234,21 +251,22 @@ export function FullscreenControlBar({
 
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [contextMenu, exitFullscreen, fileDrawerOpen, fileMenuOpen, onCloseFileDrawer, paddingCardOpen, switchPanel, tabMode, themeCardOpen])
+  }, [backgroundCardOpen, contextMenu, exitFullscreen, fileDrawerOpen, fileMenuOpen, onCloseFileDrawer, paddingCardOpen, switchPanel, tabMode, themeCardOpen])
 
   useEffect(() => {
-    if (!paddingCardOpen && !themeCardOpen && !fileMenuOpen) return
+    if (!paddingCardOpen && !themeCardOpen && !backgroundCardOpen && !fileMenuOpen) return
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null
       if (target?.closest('.gm-product-tour')) return
-      if (target?.closest('[data-fullscreen-padding-control], [data-fullscreen-theme-control], [data-fullscreen-file-menu]')) return
+      if (target?.closest('[data-fullscreen-padding-control], [data-fullscreen-theme-control], [data-fullscreen-background-control], [data-fullscreen-file-menu]')) return
       setPaddingCardOpen(false)
       setThemeCardOpen(false)
+      setBackgroundCardOpen(false)
       setFileMenuOpen(false)
     }
     window.addEventListener('pointerdown', handlePointerDown, true)
     return () => window.removeEventListener('pointerdown', handlePointerDown, true)
-  }, [fileMenuOpen, paddingCardOpen, themeCardOpen])
+  }, [backgroundCardOpen, fileMenuOpen, paddingCardOpen, themeCardOpen])
 
   useLayoutEffect(() => {
     const shell = shellRef.current
@@ -289,6 +307,7 @@ export function FullscreenControlBar({
     clearHideTimer()
     setVisible(true)
     setThemeCardOpen(false)
+    setBackgroundCardOpen(false)
     setFileMenuOpen(false)
     setPaddingCardOpen((open) => !open)
   }, [clearHideTimer])
@@ -297,6 +316,7 @@ export function FullscreenControlBar({
     clearHideTimer()
     setVisible(true)
     setPaddingCardOpen(false)
+    setBackgroundCardOpen(false)
     setFileMenuOpen(false)
     setThemeCardOpen((open) => !open)
   }, [clearHideTimer])
@@ -306,8 +326,57 @@ export function FullscreenControlBar({
     setVisible(true)
     setPaddingCardOpen(false)
     setThemeCardOpen(false)
+    setBackgroundCardOpen(false)
     setFileMenuOpen((open) => !open)
   }, [clearHideTimer])
+
+  const toggleBackgroundCard = useCallback(() => {
+    clearHideTimer()
+    setVisible(true)
+    setPaddingCardOpen(false)
+    setThemeCardOpen(false)
+    setFileMenuOpen(false)
+    setBackgroundCardOpen((open) => !open)
+  }, [clearHideTimer])
+
+  const chooseBackground = useCallback(async () => {
+    try {
+      const selected = await openFileDialog([{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }])
+      if (typeof selected === 'string') updateAppearanceSettings({ fullscreenBackgroundPath: selected, fullscreenBackgroundScene: 'custom', fullscreenBackgroundEnabled: true })
+    } catch {
+      toast.error('背景图片选择失败')
+    }
+  }, [updateAppearanceSettings])
+
+  useEffect(() => {
+    const root = document.documentElement
+    root.style.setProperty('--gm-fullscreen-background-cover', `${100 - backgroundOpacity * 0.75}%`)
+    return () => { root.style.removeProperty('--gm-fullscreen-background-cover') }
+  }, [backgroundOpacity])
+
+  useEffect(() => {
+    const root = document.documentElement
+    let cancelled = false
+    let objectUrl: string | null = null
+    root.style.removeProperty('--gm-fullscreen-background-image')
+    if (backgroundEnabled && backgroundScene === 'custom' && backgroundPath && isTauri()) {
+      void readBinaryFile(backgroundPath).then((bytes) => {
+        if (cancelled) return
+        if (bytes.byteLength > 20 * 1024 * 1024) throw new Error('图片超过 20 MB')
+        const extension = backgroundPath.split('.').pop()?.toLowerCase()
+        const mime = extension === 'jpg' ? 'image/jpeg' : `image/${extension}`
+        objectUrl = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mime }))
+        root.style.setProperty('--gm-fullscreen-background-image', `url("${objectUrl}")`)
+      }).catch(() => {
+        if (!cancelled) toast.error('背景图片无法读取，请重新选择')
+      })
+    }
+    return () => {
+      cancelled = true
+      root.style.removeProperty('--gm-fullscreen-background-image')
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [backgroundEnabled, backgroundPath, backgroundScene])
 
   const selectFileAction = useCallback((action: () => void) => {
     setFileMenuOpen(false)
@@ -506,6 +575,11 @@ export function FullscreenControlBar({
                   主题
                 </BubbleButton>
               </div>
+              {isTauri() && <div data-fullscreen-background-control="true">
+                <BubbleButton onClick={toggleBackgroundCard} active={backgroundCardOpen} title="设置阅读背景" ariaExpanded={backgroundCardOpen} ariaControls="fullscreen-background-card" variant="text">
+                  背景
+                </BubbleButton>
+              </div>}
               <BubbleButton onClick={() => void exitFullscreen()} title="退出全屏">
                 退出
               </BubbleButton>
@@ -651,6 +725,65 @@ export function FullscreenControlBar({
               themes={fullscreenThemes}
               onChange={selectFullscreenTheme}
             />
+          </div>
+        )}
+        {backgroundCardOpen && (
+          <div
+            id="fullscreen-background-card"
+            data-fullscreen-background-control="true"
+            role="dialog"
+            aria-label="设置全屏阅读背景"
+            className="gm-fullscreen-spacing-card absolute left-1/2 top-[calc(100%+10px)] w-[min(440px,calc(100vw-32px))] -translate-x-1/2 rounded-2xl border p-4"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-body font-bold text-gm-text">阅读背景</div>
+                <div className="mt-0.5 text-caption text-gm-text-tertiary">仅显示在全屏预览区域</div>
+              </div>
+              <button
+                type="button"
+                aria-pressed={backgroundEnabled}
+                onClick={() => updateAppearanceSettings({ fullscreenBackgroundEnabled: !backgroundEnabled })}
+                className="gm-fullscreen-file-action rounded-lg px-3 py-2 text-body font-semibold transition-colors"
+              >
+                {backgroundEnabled ? '停用背景' : '启用背景'}
+              </button>
+            </div>
+            <div className="mt-4">
+              <div className="mb-2 text-caption font-semibold text-gm-text-secondary">图片可见度</div>
+              <SettingSlider label="图片可见度" value={backgroundOpacity} min={0} max={100} step={5} onChange={(value) => updateAppearanceSettings({ fullscreenBackgroundOpacity: value })} format={(value) => `${value}%`} />
+            </div>
+            <div className="mt-4 border-t border-gm-border-subtle pt-3">
+              <div className="mb-2 text-caption font-semibold text-gm-text-secondary">场景</div>
+              <div className="gm-fullscreen-background-scenes" onMouseLeave={() => setHoveredBackgroundScene(null)}>
+                {([
+                  { id: 'snow', label: '雪山', hint: '预设待上线' },
+                  { id: 'sea', label: '海边', hint: '预设待上线' },
+                  { id: 'custom', label: '自定义', hint: backgroundPath ? '本地图片' : '选择图片' },
+                ] as const).map((scene) => (
+                  <button
+                    key={scene.id}
+                    type="button"
+                    aria-pressed={backgroundScene === scene.id}
+                    onMouseEnter={() => setHoveredBackgroundScene(scene.id)}
+                    onFocus={() => setHoveredBackgroundScene(scene.id)}
+                    onBlur={() => setHoveredBackgroundScene(null)}
+                    onClick={() => updateAppearanceSettings({ fullscreenBackgroundScene: scene.id })}
+                    className={`gm-fullscreen-background-scene ${((hoveredBackgroundScene ?? backgroundScene) === scene.id) ? 'is-expanded' : ''} ${backgroundScene === scene.id ? 'is-selected' : ''}`}
+                  >
+                    <span className="gm-fullscreen-background-scene__placeholder" aria-hidden="true">{scene.label}</span>
+                    <span className="gm-fullscreen-background-scene__caption"><strong>{scene.label}</strong><small>{scene.hint}</small></span>
+                  </button>
+                ))}
+              </div>
+              {backgroundScene === 'custom' && (
+                <button type="button" onClick={() => void chooseBackground()} className="gm-fullscreen-file-action mt-3 rounded-lg px-3 py-2 text-body font-semibold transition-colors">
+                  {backgroundPath ? '更换图片' : '选择图片'}
+                </button>
+              )}
+              {backgroundScene !== 'custom' && <div className="mt-2 text-caption text-gm-text-tertiary">预设图片即将提供</div>}
+              {backgroundScene === 'custom' && <div className="mt-2 text-caption text-gm-text-tertiary">图片不超过 20 MB，请保留原文件</div>}
+            </div>
           </div>
         )}
       </div>

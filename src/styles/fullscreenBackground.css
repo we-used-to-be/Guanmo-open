@@ -1,0 +1,47 @@
+.gm-fullscreen-preview-content {
+  background-image: linear-gradient(
+      color-mix(in srgb, var(--gm-surface) var(--gm-fullscreen-background-cover, 90%), transparent),
+      color-mix(in srgb, var(--gm-surface) var(--gm-fullscreen-background-cover, 90%), transparent)
+    ),
+    var(--gm-fullscreen-background-image);
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+}
+
+.gm-fullscreen-background-scenes {
+  display: flex;
+  gap: 8px;
+  height: 148px;
+}
+
+.gm-fullscreen-background-scene {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  justify-content: space-between;
+  overflow: hidden;
+  border: 1px solid var(--gm-border);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--gm-surface-elevated);
+  color: var(--gm-text);
+  text-align: left;
+  cursor: pointer;
+  transition: flex-grow 180ms ease, border-color 180ms ease, background-color 180ms ease;
+}
+
+.gm-fullscreen-background-scene.is-expanded { flex-grow: 2.2; }
+.gm-fullscreen-background-scene.is-selected { border-color: var(--gm-primary); }
+.gm-fullscreen-background-scene:hover,
+.gm-fullscreen-background-scene:focus-visible { background: var(--gm-surface-hover); }
+.gm-fullscreen-background-scene:focus-visible { outline: 2px solid var(--gm-primary); outline-offset: 2px; }
+.gm-fullscreen-background-scene__placeholder { align-self: center; margin: auto; color: var(--gm-text-tertiary); font-size: 16px; white-space: nowrap; }
+.gm-fullscreen-background-scene__caption { display: flex; min-width: 0; flex-direction: column; gap: 2px; border-left: 2px solid var(--gm-primary); padding-left: 8px; white-space: nowrap; }
+.gm-fullscreen-background-scene__caption strong { font-size: 13px; }
+.gm-fullscreen-background-scene__caption small { overflow: hidden; color: var(--gm-text-tertiary); font-size: 11px; text-overflow: ellipsis; }
+
+@media (prefers-reduced-motion: reduce) {
+  .gm-fullscreen-background-scene { transition: none; }
+}
