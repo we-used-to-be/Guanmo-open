@@ -14,9 +14,9 @@
 
 ## Review Invocation Policy
 
-- LOW 任务可自动执行相关 Machine Gate 和实现自审，默认不调用独立 Reviewer。
-- MEDIUM 任务自动执行相关 Machine Gate，但默认不自动执行模型 Reviewer。
-- HIGH 任务自动执行完整的相关 Machine Gate，但默认不自动执行模型 Reviewer。
+- LOW 任务执行必要的轻量 Machine Gate 和实现自审，默认不调用独立 Reviewer。
+- MEDIUM 任务按具体风险选择最小必要 Machine Gate，默认不自动执行模型 Reviewer。
+- HIGH 任务先复用已有验证并审查具体风险，仅执行直接决定验收的 Machine Gate；风险等级本身不触发完整 Rust 测试、检查或构建，默认不自动执行模型 Reviewer。
 - 任务结束交接时，Agent 必须同时给出建议验收模型和简短 Skill 调用提示词。模型层级按风险选择，不绑定具体供应商：
 
 | 等级 | 用途 | 推荐模型 |
@@ -31,7 +31,7 @@ MEDIUM / HIGH 任务应提供以下简短提示词：
 
   `使用 ai-code-review Skill 执行本次模型 Review；只审查当前任务范围，遵循 AGENTS.md 和本项目 Review Profile。`
 
-- 只有用户明确指明调用 `ai-code-review` Skill 后，才执行对应风险级别的模型 Review、P0/P1 判断和最多一次 Fix → Re-review；Machine Gate 结果优先复用任务流程中已自动执行的结果。
+- 只有用户明确指明调用 `ai-code-review` Skill 后，才执行对应风险级别的模型 Review、P0/P1 判断和最多一次 Fix → Re-review；Machine Gate 优先复用已有结果，不为模型 Review 自动补跑复杂命令。
 
 ## Blast Radius Analysis（修改前影响分析）
 
@@ -73,13 +73,15 @@ MEDIUM / HIGH 任务应提供以下简短提示词：
 
 ## Verification Commands
 
-| Area | Command | When required |
+下表是可选的验证命令及适用范围，不表示文件命中后必须执行。日常开发与 Code Review 先用当前 diff、已有结果和轻量检查判断；只有具体未覆盖的阻断风险需要命令结果时，才执行最小范围的 Rust 测试、检查、Clippy 或构建。执行前说明必要性与资源开销；磁盘或内存不足时停止并记为 `NOT TESTED`，不得为凑齐门禁扩大测试或清理用户产物。用户明确要求、CI 与发布门禁按各自流程执行。
+
+| Area | Command | 适用条件（不自动触发） |
 |---|---|---|
 | TypeScript typecheck | `npm run typecheck` | 任何 `src/`、`tests/`、Vite 或 TypeScript 配置修改 |
 | Lint | `npm run lint` | 任何前端、测试或构建配置修改 |
-| Frontend unit/component tests | `npm test` | 共享逻辑、组件交互、服务或测试配置修改；CI 基础质量门禁 |
-| Web build | `npm run build` | Web 入口、Web 能力边界、Vite、共享前端或 Web 产物修改 |
-| Desktop frontend build | `npm run build:desktop` | Tauri 入口、桌面能力、Markdown 预览、桌面 UI 或体积边界修改 |
+| Frontend unit/component tests | `npx vitest run <相关测试文件> --maxWorkers=1`；`npm test` | 有具体交互或逻辑回归风险时选定向测试；全量命令留给 CI、发布或用户明确要求 |
+| Web build | `npm run build` | Web 入口、部署、构建配置或产物边界需要构建结果验收时；普通共享前端修改或 Review 不自动执行 |
+| Desktop frontend build | `npm run build:desktop` | 桌面产物、加载边界或体积变化需要构建结果验收时；普通桌面 UI 修改或 Review 不自动执行 |
 | File authorization | `npm run test:file-access` | 文件选择、打开、读写、删除、重命名、工作区、拖放、assets 或路径恢复修改 |
 | Session restore | `npm run test:session-restore` | 最近文件、收藏、持久化标签页或启动恢复修改 |
 | Database/runtime schemas | `npm run test:runtime-schemas` | SQLite row、备份 JSON、迁移、schema 解码或持久化字段修改 |
@@ -91,10 +93,10 @@ MEDIUM / HIGH 任务应提供以下简短提示词：
 | Selection/context routing | `npm run test:selection-context` | 选区、上下文、AI 路由或 Agent 输入边界修改 |
 | Bundle budget | `npm run check:bundle:web` / `npm run check:bundle:desktop` | 对应 Web/Desktop 产物或依赖边界修改 |
 | Rust format | `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` | Rust 源码或 Cargo 配置修改 |
-| Rust lint | `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features --jobs 1 -- -D warnings` | Rust command、数据库事务、HTTP、索引或并发修改 |
-| Rust tests | `cargo test --manifest-path src-tauri/Cargo.toml --all-targets --all-features --jobs 1` | Rust 行为或跨前后端契约修改 |
-| Rust check | `cargo check --manifest-path src-tauri/Cargo.toml --all-targets --all-features --jobs 1` | Rust 行为或 Cargo 配置修改 |
-| Release quality gate | `npm run check:release` | 发布前、共享基础设施或明确要求完整门禁时 |
+| Rust lint | `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features --jobs 1 -- -D warnings` | 具体 Rust 风险需要编译器诊断且轻量检查不足时；日常 Review 不自动执行 |
+| Rust tests | `cargo test --manifest-path src-tauri/Cargo.toml --all-targets --all-features --jobs 1` | 发布门禁或用户明确要求全量 Rust 测试时；其他情况仅在具体风险需要时选择最小定向测试 |
+| Rust check | `cargo check --manifest-path src-tauri/Cargo.toml --all-targets --all-features --jobs 1` | 跨层编译契约确需验证且无可复用结果时；日常 Review 不自动执行 |
+| Release quality gate | `npm run check:release` | 发布前或用户明确要求完整门禁时 |
 | Tauri installer | `npm run tauri build` | 安装包、Tauri bundle、版本或发布产物修改 |
 | Push safety | `node scripts/pre-push-check.mjs` | 仅在用户明确要求推送时，作为推送前安全校验 |
 | Release safety | `node scripts/pre-push-check.mjs --release` | 仅在用户明确要求发布/tag 时，作为发布前安全校验 |
