@@ -67,7 +67,7 @@ interface AppearanceSettings extends AppearanceConfigV1 {
   fullscreenBackgroundPath: string | null
   fullscreenBackgroundOpacity: number
   fullscreenBackgroundEnabled: boolean
-  fullscreenBackgroundScene: 'snow' | 'sea' | 'custom'
+  fullscreenBackgroundScene: 'snow' | 'sea' | 'stars' | 'custom' | `local:${string}`
 }
 
 interface KnowledgeSettings {
@@ -132,6 +132,12 @@ function resolveFullscreenContentPaddingPercent(value: unknown, legacyValue?: un
     FULLSCREEN_CONTENT_PADDING_PERCENT.max,
     Math.max(FULLSCREEN_CONTENT_PADDING_PERCENT.min, Math.round(numericValue)),
   )
+}
+
+function resolveFullscreenBackgroundScene(value: unknown): AppearanceSettings['fullscreenBackgroundScene'] {
+  if (value === 'snow' || value === 'sea' || value === 'stars') return value
+  if (typeof value === 'string' && /^local:[0-9a-f-]{36}$/i.test(value)) return value as `local:${string}`
+  return 'custom'
 }
 
 const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
@@ -556,9 +562,7 @@ export const useSettingsStore = create<SettingsState>()(
               fullscreenBackgroundEnabled: typeof savedAppearance.fullscreenBackgroundEnabled === 'boolean'
                 ? savedAppearance.fullscreenBackgroundEnabled
                 : Boolean(savedAppearance.fullscreenBackgroundPath),
-              fullscreenBackgroundScene: savedAppearance.fullscreenBackgroundScene === 'snow' || savedAppearance.fullscreenBackgroundScene === 'sea'
-                ? savedAppearance.fullscreenBackgroundScene
-                : 'custom',
+              fullscreenBackgroundScene: resolveFullscreenBackgroundScene(savedAppearance.fullscreenBackgroundScene),
               ...resolved,
               themeId,
               lastLightThemeId,

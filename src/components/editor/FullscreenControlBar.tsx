@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { Download, Plus, Trash2 } from 'lucide-react'
 import { useEditorStore, type Tab } from '@/stores/editorStore'
 import { useAppStore } from '@/stores/appStore'
 import { FULLSCREEN_CONTENT_PADDING_PERCENT, useSettingsStore, type ThemeId } from '@/stores/settingsStore'
@@ -16,6 +17,7 @@ import { useFullscreen } from '@/hooks/useFullscreen'
 import { useFileRename } from '@/hooks/useFileRename'
 import { SettingSlider } from '@/components/common/SettingSlider'
 import { isTauri, openFileDialog, readBinaryFile } from '@/hooks/useTauri'
+import { deleteReadingBackground, downloadReadingBackground, importReadingBackground, listReadingBackgrounds, OFFICIAL_BACKGROUNDS, readReadingBackground, type BackgroundItem, type BackgroundLibrary } from '@/services/fullscreenBackgrounds'
 
 type ViewMode = 'edit' | 'preview' | 'edit-preview' | 'dual-preview' | 'diff-preview'
 
@@ -28,6 +30,9 @@ const MODES: Array<{ key: ViewMode; label: string }> = [
 ]
 const PANEL_CONTENT_REVEAL_DELAY = 190
 const FULLSCREEN_PADDING_DEBOUNCE_MS = 150
+const BACKGROUND_FADE_MS = 380
+
+type BackgroundLayer = { key: string | null; url: string | null }
 
 interface FullscreenControlBarProps {
   productTourStep: number | null
@@ -78,7 +83,11 @@ export function FullscreenControlBar({
   const [paddingCardOpen, setPaddingCardOpen] = useState(false)
   const [themeCardOpen, setThemeCardOpen] = useState(false)
   const [backgroundCardOpen, setBackgroundCardOpen] = useState(false)
-  const [hoveredBackgroundScene, setHoveredBackgroundScene] = useState<typeof backgroundScene | null>(null)
+  const [hoveredBackgroundScene, setHoveredBackgroundScene] = useState<string | null>(null)
+  const [backgroundLibrary, setBackgroundLibrary] = useState<BackgroundLibrary>({ downloadedOfficialIds: [], localBackgrounds: [] })
+  const [localThumbnailUrls, setLocalThumbnailUrls] = useState<Record<string, string>>({})
+  const [backgroundRevision, setBackgroundRevision] = useState(0)
+  const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({})
   const [fileMenuOpen, setFileMenuOpen] = useState(false)
   const hideTimerRef = useRef<number | null>(null)
   const contentTimerRef = useRef<number | null>(null)
@@ -87,6 +96,12 @@ export function FullscreenControlBar({
   const widthBeforeRef = useRef<number>(0)
   const widthAnimatingRef = useRef(false)
   const renderedTabModeRef = useRef(false)
+  const backgroundLayersRef = useRef<[BackgroundLayer, BackgroundLayer]>([{ key: null, url: null }, { key: null, url: null }])
+  const activeBackgroundLayerRef = useRef(0)
+  const backgroundRequestRef = useRef(0)
+  const backgroundFadeRef = useRef<Promise<void> | null>(null)
+  const backgroundFadeTimerRef = useRef<number | null>(null)
+  const backgroundFrameRef = useRef<number | null>(null)
 
   useEffect(() => {
     if (import.meta.env.MODE !== 'web') void import('@/styles/fullscreenBackground.css')
@@ -339,14 +354,100 @@ export function FullscreenControlBar({
     setBackgroundCardOpen((open) => !open)
   }, [clearHideTimer])
 
+  useEffect(() => {
+    if (!backgroundCardOpen || !isTauri()) return
+    let cancelled = false
+    const urls: string[] = []
+    void listReadingBackgrounds().then(async (library) => {
+      if (cancelled) return
+      setBackgroundLibrary((current) => ({ ...library, downloadedOfficialIds: [...new Set([...current.downloadedOfficialIds, ...library.downloadedOfficialIds])] }))
+      const thumbnails = await Promise.all(library.localBackgrounds.map(async (item) => {
+        try {
+          const bytes = await readReadingBackground(item.id, true)
+          if (cancelled) return null
+          const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }))
+          urls.push(url)
+          return [item.id, url] as const
+        } catch { return null }
+      }))
+      if (!cancelled) setLocalThumbnailUrls(Object.fromEntries(thumbnails.filter((item) => item !== null)))
+    }).catch(() => { if (!cancelled) toast.error('背景列表读取失败') })
+    return () => {
+      cancelled = true
+      urls.forEach(URL.revokeObjectURL)
+      setLocalThumbnailUrls({})
+    }
+  }, [backgroundCardOpen, backgroundRevision])
+
+  const backgroundItems = useMemo<BackgroundItem[]>(() => [
+    ...OFFICIAL_BACKGROUNDS.map((item) => ({ ...item, downloaded: backgroundLibrary.downloadedOfficialIds.includes(item.id) })),
+    ...backgroundLibrary.localBackgrounds.map((item) => ({
+      ...item, kind: 'local' as const, thumbnail: localThumbnailUrls[item.id] ?? '', downloaded: true,
+    })),
+  ], [backgroundLibrary, localThumbnailUrls])
+
   const chooseBackground = useCallback(async () => {
+    if (backgroundLibrary.localBackgrounds.length >= 3) {
+      toast.error('最多添加 3 张背景')
+      return
+    }
     try {
       const selected = await openFileDialog([{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }])
-      if (typeof selected === 'string') updateAppearanceSettings({ fullscreenBackgroundPath: selected, fullscreenBackgroundScene: 'custom', fullscreenBackgroundEnabled: true })
+      if (typeof selected === 'string') {
+        const item = await importReadingBackground(selected)
+        updateAppearanceSettings({ fullscreenBackgroundPath: null, fullscreenBackgroundScene: `local:${item.id}`, fullscreenBackgroundEnabled: true })
+        setBackgroundRevision((value) => value + 1)
+      }
     } catch {
-      toast.error('背景图片选择失败')
+      toast.error('背景图片导入失败')
     }
-  }, [updateAppearanceSettings])
+  }, [backgroundLibrary.localBackgrounds.length, updateAppearanceSettings])
+
+  const selectBackground = useCallback((item: BackgroundItem) => {
+    if (item.kind === 'official' && !item.downloaded) {
+      if (downloadProgress[item.id] !== undefined) return
+      setDownloadProgress((current) => ({ ...current, [item.id]: 0 }))
+      void downloadReadingBackground(item.id, (percent) => {
+        setDownloadProgress((current) => ({ ...current, [item.id]: percent }))
+      }).then(() => {
+        setBackgroundLibrary((current) => ({ ...current, downloadedOfficialIds: [...new Set([...current.downloadedOfficialIds, item.id])] }))
+        updateAppearanceSettings({ fullscreenBackgroundScene: item.id as 'snow' | 'sea' | 'stars', fullscreenBackgroundEnabled: true })
+      }).catch(() => toast.error(`${item.label}下载失败，请重试`)).finally(() => {
+        setDownloadProgress((current) => {
+          const next = { ...current }
+          delete next[item.id]
+          return next
+        })
+      })
+      return
+    }
+    updateAppearanceSettings({ fullscreenBackgroundScene: item.kind === 'local' ? `local:${item.id}` : item.id as 'snow' | 'sea' | 'stars', fullscreenBackgroundEnabled: true })
+  }, [downloadProgress, updateAppearanceSettings])
+
+  const removeBackground = useCallback(async (item: BackgroundItem) => {
+    try {
+      await deleteReadingBackground(item.id)
+      if (backgroundScene === `local:${item.id}`) {
+        updateAppearanceSettings({ fullscreenBackgroundScene: 'custom', fullscreenBackgroundPath: null, fullscreenBackgroundEnabled: false })
+      }
+      setBackgroundRevision((value) => value + 1)
+    } catch { toast.error('背景删除失败') }
+  }, [backgroundScene, updateAppearanceSettings])
+
+  useEffect(() => {
+    if (!backgroundPath || !isTauri()) return
+    let cancelled = false
+    void importReadingBackground(backgroundPath).then((item) => {
+      const current = useSettingsStore.getState().appearance
+      if (current.fullscreenBackgroundPath !== backgroundPath) {
+        void deleteReadingBackground(item.id)
+        return
+      }
+      useSettingsStore.getState().updateAppearanceSettings({ fullscreenBackgroundPath: null, ...(current.fullscreenBackgroundScene === 'custom' ? { fullscreenBackgroundScene: `local:${item.id}` as const } : {}) })
+      if (!cancelled) setBackgroundRevision((value) => value + 1)
+    }).catch(() => undefined)
+    return () => { cancelled = true }
+  }, [backgroundPath])
 
   useEffect(() => {
     const root = document.documentElement
@@ -356,27 +457,92 @@ export function FullscreenControlBar({
 
   useEffect(() => {
     const root = document.documentElement
-    let cancelled = false
-    let objectUrl: string | null = null
-    root.style.removeProperty('--gm-fullscreen-background-image')
-    if (backgroundEnabled && backgroundScene === 'custom' && backgroundPath && isTauri()) {
-      void readBinaryFile(backgroundPath).then((bytes) => {
-        if (cancelled) return
-        if (bytes.byteLength > 20 * 1024 * 1024) throw new Error('图片超过 20 MB')
-        const extension = backgroundPath.split('.').pop()?.toLowerCase()
-        const mime = extension === 'jpg' ? 'image/jpeg' : `image/${extension}`
-        objectUrl = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mime }))
-        root.style.setProperty('--gm-fullscreen-background-image', `url("${objectUrl}")`)
-      }).catch(() => {
-        if (!cancelled) toast.error('背景图片无法读取，请重新选择')
-      })
+    const request = ++backgroundRequestRef.current
+    const active = activeBackgroundLayerRef.current
+    if (backgroundFrameRef.current !== null) {
+      window.cancelAnimationFrame(backgroundFrameRef.current)
+      backgroundFrameRef.current = null
+      const pending = 1 - active
+      const layer = backgroundLayersRef.current[pending]
+      if (layer.url) URL.revokeObjectURL(layer.url)
+      backgroundLayersRef.current[pending] = { key: null, url: null }
+      root.style.removeProperty(`--gm-fullscreen-background-image-${pending}`)
     }
-    return () => {
-      cancelled = true
-      root.style.removeProperty('--gm-fullscreen-background-image')
-      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    const key = backgroundScene === 'custom' ? backgroundPath : backgroundScene
+    if (!backgroundEnabled || !isTauri() || !key) {
+      root.style.setProperty('--gm-fullscreen-background-visible', '0%')
+      return
     }
+    if (backgroundLayersRef.current[active].key === key) {
+      root.style.setProperty('--gm-fullscreen-background-visible', '100%')
+      return
+    }
+
+    const id = backgroundScene.startsWith('local:') ? backgroundScene.slice(6) : backgroundScene
+    const source = backgroundScene === 'custom' && backgroundPath
+      ? readBinaryFile(backgroundPath, { maxBytes: 20 * 1024 * 1024 })
+      : readReadingBackground(id).then((bytes) => new Uint8Array(bytes))
+    void source.then(async (bytes) => {
+      if (request !== backgroundRequestRef.current) return
+      if (bytes.byteLength > 20 * 1024 * 1024) throw new Error('图片超过 20 MB')
+      const extension = backgroundScene === 'custom' ? backgroundPath?.split('.').pop()?.toLowerCase()
+        : bytes[0] === 0xff ? 'jpg' : bytes[0] === 0x47 ? 'gif' : bytes[0] === 0x52 ? 'webp' : bytes[0] === 0x42 ? 'bmp' : 'png'
+      const mime = extension === 'jpg' ? 'image/jpeg' : `image/${extension}`
+      const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mime }))
+      try {
+        const image = new Image()
+        image.src = url
+        if (image.decode) await image.decode()
+        if (backgroundFadeRef.current) await backgroundFadeRef.current
+        if (request !== backgroundRequestRef.current) return
+        const previous = activeBackgroundLayerRef.current
+        const next = 1 - previous
+        const layers = backgroundLayersRef.current
+        if (layers[next].url) URL.revokeObjectURL(layers[next].url)
+        layers[next] = { key, url }
+        root.style.setProperty(`--gm-fullscreen-background-image-${next}`, `url("${url}")`)
+        backgroundFrameRef.current = window.requestAnimationFrame(() => {
+          backgroundFrameRef.current = null
+          if (request !== backgroundRequestRef.current) {
+            URL.revokeObjectURL(url)
+            layers[next] = { key: null, url: null }
+            root.style.removeProperty(`--gm-fullscreen-background-image-${next}`)
+            return
+          }
+          root.style.setProperty('--gm-fullscreen-background-mix', next === 1 ? '100%' : '0%')
+          root.style.setProperty('--gm-fullscreen-background-visible', '100%')
+          activeBackgroundLayerRef.current = next
+          backgroundFadeRef.current = new Promise<void>((resolve) => {
+            backgroundFadeTimerRef.current = window.setTimeout(() => {
+              backgroundFadeTimerRef.current = null
+              if (layers[previous].url) URL.revokeObjectURL(layers[previous].url)
+              layers[previous] = { key: null, url: null }
+              root.style.removeProperty(`--gm-fullscreen-background-image-${previous}`)
+              backgroundFadeRef.current = null
+              resolve()
+            }, window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : BACKGROUND_FADE_MS)
+          })
+        })
+      } finally {
+        if (backgroundLayersRef.current.every((layer) => layer.url !== url)) URL.revokeObjectURL(url)
+      }
+    }).catch(() => {
+      if (request === backgroundRequestRef.current) toast.error('背景图片无法读取，请重新选择')
+    })
   }, [backgroundEnabled, backgroundPath, backgroundScene])
+
+  useEffect(() => () => {
+    ++backgroundRequestRef.current
+    if (backgroundFrameRef.current !== null) window.cancelAnimationFrame(backgroundFrameRef.current)
+    if (backgroundFadeTimerRef.current !== null) window.clearTimeout(backgroundFadeTimerRef.current)
+    for (const layer of backgroundLayersRef.current) if (layer.url) URL.revokeObjectURL(layer.url)
+    const root = document.documentElement
+    for (const index of [0, 1]) {
+      root.style.removeProperty(`--gm-fullscreen-background-image-${index}`)
+    }
+    root.style.removeProperty('--gm-fullscreen-background-mix')
+    root.style.removeProperty('--gm-fullscreen-background-visible')
+  }, [])
 
   const selectFileAction = useCallback((action: () => void) => {
     setFileMenuOpen(false)
@@ -756,33 +922,34 @@ export function FullscreenControlBar({
             <div className="mt-4 border-t border-gm-border-subtle pt-3">
               <div className="mb-2 text-caption font-semibold text-gm-text-secondary">场景</div>
               <div className="gm-fullscreen-background-scenes" onMouseLeave={() => setHoveredBackgroundScene(null)}>
-                {([
-                  { id: 'snow', label: '雪山', hint: '预设待上线' },
-                  { id: 'sea', label: '海边', hint: '预设待上线' },
-                  { id: 'custom', label: '自定义', hint: backgroundPath ? '本地图片' : '选择图片' },
-                ] as const).map((scene) => (
-                  <button
-                    key={scene.id}
-                    type="button"
-                    aria-pressed={backgroundScene === scene.id}
-                    onMouseEnter={() => setHoveredBackgroundScene(scene.id)}
-                    onFocus={() => setHoveredBackgroundScene(scene.id)}
-                    onBlur={() => setHoveredBackgroundScene(null)}
-                    onClick={() => updateAppearanceSettings({ fullscreenBackgroundScene: scene.id })}
-                    className={`gm-fullscreen-background-scene ${((hoveredBackgroundScene ?? backgroundScene) === scene.id) ? 'is-expanded' : ''} ${backgroundScene === scene.id ? 'is-selected' : ''}`}
-                  >
-                    <span className="gm-fullscreen-background-scene__placeholder" aria-hidden="true">{scene.label}</span>
-                    <span className="gm-fullscreen-background-scene__caption"><strong>{scene.label}</strong><small>{scene.hint}</small></span>
-                  </button>
+                {backgroundItems.filter((item) => item.kind === 'official').map((item) => (
+                  <BackgroundSceneCard key={item.id} item={item} selected={backgroundScene === item.id}
+                    expanded={(hoveredBackgroundScene ?? backgroundScene) === item.id}
+                    progress={downloadProgress[item.id]} onHover={setHoveredBackgroundScene}
+                    onSelect={() => selectBackground(item)} />
                 ))}
               </div>
-              {backgroundScene === 'custom' && (
-                <button type="button" onClick={() => void chooseBackground()} className="gm-fullscreen-file-action mt-3 rounded-lg px-3 py-2 text-body font-semibold transition-colors">
-                  {backgroundPath ? '更换图片' : '选择图片'}
+              <div className="mt-4 mb-2 flex items-center justify-between">
+                <div className="text-caption font-semibold text-gm-text-secondary">我的背景</div>
+                <button type="button" onClick={() => void chooseBackground()} disabled={backgroundLibrary.localBackgrounds.length >= 3}
+                  title={backgroundLibrary.localBackgrounds.length >= 3 ? '最多添加 3 张背景' : '导入本地背景'}
+                  className="gm-fullscreen-file-action flex items-center gap-1 rounded-lg px-2 py-1 text-caption font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-45">
+                  <Plus size={14} aria-hidden="true" />导入
                 </button>
+              </div>
+              {backgroundLibrary.localBackgrounds.length >= 3 && <div className="mb-2 text-caption text-gm-text-tertiary">最多添加 3 张背景</div>}
+              {backgroundLibrary.localBackgrounds.length === 0 ? (
+                <div className="gm-fullscreen-background-empty">还没有导入背景</div>
+              ) : (
+                <div className="gm-fullscreen-background-scenes" onMouseLeave={() => setHoveredBackgroundScene(null)}>
+                  {backgroundItems.filter((item) => item.kind === 'local').map((item) => (
+                    <BackgroundSceneCard key={item.id} item={item} selected={backgroundScene === `local:${item.id}`}
+                      expanded={(hoveredBackgroundScene ?? backgroundScene) === `local:${item.id}`}
+                      onHover={(id) => setHoveredBackgroundScene(id ? `local:${id}` : null)}
+                      onSelect={() => selectBackground(item)} onDelete={() => void removeBackground(item)} />
+                  ))}
+                </div>
               )}
-              {backgroundScene !== 'custom' && <div className="mt-2 text-caption text-gm-text-tertiary">预设图片即将提供</div>}
-              {backgroundScene === 'custom' && <div className="mt-2 text-caption text-gm-text-tertiary">图片不超过 20 MB，请保留原文件</div>}
             </div>
           </div>
         )}
@@ -914,6 +1081,41 @@ function BubbleButton({
 
 function Separator() {
   return <div className="mx-1.5 h-4 w-px bg-gm-border-subtle" />
+}
+
+function BackgroundSceneCard({ item, selected, expanded, progress, onHover, onSelect, onDelete }: {
+  item: BackgroundItem
+  selected: boolean
+  expanded: boolean
+  progress?: number
+  onHover: (id: string | null) => void
+  onSelect: () => void
+  onDelete?: () => void
+}) {
+  return (
+    <div className={`gm-fullscreen-background-scene ${expanded ? 'is-expanded' : ''} ${selected ? 'is-selected' : ''}`}
+      onMouseEnter={() => onHover(item.id)} onMouseLeave={() => onHover(null)}>
+      <button type="button" aria-label={item.downloaded ? `使用${item.label}背景` : `下载${item.label}背景`}
+        aria-pressed={selected} disabled={progress !== undefined} onFocus={() => onHover(item.id)}
+        onBlur={() => onHover(null)} onClick={onSelect} className="gm-fullscreen-background-scene__select">
+        {item.thumbnail && <img src={item.thumbnail} alt="" className="gm-fullscreen-background-scene__image" />}
+        {item.kind === 'official' && !item.downloaded && (
+          <span className="gm-fullscreen-background-scene__download" aria-label={progress === undefined ? '未下载' : `下载进度 ${progress}%`}>
+            {progress === undefined ? <Download size={21} aria-hidden="true" /> : (
+              <svg width="32" height="32" viewBox="0 0 36 36" aria-hidden="true">
+                <circle cx="18" cy="18" r="15" fill="none" stroke="currentColor" strokeOpacity="0.35" strokeWidth="3" />
+                <circle cx="18" cy="18" r="15" fill="none" stroke="currentColor" strokeWidth="3"
+                  strokeDasharray={`${Math.max(progress, 2) * 0.942} 94.2`} transform="rotate(-90 18 18)" />
+              </svg>
+            )}
+          </span>
+        )}
+        <span className="gm-fullscreen-background-scene__caption"><strong>{item.label}</strong></span>
+      </button>
+      {onDelete && <button type="button" aria-label={`删除${item.label}背景`} title="删除背景"
+        className="gm-fullscreen-background-scene__delete" onClick={onDelete}><Trash2 size={14} aria-hidden="true" /></button>}
+    </div>
+  )
 }
 
 function FullscreenThemeSegmented({

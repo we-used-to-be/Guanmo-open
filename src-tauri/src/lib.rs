@@ -15,6 +15,7 @@ use tauri::{Emitter, Manager, State};
 use tauri_plugin_fs::FsExt;
 
 mod api_http;
+mod background_library;
 mod database_transactions;
 mod perf_monitor;
 mod rag_index;
@@ -1161,15 +1162,29 @@ fn write_text_file_by_path(
 }
 
 #[tauri::command]
-fn read_binary_file_by_path(app: tauri::AppHandle, path: String) -> Result<Vec<u8>, String> {
+fn read_binary_file_by_path(
+    app: tauri::AppHandle,
+    path: String,
+    max_bytes: Option<u64>,
+) -> Result<Vec<u8>, String> {
     let state = app.state::<FsAccessState>();
     wait_for_file_access_restore_state(state.inner());
     let path =
         ensure_allowed_existing_image_file(&state, &PathBuf::from(path), FileAction::ReadBinary)
             .inspect_err(|_| report_file_access_failure("read.binary-authorize"))?;
-    fs::read(path).map_err(|err| {
+    let file = fs::File::open(path).map_err(|err| err.to_string())?;
+    let bytes = if let Some(limit) = max_bytes {
+        read_bytes_with_limit(file, limit)
+    } else {
+        let mut file = file;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .map_err(|err| err.to_string())?;
+        Ok(bytes)
+    };
+    bytes.map_err(|err| {
         report_file_access_failure("read.binary");
-        err.to_string()
+        err
     })
 }
 
@@ -1750,6 +1765,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            background_library::list_reading_backgrounds,
+            background_library::read_reading_background,
+            background_library::import_reading_background,
+            background_library::delete_reading_background,
+            background_library::download_reading_background,
             reading_reminder_notifications::get_windows_notification_status,
             reading_reminder_notifications::show_windows_notification,
             reading_reminder_notifications::schedule_reading_reminder_notification,
