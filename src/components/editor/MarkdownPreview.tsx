@@ -3262,6 +3262,7 @@ function MermaidBlock({ code, startLine, endLine }: { code: string; startLine?: 
   useEffect(() => {
     let cancelled = false
     async function render() {
+      const diagnosticStartedAt = performance.now()
       try {
         const mermaid = (await import('mermaid')).default
         const styles = getComputedStyle(document.documentElement)
@@ -3291,9 +3292,14 @@ function MermaidBlock({ code, startLine, endLine }: { code: string; startLine?: 
         if (!cancelled) {
           setSvg(result.svg)
           setError(null)
+          const durationMs = performance.now() - diagnosticStartedAt
+          if (durationMs >= 500) void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+            recordDiagnostic('markdown.render_slow', 'slow', durationMs)).catch(() => undefined)
         }
       } catch (err) {
         if (!cancelled) {
+          void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+            recordDiagnostic('markdown.render_failed', 'error', performance.now() - diagnosticStartedAt)).catch(() => undefined)
           setSvg('')
           setError(err instanceof Error ? err.message : String(err))
         }

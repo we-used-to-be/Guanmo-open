@@ -62,7 +62,20 @@ export async function readFile(path: string, options: ReadFileOptions = {}): Pro
   const { invoke } = await import('@tauri-apps/api/core')
   const payload: { path: string; maxBytes?: number } = { path: nativePath }
   if (options.maxBytes !== undefined) payload.maxBytes = options.maxBytes
-  return invoke<string>('read_text_file_by_path', payload)
+  const startedAt = performance.now()
+  try {
+    const content = await invoke<string>('read_text_file_by_path', payload)
+    const durationMs = performance.now() - startedAt
+    if (durationMs >= 200) {
+      void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+        recordDiagnostic('file.read_slow', 'slow', durationMs)).catch(() => undefined)
+    }
+    return content
+  } catch (error) {
+    void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+      recordDiagnostic('file.read_failed', 'error', performance.now() - startedAt)).catch(() => undefined)
+    throw error
+  }
 }
 
 export interface LegacyFileAccessMigrationResult {
@@ -121,7 +134,13 @@ export async function writeFile(path: string, content: string): Promise<void> {
   await waitForFileAccessRestore()
   const nativePath = toNativeFilePath(path)
   const { invoke } = await import('@tauri-apps/api/core')
-  return invoke<void>('write_text_file_by_path', { path: nativePath, content })
+  try {
+    return await invoke<void>('write_text_file_by_path', { path: nativePath, content })
+  } catch (error) {
+    void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+      recordDiagnostic('file.write_failed', 'error')).catch(() => undefined)
+    throw error
+  }
 }
 
 export async function readBinaryFile(path: string, options: ReadFileOptions = {}): Promise<Uint8Array> {

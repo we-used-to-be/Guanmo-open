@@ -17,6 +17,7 @@ use tauri_plugin_fs::FsExt;
 mod api_http;
 mod background_library;
 mod database_transactions;
+mod diagnostics;
 mod perf_monitor;
 mod rag_index;
 mod reading_reminder_notifications;
@@ -1733,6 +1734,7 @@ pub fn run() {
             // （OS 窗口 + WebView2 环境/控制器）创建，再执行本回调。
             startup_metrics::mark("SETUP_CALLBACK_START");
             startup_metrics::mark("T2_WINDOW_CREATED");
+            diagnostics::install_panic_hook(app.handle().clone());
             if let Err(err) =
                 reading_reminder_notifications::ensure_windows_notification_registration()
             {
@@ -1819,10 +1821,21 @@ pub fn run() {
             rag_index::refresh_rag_index_document,
             rag_index::remove_rag_index_document,
             perf_monitor::get_perf_snapshot,
+            diagnostics::record_diagnostic_event,
+            diagnostics::get_diagnostics_mode,
+            diagnostics::set_diagnostics_mode,
+            diagnostics::clear_diagnostics,
+            diagnostics::open_diagnostics_dir,
+            diagnostics::export_diagnostics_zip,
             startup_metrics::record_startup_metrics,
             window_transitions::begin_fullscreen_dwm_transition,
             window_transitions::end_fullscreen_dwm_transition,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                diagnostics::record_exit(app);
+            }
+        });
 }
