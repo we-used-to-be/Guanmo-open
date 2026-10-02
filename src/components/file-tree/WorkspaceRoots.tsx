@@ -8,6 +8,7 @@ import { indexWorkspaceDocuments } from '@/services/workspaceIndex'
 import { toast } from '@/services/toast'
 import { getRuntimeCapabilities } from '@/services/runtimeCapabilities'
 import type { FileNode } from '@/services/fileTree'
+import { TreeCollapse } from './TreeCollapse'
 
 interface WorkspaceRootsProps {
   onOpenFile: (path: string) => void
@@ -325,7 +326,7 @@ export function WorkspaceRoots({ onOpenFile }: WorkspaceRootsProps) {
                         fill="none"
                         stroke="currentColor"
                         strokeWidth="2"
-                        className={`shrink-0 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
+                        className={`shrink-0 ${reducedMotion ? '' : 'transition-transform duration-200'} ${expanded ? 'rotate-90' : ''}`}
                       >
                         <path d="M9 18l6-6-6-6" />
                       </svg>
@@ -358,8 +359,7 @@ export function WorkspaceRoots({ onOpenFile }: WorkspaceRootsProps) {
                       移除
                     </button>
                   </div>
-                  {expanded && (
-                    <div className="pt-1">
+                  <TreeCollapse open={expanded} reducedMotion={reducedMotion} className="pt-1">
                       {rootSummaries[root.id] && (
                         <div className="mb-1 rounded-lg border border-gm-border bg-gm-surface-elevated px-2 py-1.5 text-micro text-gm-text-tertiary break-words whitespace-pre-line">
                           {rootSummaries[root.id]}
@@ -381,8 +381,7 @@ export function WorkspaceRoots({ onOpenFile }: WorkspaceRootsProps) {
                           onCloseWorkspace={() => handleRemove(root.id)}
                         />
                       )}
-                    </div>
-                  )}
+                  </TreeCollapse>
                 </section>
               )
             })}

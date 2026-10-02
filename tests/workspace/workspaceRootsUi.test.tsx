@@ -53,16 +53,29 @@ describe('WorkspaceRoots', () => {
     mocks.indexWorkspaceDocuments.mockResolvedValue({ indexed: 1, skipped: 0, failed: 0, errors: [] })
   })
 
-  it('renders three roots and collapses them independently', () => {
+  it('renders three roots and collapses them independently', async () => {
     render(<WorkspaceRoots onOpenFile={vi.fn()} />)
 
     expect(screen.getByText('3 个文件夹')).toBeInTheDocument()
     expect(screen.getByTestId('tree-D:/Notes')).toBeInTheDocument()
+    expect(screen.getByTestId('tree-D:/Notes').parentElement).toHaveStyle({ overflow: 'visible' })
     expect(screen.getByTestId('tree-E:/Study')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '折叠 Study' }))
-    expect(screen.queryByTestId('tree-E:/Study')).not.toBeInTheDocument()
+    expect(screen.getByTestId('tree-E:/Study').closest('[aria-hidden="true"]')).toHaveProperty('inert', true)
+    await waitFor(() => expect(screen.queryByTestId('tree-E:/Study')).not.toBeInTheDocument())
     expect(screen.getByTestId('tree-D:/Notes')).toBeInTheDocument()
     expect(screen.queryByText(/已隐藏/)).not.toBeInTheDocument()
+  })
+
+  it('reopens a root during its exit without duplicating the tree', () => {
+    render(<WorkspaceRoots onOpenFile={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: '折叠 Study' }))
+    expect(screen.getByTestId('tree-E:/Study').closest('[aria-hidden="true"]')).toHaveProperty('inert', true)
+    fireEvent.click(screen.getByRole('button', { name: '展开 Study' }))
+
+    expect(screen.getAllByTestId('tree-E:/Study')).toHaveLength(1)
+    expect(screen.getByTestId('tree-E:/Study').closest('[aria-hidden="true"]')).toBeNull()
   })
 
   it('removes only the selected root record', () => {

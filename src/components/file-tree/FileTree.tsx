@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from 'react'
+import { useReducedMotion } from 'motion/react'
 import { useEditorStore } from '@/stores/editorStore'
 import { createFile, createFolder, openFile } from '@/services/fileSystem'
 import type { FileNode } from '@/services/fileTree'
@@ -18,6 +19,7 @@ import { Tooltip, TruncatedText } from '@/components/common/Tooltip'
 import { useFileRename } from '@/hooks/useFileRename'
 import { revealFileInFolder } from '@/hooks/useTauri'
 import { getRuntimeCapabilities } from '@/services/runtimeCapabilities'
+import { TreeCollapse } from './TreeCollapse'
 
 interface FileTreeProps {
   nodes: FileNode[]
@@ -33,6 +35,7 @@ export function FileTree({ nodes, onOpenFile, workspacePath, onRefreshWorkspace,
   const [newName, setNewName] = useState('')
   const createCancelledRef = useRef(false)
   const createSubmittingRef = useRef(false)
+  const reducedMotion = useReducedMotion() ?? false
 
   const handleBlankContextMenu = useCallback((e: React.MouseEvent) => {
     if (!workspacePath) return
@@ -86,7 +89,7 @@ export function FileTree({ nodes, onOpenFile, workspacePath, onRefreshWorkspace,
         <EmptyState />
       ) : (
         nodes.map((node) => (
-          <FileTreeNode key={node.path} node={node} depth={0} onOpenFile={onOpenFile} onRefreshWorkspace={onRefreshWorkspace} />
+          <FileTreeNode key={node.path} node={node} depth={0} onOpenFile={onOpenFile} onRefreshWorkspace={onRefreshWorkspace} reducedMotion={reducedMotion} />
         ))
       )}
       {creating && (
@@ -166,11 +169,13 @@ function FileTreeNode({
   depth,
   onOpenFile,
   onRefreshWorkspace,
+  reducedMotion,
 }: {
   node: FileNode
   depth: number
   onOpenFile?: (path: string) => void
   onRefreshWorkspace?: () => void
+  reducedMotion: boolean
 }) {
   const [expanded, setExpanded] = useState(depth === 0)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
@@ -245,6 +250,7 @@ function FileTreeNode({
       <button
         data-file-tree-node="true"
         draggable
+        aria-expanded={node.type === 'directory' ? expanded : undefined}
         onClick={handleClick}
         onContextMenu={handleContextMenu}
         onDragStart={handleDragStart}
@@ -264,7 +270,7 @@ function FileTreeNode({
             fill="none"
             stroke="currentColor"
             strokeWidth="2"
-            className={`flex-shrink-0 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
+            className={`flex-shrink-0 ${reducedMotion ? '' : 'transition-transform duration-200'} ${expanded ? 'rotate-90' : ''}`}
           >
             <path d="M9 18l6-6-6-6" />
           </svg>
@@ -376,12 +382,12 @@ function FileTreeNode({
       )}
 
       {/* Children */}
-      {node.type === 'directory' && expanded && node.children && (
-        <div>
+      {node.type === 'directory' && node.children && (
+        <TreeCollapse open={expanded} reducedMotion={reducedMotion}>
           {node.children.map((child) => (
-            <FileTreeNode key={child.path} node={child} depth={depth + 1} onOpenFile={onOpenFile} onRefreshWorkspace={onRefreshWorkspace} />
+            <FileTreeNode key={child.path} node={child} depth={depth + 1} onOpenFile={onOpenFile} onRefreshWorkspace={onRefreshWorkspace} reducedMotion={reducedMotion} />
           ))}
-        </div>
+        </TreeCollapse>
       )}
     </div>
   )
