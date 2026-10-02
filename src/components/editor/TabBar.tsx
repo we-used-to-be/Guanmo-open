@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from 'react'
+import { motion, useReducedMotion } from 'motion/react'
 import { invoke } from '@tauri-apps/api/core'
 import { useEditorStore, type Tab } from '@/stores/editorStore'
 import { exportMarkdownAsHtml, exportMarkdownAsPdf } from '@/services/markdownExport'
@@ -40,6 +41,7 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
   const rename = useFileRename()
   const exportButtonRef = useRef<HTMLButtonElement>(null)
   const draggedTabIdRef = useRef<string | null>(null)
+  const reducedMotion = useReducedMotion() ?? false
 
   const handleContextMenu = useCallback((e: React.MouseEvent, tabId: string) => {
     e.preventDefault()
@@ -304,14 +306,16 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
                     : ''
                 }`}
               >
-                <span
-                  aria-hidden="true"
-                  data-tab-active-indicator
-                  className={`pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-gm-primary transition-opacity duration-100 ${
-                    activeTabId === tab.id ? 'opacity-100' : 'opacity-0'
-                  }`}
-                  style={{ backgroundColor: 'var(--gm-active-indicator)' }}
-                />
+                {activeTabId === tab.id && (
+                  <motion.span
+                    layoutId="tab-active-indicator"
+                    transition={reducedMotion ? { duration: 0 } : { duration: 0.2, ease: [0.23, 1, 0.32, 1] }}
+                    aria-hidden="true"
+                    data-tab-active-indicator
+                    className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-gm-primary opacity-100"
+                    style={{ backgroundColor: 'var(--gm-active-indicator)' }}
+                  />
+                )}
                 {rename.isRenaming(tab.id) ? (
                   <input
                     autoFocus
