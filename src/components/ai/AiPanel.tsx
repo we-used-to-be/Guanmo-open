@@ -1,4 +1,6 @@
 import { memo, useState, useRef, useEffect, useCallback, useMemo, type CSSProperties, type PointerEventHandler } from 'react'
+import { createPortal } from 'react-dom'
+import { motion } from 'motion/react'
 import { useAppStore } from '@/stores/appStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -67,6 +69,7 @@ import {
   READING_REMINDER_FEATURE_AVAILABLE,
 } from '@/services/readingReminderFeature'
 import { getRuntimeCapabilities } from '@/services/runtimeCapabilities'
+import { createMorphingSurfaceMotion } from '@/components/common/useMorphingMotion'
 
 type AiPanelProps = {
   fullscreenDragHandleProps?: {
@@ -81,6 +84,46 @@ const STREAM_START_FOLLOW_PX = 180
 const STREAM_GROWTH_FOLLOW_PX = 120
 const STREAM_BOTTOM_GAP_PX = 96
 const SAVE_CONTROLS_HIDE_DELAY_MS = 700
+const SEND_ANIMATION_DURATION_MS = 260
+const SEND_ANIMATION_FADE_MS = 120
+const SEND_ANIMATION_POINT_SIZE = 12
+
+type SendAnimationPhase = 'waiting' | 'flying' | 'arrived' | 'cancelled'
+
+type SendAnimationState = {
+  token: number
+  phase: SendAnimationPhase
+  beforeMessageCount: number
+  messageKey: string | null
+  sourceX: number
+  sourceY: number
+  sourceColor: string
+  targetLeft: number
+  targetTop: number
+  targetWidth: number
+  targetHeight: number
+  bubbleColor: string
+}
+
+function prefersReducedMotion() {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
+function getVisibleSendBubble(container: HTMLElement | null, messageKey: string) {
+  const row = container
+    ? Array.from(container.querySelectorAll<HTMLElement>('[data-chat-message-id]'))
+      .find((element) => element.dataset.chatMessageId === messageKey)
+    : null
+  const target = row?.querySelector<HTMLElement>('[data-send-animation-bubble]')
+  if (!target || !container) return null
+  const containerRect = container.getBoundingClientRect()
+  const rect = target.getBoundingClientRect()
+  return rect.width > 0 && rect.height > 0 && rect.bottom > containerRect.top && rect.top < containerRect.bottom
+    ? { target, rect }
+    : null
+}
 
 export function buildUserQuestionMap(messages: ChatMessage[]): Map<string, string> {
   const questions = new Map<string, string>()
@@ -98,6 +141,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const databaseEnabled = getRuntimeCapabilities().database
   const assistantVisualId = useSettingsStore((s) => s.appearance.assistantVisualId)
   const assistantFontSize = useSettingsStore((s) => s.appearance.aiAssistantFontSize)
+  const sendMessageAnimationEnabled = useSettingsStore((s) => s.appearance.sendMessageAnimationEnabled)
   const setDraftInput = useChatStore((s) => s.setDraftInput)
   const clearMessages = useChatStore((s) => s.clearMessages)
   const hasMoreHistory = useChatStore((s) => s.hasMoreHistory)
@@ -114,7 +158,16 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const pendingOutgoingMessageCountRef = useRef<number | null>(null)
   const returnToChatScrollFrameRef = useRef<number | null>(null)
   const shouldScrollAfterReturnRef = useRef(false)
+  const sendAnimationRef = useRef<SendAnimationState | null>(null)
+  const sendAnimationTokenRef = useRef(0)
+  const sendAnimationFrameRef = useRef<number | null>(null)
+  const sendAnimationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const sendFlightDotRef = useRef<HTMLDivElement>(null)
+  const animatedSendMessageKeysRef = useRef(new Set<string>())
+  const [sendAnimation, setSendAnimation] = useState<SendAnimationState | null>(null)
   const visibleMessages = useMemo(() => messages.filter((msg) => !msg.hidden), [messages])
+  const visibleMessagesRef = useRef(visibleMessages)
+  visibleMessagesRef.current = visibleMessages
   const userQuestionsById = useMemo(() => buildUserQuestionMap(messages), [messages])
   const [reasoningMode, setReasoningMode] = useState<'off' | 'on'>('off')
   const [resetManualToggle, setResetManualToggle] = useState(0)
@@ -124,6 +177,73 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const [reminders, setReminders] = useState<ReadingReminder[]>([])
   const [remindersLoading, setRemindersLoading] = useState(false)
   const saveArtifactFromMessage = useReadingArtifactsStore((s) => s.saveArtifactFromMessage)
+
+  const updateSendAnimation = useCallback((next: SendAnimationState | null) => {
+    sendAnimationRef.current = next
+    setSendAnimation(next)
+  }, [])
+
+  const clearSendAnimation = useCallback(() => {
+    if (sendAnimationFrameRef.current !== null) {
+      cancelAnimationFrame(sendAnimationFrameRef.current)
+      sendAnimationFrameRef.current = null
+    }
+    if (sendAnimationTimerRef.current !== null) {
+      clearTimeout(sendAnimationTimerRef.current)
+      sendAnimationTimerRef.current = null
+    }
+    sendAnimationRef.current = null
+    setSendAnimation(null)
+  }, [])
+
+  const finishSendAnimation = useCallback((phase: 'arrived' | 'cancelled') => {
+    const current = sendAnimationRef.current
+    if (!current || current.phase === 'arrived' || current.phase === 'cancelled') return
+
+    if (sendAnimationTimerRef.current !== null) clearTimeout(sendAnimationTimerRef.current)
+    const pointRect = phase === 'cancelled' ? sendFlightDotRef.current?.getBoundingClientRect() : null
+    const next: SendAnimationState = {
+      ...current,
+      phase,
+      ...(pointRect ? {
+        targetLeft: pointRect.left,
+        targetTop: pointRect.top,
+        targetWidth: pointRect.width,
+        targetHeight: pointRect.height,
+      } : {}),
+    }
+    updateSendAnimation(next)
+    sendAnimationTimerRef.current = setTimeout(() => {
+      if (sendAnimationRef.current?.token === next.token && sendAnimationRef.current.phase === phase) {
+        clearSendAnimation()
+      }
+    }, SEND_ANIMATION_FADE_MS)
+  }, [clearSendAnimation, updateSendAnimation])
+
+  const syncSendAnimationTarget = useCallback(() => {
+    const current = sendAnimationRef.current
+    if (!current || current.phase !== 'flying' || !current.messageKey) return false
+    const measured = getVisibleSendBubble(chatContainerRef.current, current.messageKey)
+    if (!measured) {
+      clearSendAnimation()
+      return true
+    }
+    const { rect } = measured
+    const changed = Math.abs(rect.left - current.targetLeft) > 0.5
+      || Math.abs(rect.top - current.targetTop) > 0.5
+      || Math.abs(rect.width - current.targetWidth) > 0.5
+      || Math.abs(rect.height - current.targetHeight) > 0.5
+    if (changed) {
+      updateSendAnimation({
+        ...current,
+        targetLeft: rect.left,
+        targetTop: rect.top,
+        targetWidth: rect.width,
+        targetHeight: rect.height,
+      })
+    }
+    return changed
+  }, [clearSendAnimation, updateSendAnimation])
 
   useEffect(() => {
     if (panelView !== 'chat' || !shouldScrollAfterReturnRef.current) return
@@ -261,6 +381,10 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     const el = chatContainerRef.current
     if (!el) return
     const stopStreamingFollow = () => {
+      if (sendAnimationRef.current
+        && (sendAnimationRef.current.phase !== 'waiting' || Date.now() >= programmaticScrollUntilRef.current)) {
+        finishSendAnimation('cancelled')
+      }
       if (!streamingRef.current) return
       autoFollowRef.current = false
       streamScrollInterruptedRef.current = true
@@ -270,6 +394,11 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
       }
     }
     const handleScroll = () => {
+      if (sendAnimationRef.current && Date.now() >= programmaticScrollUntilRef.current) {
+        finishSendAnimation('cancelled')
+      } else if (sendAnimationRef.current?.phase === 'flying') {
+        syncSendAnimationTarget()
+      }
       if (streamingRef.current && streamScrollInterruptedRef.current) return
       if (Date.now() < programmaticScrollUntilRef.current) return
       autoFollowRef.current = isAtBottom()
@@ -284,7 +413,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
       el.removeEventListener('pointerdown', stopStreamingFollow)
       el.removeEventListener('scroll', handleScroll)
     }
-  }, [isAtBottom])
+  }, [finishSendAnimation, isAtBottom, syncSendAnimationTarget])
 
   // 合并同一帧内的滚动，避免长文本流式更新时反复触发布局。
   useEffect(() => {
@@ -350,11 +479,123 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     }
   }, [visibleMessages, streaming])
 
-  const handleSend = useCallback(() => {
+  // 发送后的自动滚动完成后，再测量气泡并启动形变。
+  useEffect(() => {
+    const current = sendAnimationRef.current
+    if (!current || current.phase !== 'waiting') return
+    const latestVisibleMessages = visibleMessagesRef.current
+    if (latestVisibleMessages.length <= current.beforeMessageCount) return
+    if (panelView !== 'chat') {
+      clearSendAnimation()
+      return
+    }
+
+    const newUserMessage = latestVisibleMessages
+      .slice(current.beforeMessageCount)
+      .find((message) => message.role === 'user')
+    if (!newUserMessage) {
+      clearSendAnimation()
+      return
+    }
+    const messageKey = newUserMessage.id || `user-${newUserMessage.sessionId || 'live'}-${newUserMessage.timestamp || current.beforeMessageCount}`
+    const token = current.token
+
+    if (sendAnimationFrameRef.current !== null) cancelAnimationFrame(sendAnimationFrameRef.current)
+    sendAnimationFrameRef.current = requestAnimationFrame(() => {
+      sendAnimationFrameRef.current = null
+      if (sendAnimationRef.current?.token !== token || sendAnimationRef.current.phase !== 'waiting') return
+      const measured = getVisibleSendBubble(chatContainerRef.current, messageKey)
+      if (!measured) {
+        clearSendAnimation()
+        return
+      }
+      const { target, rect: targetRect } = measured
+
+      animatedSendMessageKeysRef.current.add(messageKey)
+      updateSendAnimation({
+        ...current,
+        phase: 'flying',
+        messageKey,
+        targetLeft: targetRect.left,
+        targetTop: targetRect.top,
+        targetWidth: targetRect.width,
+        targetHeight: targetRect.height,
+        bubbleColor: getComputedStyle(target).backgroundColor || 'var(--gm-user-bubble-bg)',
+      })
+      if (sendAnimationTimerRef.current !== null) clearTimeout(sendAnimationTimerRef.current)
+      sendAnimationTimerRef.current = setTimeout(() => {
+        if (sendAnimationRef.current?.token === token && sendAnimationRef.current.phase === 'flying') {
+          if (syncSendAnimationTarget()) {
+            sendAnimationTimerRef.current = setTimeout(() => {
+              if (sendAnimationRef.current?.token === token && sendAnimationRef.current.phase === 'flying') {
+                finishSendAnimation('cancelled')
+              }
+            }, SEND_ANIMATION_FADE_MS)
+          } else {
+            finishSendAnimation('arrived')
+          }
+        }
+      }, SEND_ANIMATION_DURATION_MS + SEND_ANIMATION_FADE_MS)
+    })
+
+    return () => {
+      if (sendAnimationFrameRef.current !== null) {
+        cancelAnimationFrame(sendAnimationFrameRef.current)
+        sendAnimationFrameRef.current = null
+      }
+    }
+  }, [clearSendAnimation, finishSendAnimation, panelView, syncSendAnimationTarget, updateSendAnimation, visibleMessages.length])
+
+  useEffect(() => {
+    if (sendAnimationRef.current?.phase !== 'flying') return
+    const frame = requestAnimationFrame(syncSendAnimationTarget)
+    return () => cancelAnimationFrame(frame)
+  }, [syncSendAnimationTarget, visibleMessages])
+
+  useEffect(() => {
+    if (panelView !== 'chat' && sendAnimationRef.current) clearSendAnimation()
+  }, [clearSendAnimation, panelView])
+
+  useEffect(() => () => {
+    if (sendAnimationFrameRef.current !== null) cancelAnimationFrame(sendAnimationFrameRef.current)
+    if (sendAnimationTimerRef.current !== null) clearTimeout(sendAnimationTimerRef.current)
+    sendAnimationRef.current = null
+  }, [])
+
+  const handleSend = useCallback((source?: HTMLElement) => {
     const chatState = useChatStore.getState()
     const currentDraft = chatState.draftInput
     const currentContextTags = chatState.contextTags
     if ((!currentDraft.trim() && currentContextTags.length === 0) || chatState.streaming) return
+    if (source && sendMessageAnimationEnabled && !prefersReducedMotion()) {
+      const sourceRect = source.getBoundingClientRect()
+      const sourceX = sourceRect.left + sourceRect.width / 2
+      const sourceY = sourceRect.top + sourceRect.height / 2
+      const buttonColor = getComputedStyle(source).backgroundColor
+      const token = ++sendAnimationTokenRef.current
+      updateSendAnimation({
+        token,
+        phase: 'waiting',
+        beforeMessageCount: visibleMessages.length,
+        messageKey: null,
+        sourceX,
+        sourceY,
+        sourceColor: buttonColor === 'transparent' || buttonColor === 'rgba(0, 0, 0, 0)'
+          ? getComputedStyle(document.documentElement).getPropertyValue('--gm-primary').trim()
+          : buttonColor,
+        targetLeft: sourceX - SEND_ANIMATION_POINT_SIZE / 2,
+        targetTop: sourceY - SEND_ANIMATION_POINT_SIZE / 2,
+        targetWidth: SEND_ANIMATION_POINT_SIZE,
+        targetHeight: SEND_ANIMATION_POINT_SIZE,
+        bubbleColor: 'var(--gm-user-bubble-bg)',
+      })
+      if (sendAnimationTimerRef.current !== null) clearTimeout(sendAnimationTimerRef.current)
+      sendAnimationTimerRef.current = setTimeout(() => {
+        if (sendAnimationRef.current?.token === token && sendAnimationRef.current.phase === 'waiting') {
+          clearSendAnimation()
+        }
+      }, 1000)
+    }
     autoFollowRef.current = true
     streamScrollInterruptedRef.current = false
     pendingOutgoingMessageCountRef.current = chatState.messages.filter((msg) => !msg.hidden).length
@@ -366,11 +607,12 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     // 重置深度思考开关
     setReasoningMode('off')
     setResetManualToggle((prev) => prev + 1)
-  }, [reasoningMode, sendMessage, setDraftInput])
+  }, [clearSendAnimation, reasoningMode, sendMessage, sendMessageAnimationEnabled, setDraftInput, updateSendAnimation, visibleMessages.length])
 
   useEffect(() => {
-    window.addEventListener(AI_SHORTCUT_SUBMIT_EVENT, handleSend)
-    return () => window.removeEventListener(AI_SHORTCUT_SUBMIT_EVENT, handleSend)
+    const handleShortcutSubmit = () => handleSend()
+    window.addEventListener(AI_SHORTCUT_SUBMIT_EVENT, handleShortcutSubmit)
+    return () => window.removeEventListener(AI_SHORTCUT_SUBMIT_EVENT, handleShortcutSubmit)
   }, [handleSend])
 
   // 挂载时检查是否有待发送的快捷提问（解决首次使用时事件监听器未注册的问题）
@@ -575,6 +817,26 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     }
   }, [databaseEnabled])
 
+  const sendMorphMotion = sendAnimation ? createMorphingSurfaceMotion(
+    {
+      left: sendAnimation.sourceX - SEND_ANIMATION_POINT_SIZE / 2,
+      top: sendAnimation.sourceY - SEND_ANIMATION_POINT_SIZE / 2,
+      width: SEND_ANIMATION_POINT_SIZE,
+      height: SEND_ANIMATION_POINT_SIZE,
+      borderRadius: SEND_ANIMATION_POINT_SIZE / 2,
+      padding: 0,
+    },
+    {
+      left: sendAnimation.targetLeft,
+      top: sendAnimation.targetTop,
+      width: sendAnimation.targetWidth,
+      height: sendAnimation.targetHeight,
+      borderRadius: sendAnimation.phase === 'waiting' ? SEND_ANIMATION_POINT_SIZE / 2 : 16,
+      padding: 0,
+    },
+    false,
+  ) : null
+
   return (
     <div
       className="gm-instant-color h-full min-h-0 flex flex-col relative"
@@ -718,6 +980,14 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
             {visibleMessages.map((msg, i) => {
               const prevMsg = i > 0 ? visibleMessages[i - 1] : null
               const messageKey = msg.id || `${msg.role}-${msg.sessionId || 'live'}-${msg.timestamp || i}`
+              const isPendingSendMessage = sendAnimation?.phase === 'waiting'
+                && msg.role === 'user'
+                && i >= sendAnimation.beforeMessageCount
+              const isSendAnimationTarget = sendAnimation?.messageKey === messageKey
+              const hideForSendAnimation = isPendingSendMessage
+                || (isSendAnimationTarget && sendAnimation?.phase === 'flying')
+              const revealForSendAnimation = isSendAnimationTarget
+                && (sendAnimation?.phase === 'arrived' || sendAnimation?.phase === 'cancelled')
               const parentQuestion = msg.parentId ? userQuestionsById.get(msg.parentId) : undefined
               // 历史会话之间的分隔线
               const showSessionDivider = Boolean(msg.sessionId && msg.sessionId !== prevMsg?.sessionId)
@@ -745,6 +1015,9 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
                   referencedSourceIds={msg.referencedSourceIds}
                   onOpenSource={handleOpenRagSource}
                   artifactReferences={msg.artifactReferences}
+                  suppressEntranceAnimation={hideForSendAnimation || animatedSendMessageKeysRef.current.has(messageKey)}
+                  hideForSendAnimation={hideForSendAnimation}
+                  sendRevealAnimation={revealForSendAnimation}
                   onOpenArtifact={(key) => requestOpenReadingArtifact(key)}
                   onSaveAsMarkdown={
                     msg.role === 'assistant'
@@ -829,6 +1102,43 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
           resetManualToggle={resetManualToggle}
         />
       )}
+      {sendAnimation && sendMorphMotion && createPortal((
+        <motion.div
+          ref={sendFlightDotRef}
+          className={`gm-ai-send-flight-dot ${
+            sendAnimation.phase === 'flying' ? 'gm-ai-send-flight-dot--flying' : ''
+          } ${
+            sendAnimation.phase === 'arrived' || sendAnimation.phase === 'cancelled'
+              ? 'gm-ai-send-flight-dot--fading'
+              : ''
+          }`}
+          data-send-animation-dot="true"
+          initial={{ ...sendMorphMotion.initial, backgroundColor: sendAnimation.sourceColor, opacity: 1 }}
+          animate={{
+            ...sendMorphMotion.animate,
+            backgroundColor: sendAnimation.phase === 'waiting' ? sendAnimation.sourceColor : sendAnimation.bubbleColor,
+            opacity: sendAnimation.phase === 'arrived' || sendAnimation.phase === 'cancelled' ? 0 : 1,
+          }}
+          transition={sendAnimation.phase === 'arrived' || sendAnimation.phase === 'cancelled'
+            ? { duration: SEND_ANIMATION_FADE_MS / 1000 }
+            : sendMorphMotion.transition}
+          onAnimationComplete={() => {
+            if (sendAnimationRef.current?.token === sendAnimation.token && sendAnimationRef.current.phase === 'flying') {
+              if (!syncSendAnimationTarget()) finishSendAnimation('arrived')
+            }
+          }}
+          style={{
+            position: 'fixed',
+            zIndex: 120,
+            pointerEvents: 'none',
+            boxShadow: sendAnimation.phase === 'waiting'
+              ? '0 0 0 3px color-mix(in srgb, var(--gm-primary) 18%, transparent), 0 0 12px color-mix(in srgb, var(--gm-primary) 62%, transparent)'
+              : 'none',
+            transition: 'box-shadow 120ms ease-out',
+          }}
+          aria-hidden="true"
+        />
+      ), document.body)}
     </div>
   )
 }
@@ -1485,6 +1795,9 @@ export const ChatBubble = memo(function ChatBubble({
   onOpenSource,
   onSaveAsMarkdown,
   onSaveAsArtifact,
+  suppressEntranceAnimation,
+  hideForSendAnimation,
+  sendRevealAnimation,
 }: {
   role: 'system' | 'user' | 'assistant'
   content: string
@@ -1498,6 +1811,9 @@ export const ChatBubble = memo(function ChatBubble({
   onOpenSource?: (source: LocalChatMessageSource) => void
   onSaveAsMarkdown?: () => void
   onSaveAsArtifact?: (type: ReadingArtifactType) => void
+  suppressEntranceAnimation?: boolean
+  hideForSendAnimation?: boolean
+  sendRevealAnimation?: boolean
 }) {
   const isUser = role === 'user'
   const isEmpty = !content && isLast && streaming
@@ -1582,7 +1898,10 @@ export const ChatBubble = memo(function ChatBubble({
 
   return (
     <div
-      className={`flex min-w-0 ${isUser ? 'justify-end' : 'justify-start'} animate-slideInUp`}
+      className={`flex min-w-0 ${isUser ? 'justify-end' : 'justify-start'} ${suppressEntranceAnimation ? '' : 'animate-slideInUp'} ${sendRevealAnimation ? 'gm-ai-send-message-reveal' : ''}`}
+      style={hideForSendAnimation || sendRevealAnimation ? {
+        opacity: hideForSendAnimation ? 0 : 1,
+      } : undefined}
       onPointerEnter={canSave ? showSaveControls : undefined}
       onPointerLeave={canSave ? scheduleSaveControlsHide : undefined}
       onFocusCapture={canSave ? showSaveControls : undefined}
@@ -1596,6 +1915,7 @@ export const ChatBubble = memo(function ChatBubble({
       <div className="group relative min-w-0 w-fit max-w-[80%]">
         <div
           ref={bubbleRef}
+          data-send-animation-bubble={isUser ? 'true' : undefined}
           tabIndex={-1}
           onKeyDown={handleKeyDown}
           className={`select-text max-w-full min-w-0 rounded-2xl px-4 py-2.5 text-body focus:outline-none ${

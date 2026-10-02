@@ -390,6 +390,10 @@ function WebGeneralSettings() {
         <SettingField label="定制光标" description="使用手作风光标">
           <Switch checked={appearance.customCursorEnabled} onChange={(value) => updateAppearanceSettings({ customCursorEnabled: value })} />
         </SettingField>
+        <SectionTitle>动效</SectionTitle>
+        <SettingField label="发送消息动画" description="发送时让光点从按钮飞出并展开为消息；滚动消息列表会立即结束动画">
+          <Switch checked={appearance.sendMessageAnimationEnabled} onChange={(value) => updateAppearanceSettings({ sendMessageAnimationEnabled: value })} />
+        </SettingField>
       </div>
       <Sep />
       <SectionTitle>数据边界</SectionTitle>

@@ -6,7 +6,7 @@ import { addFileContextTag, addFolderContextTag } from '@/services/aiContext'
 import { ManualToolToggle } from './ManualToolToggle'
 
 interface PromptComposerProps {
-  onSend: () => void
+  onSend: (source?: HTMLElement) => void
   streaming: boolean
   onCancel: () => void
   onReasoningModeChange?: (mode: 'off' | 'on') => void
@@ -20,6 +20,7 @@ export function PromptComposer({ onSend, streaming, onCancel, onReasoningModeCha
   const removeContextTag = useChatStore((s) => s.removeContextTag)
   const clearContextTags = useChatStore((s) => s.clearContextTags)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const composerRef = useRef<HTMLDivElement>(null)
   const [isDragOver, setIsDragOver] = useState(false)
   const previousContextTagCountRef = useRef(contextTags.length)
 
@@ -46,7 +47,7 @@ export function PromptComposer({ onSend, streaming, onCancel, onReasoningModeCha
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      onSend()
+      onSend(composerRef.current?.querySelector<HTMLElement>('[aria-label="发送"]') ?? undefined)
     }
   }
 
@@ -109,6 +110,7 @@ export function PromptComposer({ onSend, streaming, onCancel, onReasoningModeCha
 
   return (
     <div
+      ref={composerRef}
       className={`absolute bottom-0 left-0 right-0 p-3 border-t border-gm-border backdrop-blur-xl bg-gm-surface/90 z-20 ${isDragOver ? 'bg-gm-primary-subtle/30' : ''}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -177,7 +179,7 @@ export function PromptComposer({ onSend, streaming, onCancel, onReasoningModeCha
             <Button
               type="primary"
               size="small"
-              onClick={onSend}
+              onClick={(event) => onSend(event.currentTarget)}
               disabled={!draftInput.trim() && contextTags.length === 0}
               aria-label="发送"
               title="发送"

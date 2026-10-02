@@ -32,6 +32,7 @@ describe('设置兼容', () => {
       assistantVisualId: 'sprite',
       aiAssistantFontSize: 14,
       fullscreenTransitionEnabled: true,
+      sendMessageAnimationEnabled: false,
       motionPreference: 'system',
     })
     expect(state.webSearch).toMatchObject({ provider: 'duckduckgo', maxResults: 5, timeout: 60000 })
@@ -57,7 +58,7 @@ describe('设置兼容', () => {
     const state = store.getState()
 
     expect(state.editor).toMatchObject({ fontSize: 18, lineHeight: 1.65, fullscreenContentPaddingPercent: 7, inlinePreviewEdit: true, autoSendAiShortcut: true, defaultOpenMode: 'preview' })
-    expect(state.appearance).toMatchObject({ themeId: 'dark', lastLightThemeId: 'warm', aiAvatarStyle: 'sprite', aiAssistantFontSize: 14, fullscreenTransitionEnabled: true })
+    expect(state.appearance).toMatchObject({ themeId: 'dark', lastLightThemeId: 'warm', aiAvatarStyle: 'sprite', aiAssistantFontSize: 14, fullscreenTransitionEnabled: true, sendMessageAnimationEnabled: false })
   })
 
   it('将旧版全屏像素边距迁移为百分比', async () => {
@@ -92,6 +93,18 @@ describe('设置兼容', () => {
     store.getState().updateAppearanceSettings({ aiAssistantFontSize: 18 })
     const persisted = JSON.parse(localStorage.getItem('guanmo-settings') || '{}') as { state?: { appearance?: { aiAssistantFontSize?: number } } }
     expect(persisted.state?.appearance?.aiAssistantFontSize).toBe(18)
+  })
+
+  it('保留发送消息动画开关并对非法值回退关闭', async () => {
+    const enabledStore = await loadSettingsStore({ appearance: { sendMessageAnimationEnabled: true } })
+    expect(enabledStore.getState().appearance.sendMessageAnimationEnabled).toBe(true)
+
+    enabledStore.getState().updateAppearanceSettings({ sendMessageAnimationEnabled: false })
+    const persisted = JSON.parse(localStorage.getItem('guanmo-settings') || '{}') as { state?: { appearance?: { sendMessageAnimationEnabled?: boolean } } }
+    expect(persisted.state?.appearance?.sendMessageAnimationEnabled).toBe(false)
+
+    const invalidStore = await loadSettingsStore({ appearance: { sendMessageAnimationEnabled: 'true' } })
+    expect(invalidStore.getState().appearance.sendMessageAnimationEnabled).toBe(false)
   })
 
   it('保留用户显式关闭快捷 AI 自动发送的设置', async () => {

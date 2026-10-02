@@ -4,6 +4,7 @@ import { AiPanel } from '@/components/ai/AiPanel'
 import { StatusBar } from '@/components/layout/StatusBar'
 import { consumePendingPanelNavigation, requestOpenReadingArtifacts } from '@/services/aiPanelNavigation'
 import type { TimelineItem } from '@/stores/chatStore'
+import { useChatStore } from '@/stores/chatStore'
 import { useAppStore } from '@/stores/appStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 
@@ -88,6 +89,12 @@ describe('AI 面板视图返回', () => {
   const scrollTo = vi.fn()
 
   beforeEach(() => {
+    aiChat.messages = [
+      { id: 'user-1', role: 'user' as const, content: '匿名问题', timestamp: 1 },
+      { id: 'assistant-1', parentId: 'user-1', role: 'assistant' as const, content: '匿名回答', timestamp: 2 },
+    ]
+    aiChat.sendMessage.mockReset()
+    aiChat.cancelStream.mockReset()
     readingArtifacts.artifacts = [artifactFixture]
     readingArtifacts.loading = false
     readingArtifacts.filter = 'all'
@@ -96,7 +103,7 @@ describe('AI 面板视图返回', () => {
     readingArtifacts.pageSize = 20
     readingArtifacts.total = 1
     aiChat.timeline = []
-    useSettingsStore.getState().updateAppearanceSettings({ aiAssistantFontSize: 14 })
+    useSettingsStore.getState().updateAppearanceSettings({ aiAssistantFontSize: 14, sendMessageAnimationEnabled: false })
     readingArtifacts.setQuery.mockReset()
     readingArtifacts.setPage.mockReset()
     scrollTo.mockReset()
@@ -200,6 +207,155 @@ describe('AI 面板视图返回', () => {
 
     expect(panel.style.getPropertyValue('--gm-ai-chat-font-size')).toBe('18px')
     expect(panel.style.getPropertyValue('--gm-ai-chat-meta-font-size')).toBe('calc(18px - 2px)')
+  })
+
+  it('默认关闭时按 Enter 发送不会创建光点', () => {
+    act(() => { useChatStore.getState().setDraftInput('键盘发送') })
+    render(<AiPanel />)
+    fireEvent.keyDown(screen.getByPlaceholderText('输入消息... (Enter 发送)'), { key: 'Enter', shiftKey: false })
+    expect(aiChat.sendMessage).toHaveBeenCalledTimes(1)
+    expect(document.querySelector('.gm-ai-send-flight-dot')).not.toBeInTheDocument()
+  })
+
+  it('系统减少动态效果时跳过发送光点动画', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addListener: vi.fn(), removeListener: vi.fn() }))
+    act(() => {
+      useSettingsStore.getState().updateAppearanceSettings({ sendMessageAnimationEnabled: true })
+      useChatStore.getState().setDraftInput('减少动态效果')
+    })
+    render(<AiPanel />)
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    expect(document.querySelector('.gm-ai-send-flight-dot')).not.toBeInTheDocument()
+  })
+
+  it('开启动画后按 Enter 也从发送按钮发射且只发送一次', () => {
+    act(() => {
+      useSettingsStore.getState().updateAppearanceSettings({ sendMessageAnimationEnabled: true })
+      useChatStore.getState().setDraftInput('键盘直接发送')
+    })
+    render(<AiPanel />)
+    const sendButton = screen.getByRole('button', { name: '发送' })
+    vi.spyOn(sendButton, 'getBoundingClientRect').mockReturnValue({ left: 20, top: 30, width: 40, height: 28 } as DOMRect)
+    fireEvent.keyDown(screen.getByPlaceholderText('输入消息... (Enter 发送)'), { key: 'Enter', shiftKey: false })
+    expect(aiChat.sendMessage).toHaveBeenCalledTimes(1)
+    expect(document.querySelector('.gm-ai-send-flight-dot')).toBeInTheDocument()
+  })
+
+  it('点击发送时光点飞入新用户消息并在到达后显现气泡', () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('matchMedia', () => ({ matches: false, addListener: vi.fn(), removeListener: vi.fn() }))
+    const rafCallbacks: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      rafCallbacks.push(callback)
+      return rafCallbacks.length
+    })
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    act(() => {
+      useSettingsStore.getState().updateAppearanceSettings({ sendMessageAnimationEnabled: true })
+      useChatStore.getState().setDraftInput('新的匿名问题')
+    })
+
+    const view = render(<AiPanel />)
+    const sendButton = screen.getByRole('button', { name: '发送' })
+    vi.spyOn(sendButton, 'getBoundingClientRect').mockReturnValue({ left: 20, top: 30, width: 40, height: 28 } as DOMRect)
+    fireEvent.click(sendButton)
+    expect(aiChat.sendMessage).toHaveBeenCalledTimes(1)
+
+    aiChat.messages = [
+      ...aiChat.messages,
+      { id: 'user-2', role: 'user' as const, content: '新的匿名问题', timestamp: 3 },
+      { id: 'assistant-2', parentId: 'user-2', role: 'assistant' as const, content: '正在准备 AI 请求...', timestamp: 4 },
+    ]
+    view.rerender(<AiPanel />)
+    const container = document.querySelector<HTMLElement>('[data-chat-message-id="user-2"]')!.parentElement!.parentElement!
+    vi.spyOn(container, 'getBoundingClientRect').mockReturnValue({ top: 0, bottom: 600, left: 0, right: 360, width: 360, height: 600 } as DOMRect)
+    const target = document.querySelector<HTMLElement>('[data-chat-message-id="user-2"]')!
+    const bubble = target.querySelector<HTMLElement>('[data-send-animation-bubble]')!
+    vi.spyOn(bubble, 'getBoundingClientRect').mockReturnValue({ left: 180, top: 420, width: 120, height: 40, bottom: 460, right: 300 } as DOMRect)
+
+    // 流式消息在测量前更新内容时，不应取消待起飞的帧。
+    aiChat.messages = aiChat.messages.map((message) => message.id === 'assistant-2'
+      ? { ...message, content: '正在处理匿名请求...' }
+      : message)
+    view.rerender(<AiPanel />)
+
+    act(() => {
+      while (rafCallbacks.length > 0) rafCallbacks.shift()!(0)
+    })
+    const flightDot = document.querySelector('.gm-ai-send-flight-dot--flying')
+    expect(flightDot).toBeInTheDocument()
+    expect(flightDot?.parentElement).toBe(document.body)
+    expect(target.firstElementChild).toHaveStyle({ opacity: '0' })
+
+    act(() => { vi.advanceTimersByTime(380) })
+    expect(target.firstElementChild).toHaveClass('gm-ai-send-message-reveal')
+    expect(target.firstElementChild).toHaveStyle({ opacity: '1' })
+    expect(target.firstElementChild).not.toHaveStyle({ transform: 'translateY(0)' })
+    act(() => { vi.advanceTimersByTime(120) })
+    expect(target.firstElementChild).not.toHaveClass('animate-slideInUp')
+  })
+
+  it('发送动画飞行期间滚动会停在当前位置并渐隐光点', () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('matchMedia', () => ({ matches: false, addListener: vi.fn(), removeListener: vi.fn() }))
+    const rafCallbacks: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      rafCallbacks.push(callback)
+      return rafCallbacks.length
+    })
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    act(() => {
+      useSettingsStore.getState().updateAppearanceSettings({ sendMessageAnimationEnabled: true })
+      useChatStore.getState().setDraftInput('滚动测试')
+    })
+
+    const view = render(<AiPanel />)
+    const sendButton = screen.getByRole('button', { name: '发送' })
+    vi.spyOn(sendButton, 'getBoundingClientRect').mockReturnValue({ left: 20, top: 30, width: 40, height: 28 } as DOMRect)
+    fireEvent.click(sendButton)
+    aiChat.messages = [
+      ...aiChat.messages,
+      { id: 'user-2', role: 'user' as const, content: '滚动测试', timestamp: 3 },
+      { id: 'assistant-2', parentId: 'user-2', role: 'assistant' as const, content: '正在准备 AI 请求...', timestamp: 4 },
+    ]
+    view.rerender(<AiPanel />)
+    const target = document.querySelector<HTMLElement>('[data-chat-message-id="user-2"]')!
+    const container = target.parentElement!.parentElement!
+    vi.spyOn(container, 'getBoundingClientRect').mockReturnValue({ top: 0, bottom: 600, left: 0, right: 360, width: 360, height: 600 } as DOMRect)
+    const bubble = target.querySelector<HTMLElement>('[data-send-animation-bubble]')!
+    let bubbleTop = 420
+    const measureBubble = vi.spyOn(bubble, 'getBoundingClientRect').mockImplementation(() => ({
+      left: 180, top: bubbleTop, width: 120, height: 40, bottom: bubbleTop + 40, right: 300,
+    } as DOMRect))
+    act(() => {
+      while (rafCallbacks.length > 0) rafCallbacks.shift()!(0)
+    })
+
+    // 发送时的程序滚动不能打断飞行；用户主动滚动则立即取消。
+    bubbleTop = 350
+    const measureCount = measureBubble.mock.calls.length
+    fireEvent.scroll(container)
+    expect(measureBubble.mock.calls.length).toBeGreaterThan(measureCount)
+    expect(document.querySelector('.gm-ai-send-flight-dot--flying')).toBeInTheDocument()
+    fireEvent.wheel(container)
+    expect(document.querySelector('.gm-ai-send-flight-dot--fading')).toBeInTheDocument()
+    expect(target.firstElementChild).not.toHaveStyle({ opacity: '0' })
+    act(() => { vi.advanceTimersByTime(120) })
+    expect(document.querySelector('.gm-ai-send-flight-dot')).not.toBeInTheDocument()
+  })
+
+  it('消息未出现时自动清理发射物', () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('matchMedia', () => ({ matches: false, addListener: vi.fn(), removeListener: vi.fn() }))
+    act(() => {
+      useSettingsStore.getState().updateAppearanceSettings({ sendMessageAnimationEnabled: true })
+      useChatStore.getState().setDraftInput('等待超时')
+    })
+    render(<AiPanel />)
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    expect(document.querySelector('.gm-ai-send-flight-dot')).toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(1000) })
+    expect(document.querySelector('.gm-ai-send-flight-dot')).not.toBeInTheDocument()
   })
 
 })
