@@ -17,6 +17,20 @@ export interface FullscreenAiSize {
   height: number
 }
 
+export type SidebarSection = 'recentFiles' | 'favorites' | 'workspace'
+
+export interface SidebarSectionExpanded {
+  recentFiles: boolean
+  favorites: boolean
+  workspace: boolean
+}
+
+const DEFAULT_SIDEBAR_SECTION_EXPANDED: SidebarSectionExpanded = {
+  recentFiles: true,
+  favorites: false,
+  workspace: true,
+}
+
 export type AiServiceStatus =
   | 'unchecked'
   | 'ok'
@@ -31,6 +45,7 @@ export type AiServiceStatus =
 
 export interface AppState {
   sidebarCollapsed: boolean
+  sidebarSectionExpanded: SidebarSectionExpanded
   aiPanelOpen: boolean
   sidebarWidth: number
   aiPanelWidth: number
@@ -41,6 +56,7 @@ export interface AppState {
   isFullscreen: boolean
 
   toggleSidebar: () => void
+  setSidebarSectionExpanded: (section: SidebarSection, expanded: boolean) => void
   toggleAiPanel: () => void
   closeAiPanel: () => void
   setSidebarWidth: (width: number) => void
@@ -87,6 +103,16 @@ function sanitizeFullscreenAiSize(value: unknown): FullscreenAiSize | null {
   return { width: candidate.width as number, height: candidate.height as number }
 }
 
+function sanitizeSidebarSectionExpanded(value: unknown): SidebarSectionExpanded {
+  if (!value || typeof value !== 'object') return { ...DEFAULT_SIDEBAR_SECTION_EXPANDED }
+  const candidate = value as Partial<SidebarSectionExpanded>
+  return {
+    recentFiles: typeof candidate.recentFiles === 'boolean' ? candidate.recentFiles : DEFAULT_SIDEBAR_SECTION_EXPANDED.recentFiles,
+    favorites: typeof candidate.favorites === 'boolean' ? candidate.favorites : DEFAULT_SIDEBAR_SECTION_EXPANDED.favorites,
+    workspace: typeof candidate.workspace === 'boolean' ? candidate.workspace : DEFAULT_SIDEBAR_SECTION_EXPANDED.workspace,
+  }
+}
+
 export function migratePersistedAppState(persistedState: unknown): Partial<AppState> {
   const saved = (persistedState ?? {}) as Partial<AppState> & { workspacePath?: string | null }
   const workspaceRoots = sanitizeWorkspaceRoots(
@@ -101,6 +127,7 @@ export function migratePersistedAppState(persistedState: unknown): Partial<AppSt
     ...rest,
     fullscreenAiPosition: sanitizeFullscreenAiPosition(saved.fullscreenAiPosition),
     fullscreenAiSize: sanitizeFullscreenAiSize(saved.fullscreenAiSize),
+    sidebarSectionExpanded: sanitizeSidebarSectionExpanded(saved.sidebarSectionExpanded),
     workspaceRoots,
   }
 }
@@ -113,6 +140,7 @@ export const useAppStore = create<AppState>()(
   persist(
     (set) => ({
       sidebarCollapsed: true,
+      sidebarSectionExpanded: { ...DEFAULT_SIDEBAR_SECTION_EXPANDED },
       aiPanelOpen: false,
       sidebarWidth: 260,
       aiPanelWidth: 360,
@@ -123,6 +151,11 @@ export const useAppStore = create<AppState>()(
       isFullscreen: false,
 
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+      setSidebarSectionExpanded: (section, expanded) => set((state) => ({
+        sidebarSectionExpanded: state.sidebarSectionExpanded[section] === expanded
+          ? state.sidebarSectionExpanded
+          : { ...state.sidebarSectionExpanded, [section]: expanded },
+      })),
       toggleAiPanel: () => set((s) => ({ aiPanelOpen: !s.aiPanelOpen })),
       closeAiPanel: () => set({ aiPanelOpen: false }),
       setSidebarWidth: (width) => set({ sidebarWidth: width }),
@@ -158,13 +191,15 @@ export const useAppStore = create<AppState>()(
         aiPanelWidth: state.aiPanelWidth,
         fullscreenAiPosition: state.fullscreenAiPosition,
         fullscreenAiSize: state.fullscreenAiSize,
+        sidebarSectionExpanded: state.sidebarSectionExpanded,
         workspaceRoots: state.workspaceRoots,
       }),
-      version: 1,
+      version: 2,
       migrate: migratePersistedAppState,
       merge: (persistedState, currentState) => ({
         ...currentState,
         ...(persistedState as Partial<AppState>),
+        sidebarSectionExpanded: sanitizeSidebarSectionExpanded((persistedState as Partial<AppState>)?.sidebarSectionExpanded),
         workspaceRoots: sanitizeWorkspaceRoots((persistedState as Partial<AppState>)?.workspaceRoots),
         sidebarCollapsed: true,
         aiPanelOpen: false,

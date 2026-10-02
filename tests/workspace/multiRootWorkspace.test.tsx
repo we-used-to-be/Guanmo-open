@@ -117,6 +117,38 @@ describe('multi-root workspace state', () => {
     expect(useAppStore.getState().fullscreenAiSize).toEqual({ width: 388, height: 560 })
   })
 
+  it('persists and rehydrates sidebar section expansion state in desktop storage', async () => {
+    localStorage.removeItem('guanmo-app')
+    act(() => {
+      useAppStore.getState().setSidebarSectionExpanded('recentFiles', false)
+      useAppStore.getState().setSidebarSectionExpanded('favorites', true)
+      useAppStore.getState().setSidebarSectionExpanded('workspace', false)
+    })
+
+    const saved = localStorage.getItem('guanmo-app')
+    expect(JSON.parse(saved!).state.sidebarSectionExpanded).toEqual({
+      recentFiles: false,
+      favorites: true,
+      workspace: false,
+    })
+
+    act(() => {
+      useAppStore.setState({
+        sidebarSectionExpanded: { recentFiles: true, favorites: false, workspace: true },
+      })
+    })
+    localStorage.setItem('guanmo-app', saved!)
+    await act(async () => {
+      await useAppStore.persist.rehydrate()
+    })
+
+    expect(useAppStore.getState().sidebarSectionExpanded).toEqual({
+      recentFiles: false,
+      favorites: true,
+      workspace: false,
+    })
+  })
+
   it('does not close tabs or clear global recent files and favorites when removing a root', () => {
     useAppStore.getState().addWorkspaceRoot('D:\\Notes')
     const [root] = useAppStore.getState().workspaceRoots

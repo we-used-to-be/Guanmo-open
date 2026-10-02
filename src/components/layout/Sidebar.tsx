@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback } from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
 import { isTauri } from '@/hooks/useTauri'
@@ -29,36 +29,15 @@ interface SidebarProps {
   onOpenSearch: () => void
 }
 
-const SIDEBAR_CONTENT_HANDOFF_DELAY_MS = 80
-
 export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpenSearch }: SidebarProps) {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
+  const sidebarSectionExpanded = useAppStore((s) => s.sidebarSectionExpanded)
+  const setSidebarSectionExpanded = useAppStore((s) => s.setSidebarSectionExpanded)
   const addWorkspaceRoot = useAppStore((s) => s.addWorkspaceRoot)
-  const [sidebarContentCollapsed, setSidebarContentCollapsed] = useState(collapsed)
   const recentFiles = useEditorStore((s) => s.recentFiles).filter((file) => isWorkspaceDisplayFile(file.path))
   const favorites = useEditorStore((s) => s.favorites).filter(isWorkspaceDisplayFile)
   const tabs = useEditorStore((s) => s.tabs)
   const browserFileSystem = getRuntimeCapabilities().browserFileSystem
-
-  useEffect(() => {
-    if (collapsed) {
-      setSidebarContentCollapsed(true)
-      return
-    }
-
-    const prefersReducedMotion = typeof window !== 'undefined'
-      && typeof window.matchMedia === 'function'
-      && window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    if (prefersReducedMotion) {
-      setSidebarContentCollapsed(false)
-      return
-    }
-
-    const timerId = window.setTimeout(() => setSidebarContentCollapsed(false), SIDEBAR_CONTENT_HANDOFF_DELAY_MS)
-    return () => window.clearTimeout(timerId)
-  }, [collapsed])
-
-  const displayCollapsed = collapsed || sidebarContentCollapsed
 
   // Build favorites list with file names
   const favoriteFiles = favorites.map((path) => {
@@ -152,7 +131,7 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
     window.dispatchEvent(new Event('guanmo:workspace-refresh'))
   }, [])
 
-  if (displayCollapsed) {
+  if (collapsed) {
     return (
       <div
         className="animal-cursor gm-instant-color gm-layout-sidebar flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col items-center py-3 gap-2"
@@ -209,7 +188,7 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
         onMouseDown={onResizeStart}
       />
       {/* Header */}
-      <div className="h-11 flex items-center px-4 border-b border-gm-border-subtle">
+      <div className="gm-layout-sidebar-fade-in h-11 flex items-center px-4 border-b border-gm-border-subtle">
         <span className="text-body font-bold text-gm-text tracking-wide">
           文件侧边栏
         </span>
@@ -230,14 +209,19 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
       {/* File Sections with Collapse */}
       <div className="flex-1 overflow-y-auto p-3 pb-16 space-y-2">
         <Collapse
+          className="gm-layout-sidebar-fade-in"
           question="最近文件"
-          defaultExpanded
+          expanded={sidebarSectionExpanded.recentFiles}
+          onExpandedChange={(expanded) => setSidebarSectionExpanded('recentFiles', expanded)}
           answer={
             <RecentFiles files={recentFiles} onOpen={handleOpenRecentFile} onRefreshWorkspace={refreshWorkspaces} />
           }
         />
         <Collapse
+          className="gm-layout-sidebar-fade-in"
           question="收藏"
+          expanded={sidebarSectionExpanded.favorites}
+          onExpandedChange={(expanded) => setSidebarSectionExpanded('favorites', expanded)}
           answer={
             favoriteFiles.length > 0 ? (
               <FavoriteFiles files={favoriteFiles} onRefreshWorkspace={refreshWorkspaces} />
@@ -249,8 +233,10 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
           }
         />
         <Collapse
+          className="gm-layout-sidebar-fade-in"
           question="工作区"
-          defaultExpanded
+          expanded={sidebarSectionExpanded.workspace}
+          onExpandedChange={(expanded) => setSidebarSectionExpanded('workspace', expanded)}
           answer={
             <WorkspaceRoots onOpenFile={(path) => { void handleOpenFileFromTree(path) }} />
           }
@@ -258,7 +244,7 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
       </div>
 
       {/* Bottom Actions */}
-      <div className="absolute bottom-0 left-0 right-0 z-20 bg-gm-surface/70 shadow-[0_-8px_24px_0_rgba(61,52,40,0.08)] backdrop-blur-xl">
+      <div className="gm-layout-sidebar-fade-in absolute bottom-0 left-0 right-0 z-20 bg-gm-surface/70 shadow-[0_-8px_24px_0_rgba(61,52,40,0.08)] backdrop-blur-xl">
         <Divider type="line-brown" />
         <div className="flex items-center gap-1 p-2">
           <div data-product-tour="open-file">

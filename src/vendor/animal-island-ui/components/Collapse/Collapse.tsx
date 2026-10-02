@@ -8,6 +8,10 @@ export interface CollapseProps {
     answer: React.ReactNode;
     /** 是否默认展开 */
     defaultExpanded?: boolean;
+    /** 受控展开状态 */
+    expanded?: boolean;
+    /** 受控展开状态变化回调 */
+    onExpandedChange?: (expanded: boolean) => void;
     /** 是否禁用 */
     disabled?: boolean;
     /** 自定义类名 */
@@ -20,15 +24,20 @@ export const Collapse: React.FC<CollapseProps> = ({
     question,
     answer,
     defaultExpanded = false,
+    expanded: controlledExpanded,
+    onExpandedChange,
     disabled = false,
     className,
     style,
 }) => {
-    const [expanded, setExpanded] = useState(defaultExpanded);
+    const [uncontrolledExpanded, setUncontrolledExpanded] = useState(defaultExpanded);
+    const expanded = controlledExpanded ?? uncontrolledExpanded;
 
     const handleClick = () => {
         if (!disabled) {
-            setExpanded(!expanded);
+            const nextExpanded = !expanded;
+            if (controlledExpanded === undefined) setUncontrolledExpanded(nextExpanded);
+            onExpandedChange?.(nextExpanded);
         }
     };
 
