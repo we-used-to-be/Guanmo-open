@@ -444,7 +444,8 @@ describe('preview source reveal', () => {
       vi.advanceTimersByTime(0)
       vi.advanceTimersByTime(100)
     })
-    expect(preview.style.opacity).toBe('0')
+    expect(preview.querySelector<HTMLElement>('.gm-markdown-preview')?.style.opacity).toBe('0')
+    expect(preview.style.opacity).toBe('')
     act(() => {
       vi.advanceTimersByTime(0)
       vi.advanceTimersByTime(0)

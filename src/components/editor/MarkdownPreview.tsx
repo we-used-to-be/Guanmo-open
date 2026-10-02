@@ -1416,7 +1416,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     let cleanup: (() => void) | null = null
     cleanup = startHeadingScroll({
       container,
-      fadeElement: container,
+      fadeElement: rootRef.current,
       getTargetTop,
       onSettled: () => {
         if (cleanup && headingScrollCancelRef.current === cleanup) headingScrollCancelRef.current = null
@@ -1517,7 +1517,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     let cleanup: (() => void) | null = null
     cleanup = startHeadingScroll({
       container,
-      fadeElement: container,
+      fadeElement: rootRef.current,
       forceDirect: true,
       getTargetTop,
       onSettled: () => {
