@@ -81,6 +81,7 @@ import { useReadingPositionBridge } from '@/components/editor/useReadingPosition
 import type { MarkdownPreviewHandle } from '@/components/editor/markdownPreviewTypes'
 import { MarkdownDiffView, type MarkdownDiffViewHandle } from '@/components/editor/MarkdownDiffView'
 import { useEditorStore, type Tab, type ViewMode } from '@/stores/editorStore'
+import { useAppStore } from '@/stores/appStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { runtimeFileReadingPositions, ScrollSyncSession } from '@/services/editorSession'
 
@@ -922,6 +923,31 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
         act(() => vi.advanceTimersByTime(50))
         expect(preview.style.visibility).not.toBe('hidden')
       } finally {
+        if (clientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', clientHeight)
+        else Reflect.deleteProperty(HTMLElement.prototype, 'clientHeight')
+      }
+    })
+
+    it('keeps the fullscreen background container visible while switching files', async () => {
+      const content = Array.from({ length: 80 }, (_, index) => `## Section ${index + 1}\n\nParagraph ${index + 1}`).join('\n\n')
+      setupEditor([anonymousTab('tab-a', content), anonymousTab('tab-b', content)], 'tab-a', 'preview')
+      useEditorStore.setState({ readingPositions: { 'tab-a': { previewScrollTop: 400, topLine: 25 } } })
+      useAppStore.setState({ isFullscreen: true })
+      const clientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+      Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 600 })
+      try {
+        const { container } = render(<EditorArea />)
+        await settleLazyEditorModules()
+        act(() => vi.advanceTimersByTime(50))
+        act(() => useEditorStore.getState().setActiveTab('tab-b'))
+        act(() => useEditorStore.getState().setActiveTab('tab-a'))
+        const preview = getLeftPreviewContainer(container)!
+        expect(preview.style.visibility).not.toBe('hidden')
+        expect(preview).toHaveAttribute('data-preview-masked')
+        act(() => vi.advanceTimersByTime(50))
+        expect(preview).not.toHaveAttribute('data-preview-masked')
+      } finally {
+        useAppStore.setState({ isFullscreen: false })
         if (clientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', clientHeight)
         else Reflect.deleteProperty(HTMLElement.prototype, 'clientHeight')
       }
