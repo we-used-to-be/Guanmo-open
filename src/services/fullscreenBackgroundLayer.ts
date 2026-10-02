@@ -64,6 +64,7 @@ function clearBackground(): void {
   root.style.removeProperty('--gm-fullscreen-background-mix')
   root.style.removeProperty('--gm-fullscreen-background-visible')
   root.style.removeProperty('--gm-fullscreen-background-cover')
+  root.style.removeProperty('--gm-fullscreen-glass-cover')
   activeLayer = 0
 }
 
@@ -125,6 +126,7 @@ export async function updateFullscreenBackground(selection: BackgroundSelection)
     return
   }
   root.style.setProperty('--gm-fullscreen-background-cover', `${100 - selection.opacity * 0.75}%`)
+  root.style.setProperty('--gm-fullscreen-glass-cover', `${100 - selection.opacity * 0.3}%`)
   const key = selection.scene === 'custom' ? selection.path : selection.scene
   if (!selection.enabled || !key) {
     if (layers.every((layer) => layer.url === null)) {

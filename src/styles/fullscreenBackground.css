@@ -33,6 +33,27 @@ html[data-fullscreen-background-ready] .gm-fullscreen-preview-content {
   transition: --gm-fullscreen-background-mix 380ms ease, --gm-fullscreen-background-visible 380ms ease;
 }
 
+html[data-fullscreen-background-ready] .gm-fullscreen-preview-content .gm-code-block {
+  background: color-mix(in srgb, var(--gm-code-bg) var(--gm-fullscreen-glass-cover, 100%), transparent);
+  border-color: color-mix(in srgb, var(--gm-border) 70%, transparent);
+  backdrop-filter: blur(8px) saturate(110%);
+  -webkit-backdrop-filter: blur(8px) saturate(110%);
+}
+
+html[data-fullscreen-background-ready] .gm-fullscreen-preview-content .gm-markdown-preview blockquote:not(:has(.gm-code-block)) {
+  background: linear-gradient(var(--gm-markdown-quote-bg), var(--gm-markdown-quote-bg)),
+    color-mix(in srgb, var(--gm-surface) var(--gm-fullscreen-glass-cover, 100%), transparent);
+  backdrop-filter: blur(8px) saturate(110%);
+  -webkit-backdrop-filter: blur(8px) saturate(110%);
+}
+
+html[data-fullscreen-background-ready] .gm-fullscreen-preview-content .gm-markdown-preview details:not(:has(.gm-code-block, blockquote)) {
+  background: color-mix(in srgb, var(--gm-surface) var(--gm-fullscreen-glass-cover, 100%), transparent);
+  border-color: color-mix(in srgb, var(--gm-border) 70%, transparent);
+  backdrop-filter: blur(8px) saturate(110%);
+  -webkit-backdrop-filter: blur(8px) saturate(110%);
+}
+
 .gm-fullscreen-background-scenes {
   display: flex;
   gap: 8px;
