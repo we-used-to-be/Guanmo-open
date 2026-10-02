@@ -4,14 +4,14 @@
 
 ## 当前状态
 
-- 当前阶段：阶段 2｜提示消息退出与补位
+- 当前阶段：阶段 4｜左侧栏与 AI 面板收放
 - 阶段状态：进行中
-- 上次执行结果：Toast 改为短时退出并使其余提示补位；退出中的操作按钮即时 inert/aria-hidden；原有 Store 计时及去重逻辑未改
-- 验证结果：Toast 组件定向 Vitest `2 passed`、`npm run test:toast` `PASS`、Typecheck `PASS`、目标文件 ESLint `PASS`、`git diff --check` `PASS`；真实桌面观感 `NOT TESTED`
-- 本阶段剩余：阶段 2 的真实桌面观感与减少动态效果验收；阶段 1 的真实桌面/大目录验收也待补做
-- 本阶段允许修改：`src/components/common/ToastContainer.tsx`、`src/styles/toast.css`（如需）、直接相关的最小测试及本文件
-- 阻塞问题：用户明确要求跳过阶段 1 验收并进入阶段 2；阶段 1 保持进行中，阶段 2 未完成真实桌面验收
-- 下一阶段：阶段 3｜搜索与文档标签的高频反馈
+- 上次执行结果：侧边栏外壳宽度、普通 AI 面板和全屏 AI 面板增加对称收放；侧边栏展开时仅延迟 80ms 替换完整内容，收起仍即时；关闭 AI 内容立即卸载，未改变 `appStore` 状态来源、全屏位置尺寸或懒加载入口
+- 验证结果：AI 面板定向 Vitest `11 passed`、Sidebar ESLint `0 errors`、`npm run typecheck` `PASS`、本次短延迟改动后的 `npm run build:desktop` 与 Desktop bundle 门禁 `PASS`、`git diff --check` `PASS`
+- 本阶段剩余：真实桌面键盘/鼠标/全屏/产品引导/编辑预览模式验收、减少动态效果验收，以及新旧 Tauri Release 各 10 次冷启动对比；阶段 1、阶段 2、阶段 3 的人工验收也待补做
+- 本阶段允许修改：`src/components/layout/Sidebar.tsx`、`src/components/layout/AppLayout.tsx`、`src/components/layout/layoutMotion.css`、直接相关的最小测试及本文件
+- 阻塞问题：无代码阻塞；旧产物冷启动被现有调试 GuanMo 单实例阻断，新 Tauri Release 构建两次均因机器内存压力失败，因此真实桌面和性能门槛不能标记完成
+- 下一阶段：阶段 5｜AI 面板内部视图交接与收口
 
 ## 项目目标与决策
 
@@ -64,16 +64,17 @@
 
 ## 当前阶段详细任务
 
-### 阶段 2 实施顺序
+### 阶段 4 实施顺序
 
-1. 检查 `git status --short`、Toast 目标文件 diff 和真实组件/Store 边界；仅在呈现层实现退出和补位。
-2. 验证自动到期、暂停恢复、关闭、操作和多 Toast 的原语义；退出中不可再次交互。
-3. 执行 Toast 定向测试、Typecheck、目标 Lint、`git diff --check`，真实桌面观感与减少动态效果另作验收。
-4. 更新顶部状态与阶段历史；真实桌面未验收前保持进行中。
+1. 检查 `git status --short`、`Sidebar.tsx`、`AppLayout.tsx`、`appStore` 的状态来源和布局/生命周期调用边界；保留已有用户改动。
+2. 新增局部 `layoutMotion.css`：侧边栏只过渡外壳宽度，普通 AI 面板过渡宽度与透明度，全屏 AI 面板过渡透明度与位移；全部遵循 `prefers-reduced-motion`。
+3. 保持 `sidebarCollapsed`、`aiPanelOpen` 为唯一状态来源；侧边栏展开只使用短暂的本地内容交接延迟，收起立即切换；AI 内容在关闭时按既有时机立即卸载，不改变懒加载、Resize listener、全屏位置尺寸或产品引导快照恢复。
+4. 执行 AI 面板定向测试、Typecheck、目标文件 Lint、Desktop build/bundle gate、`git diff --check`；真实桌面与冷启动另作验收。
+5. 更新顶部状态与阶段历史；真实桌面、冷启动和减少动态效果未验收前保持进行中。
 
 ### 本阶段禁止事项
 
-- 不修改 `AI_IMPLEMENTATION_PLAN.md`、设置、全局 Store、文件授权或其他阶段文件。
+- 不修改 `AI_IMPLEMENTATION_PLAN.md`、设置、全局样式、全局 Store、文件授权或其他阶段文件；局部布局样式仅限 `layoutMotion.css`。
 - 不覆盖任何预存未提交修改；不新增依赖，不进行全仓测试或全量 E2E。
 - 不提交、推送、打 tag、创建 Release 或 PR。
 
@@ -91,6 +92,21 @@
 - 高风险点：Store 移除后视图延迟卸载，退出期间必须立刻 inert/aria-hidden，避免重复点击；容器需持续挂载到退出结束。
 - 禁止影响：Store 计时与去重、Toast 操作回调的执行次数、更新提醒和消息内容。
 
+### Blast Radius（阶段 3）
+
+- 直接影响：`SearchOverlay.tsx`、`CommandPalette.tsx` 的进入呈现与输入焦点；`TabBar.tsx` 的选中指示条。
+- 间接依赖：`EditorArea`、`AppLayout` 的挂载/卸载；`editorStore` 的标签和文档切换状态；现有搜索/拖放事件处理。
+- 高风险点：两个浮层都有挂载后的焦点副作用；标签指示条不能改变标签尺寸、焦点顺序或拖拽命中区域。
+- 禁止影响：搜索匹配/替换、快捷键、文档内容切换、Tab Store、编辑器实例、预存 `global.css` 修改。
+
+### Blast Radius（阶段 4）
+
+- 直接影响：`Sidebar.tsx` 的可见外壳宽度；`AppLayout.tsx` 的普通/全屏 AI 面板外壳、开合呈现和内容挂载。
+- 状态来源：继续使用 `appStore.sidebarCollapsed`、`appStore.aiPanelOpen`、现有侧栏/AI 宽度及全屏位置尺寸；不新增动画状态或持久化字段。
+- 间接依赖：主编辑区的 flex 可用宽度、`AiPanel` 懒加载与卸载、侧栏宽度拖动、全屏外部点击关闭、产品引导快照/恢复。
+- 高风险点：快速反向切换时的宽度/透明度竞态；关闭期间不能继续接收焦点或指针；全屏进出不能遗留隐藏面板或覆盖恢复后的状态；减少动态效果必须即时切换。
+- 禁止影响：`appStore` 持久化语义、AI 请求与内部视图、启动首屏/动态 import、Resize listener 清理、全屏位置尺寸计算、预存 `global.css` 及其他阶段改动。
+
 ## 阶段历史
 
 ### 阶段 1｜文件树展开与收起（代码与自动检查）
@@ -106,6 +122,21 @@
 - 完成内容：`ToastContainer.tsx` 使用已有 Motion 依赖完成短时进出场和位置补位，系统减少动态效果时不位移；退出中即时 inert/aria-hidden；Store、操作回调和消息内容不变。新增 `tests/toast/toastContainer.test.tsx` 检查操作按钮退出及并发提示。
 - 验证结果：组件定向 Vitest `2 passed`；`npm run test:toast`、`npm run typecheck`、目标文件 ESLint、`git diff --check` 均 `PASS`。真实 Tauri 观感与减少动态效果 `NOT TESTED`。
 - 遗留问题：需补做真实桌面验收；本阶段只改组件、新增定向测试和本文件，未提交或推送。既有 `toast.css` 动画类暂未移除，以免改动预存脏工作区的 `global.css` 引用链。
+
+### 阶段 3｜搜索与文档标签的高频反馈（代码与自动检查）
+
+- 状态：进行中。
+- 完成内容：`SearchOverlay` 与 `CommandPalette` 去除滑入位移；命令面板打开后立即聚焦；`TabBar` 选中态使用不改变布局的透明度指示条；增加搜索聚焦/无滑入与标签指示条定向断言。
+- 验证结果：`npx vitest run tests/editor/SearchOverlay.preview.test.tsx tests/editor/SearchOverlay.nearestMatch.test.ts tests/editor/TabBar.newDocument.test.tsx --maxWorkers=1` 为 `11 passed`；`npm run typecheck`、目标文件 ESLint（`0 errors`）和 `git diff --check` 通过。真实桌面键盘与观感 `NOT TESTED`。
+- 遗留问题：待在真实桌面验证鼠标/键盘入口、连续开关、快速切换 Tab、滚动/拖拽标签及减少动态效果；阶段 1、阶段 2 的人工验收仍未补做。未提交或推送。
+
+### 阶段 4｜左侧栏与 AI 面板收放（代码与自动检查）
+
+- 状态：进行中。
+- 完成内容：侧边栏完整/图标态共用连续宽度外壳，展开时增加 80ms 内容交接延迟、收起立即切换；普通 AI 面板改为宽度/透明度对称过渡，全屏 AI 面板改为透明度/位移对称过渡；关闭时立即卸载 AI 内容，拖动期间禁用过渡保证跟手，保留 Store、懒加载、Resize 和全屏状态边界；新增局部减少动态效果规则。
+- 验证结果：`npx vitest run tests/agent/aiPanelInteractions.test.tsx --maxWorkers=1` 为 `11 passed`；`npm run typecheck`、`npx eslint src/components/layout/Sidebar.tsx`、本次短延迟改动后的 `npm run build:desktop` 与 Desktop bundle 门禁、`git diff --check` 通过。
+- 未完成门槛：旧产物 `node scripts/measure-cold-start.mjs --runs=10 --surface=edit --theme=warm` 第 1 次即因现有调试 GuanMo 单实例提前退出，未取得有效基线；新鲜 `npm run tauri -- build --no-bundle` 首次在 Rust 链接阶段内存分配失败，串行 Cargo 重试在 Vite/esbuild 阶段再次因系统内存不足失败。真实桌面、减少动态效果和新旧 Release 各 10 次冷启动均 `NOT TESTED`。
+- 遗留问题：待关闭现有调试实例且机器资源稳定后，重新生成新旧 Release 冷启动数据并补做人工验收；阶段 1、阶段 2、阶段 3 的人工验收仍未补做。未提交或推送。
 
 ### 计划初始化｜2026-10-02
 

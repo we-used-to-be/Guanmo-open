@@ -6,6 +6,7 @@ import { useFileOperations } from '@/hooks/useFileOperations'
 import { Modal } from 'animal-island-ui'
 import { exportMarkdownAsHtml } from '@/services/markdownExport'
 import { Sidebar } from './Sidebar'
+import './layoutMotion.css'
 import { StatusBar } from './StatusBar'
 import { TitleBar } from './TitleBar'
 import { OPEN_EDITOR_SEARCH_EVENT } from '@/services/editorEvents'
@@ -243,6 +244,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     isSidebarResizing.current = true
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
+    document.body.classList.add('gm-layout-resizing')
   }, [])
 
   const finishProductTour = useCallback(() => {
@@ -375,6 +377,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
         isSidebarResizing.current = false
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
+        document.body.classList.remove('gm-layout-resizing')
       }
     }
 
@@ -383,6 +386,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     return () => {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
+      document.body.classList.remove('gm-layout-resizing')
     }
   }, [setSidebarWidth])
 
@@ -394,6 +398,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     isAiPanelResizing.current = true
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
+    document.body.classList.add('gm-layout-resizing')
   }, [])
 
   useEffect(() => {
@@ -410,6 +415,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
         isAiPanelResizing.current = false
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
+        document.body.classList.remove('gm-layout-resizing')
       }
     }
 
@@ -418,6 +424,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     return () => {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
+      document.body.classList.remove('gm-layout-resizing')
     }
   }, [setAiPanelWidth])
 
@@ -707,18 +714,23 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
         </div>
 
         {/* AI Panel */}
-        {!isFullscreen && aiPanelOpen && (
+        {!isFullscreen && (
           <div
-            data-product-tour="ai-panel"
-            className="border-l border-gm-border flex-shrink-0 animate-slideInRight relative"
-            style={{ width: aiPanelWidth, contain: 'layout' }}
+            data-product-tour={aiPanelOpen ? 'ai-panel' : undefined}
+            aria-hidden={!aiPanelOpen}
+            className={`gm-layout-ai-panel flex-shrink-0 relative ${aiPanelOpen ? 'border-l border-gm-border' : 'gm-layout-ai-panel--closed'}`}
+            style={{ width: aiPanelOpen ? aiPanelWidth : 0, contain: 'layout' }}
           >
-            {/* Resize handle */}
-            <div
-              className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize z-10 hover:bg-gm-primary/30 transition-colors"
-              onMouseDown={handleResizeStart}
-            />
-            <Suspense fallback={<AiPanelFallback />}><AiPanel /></Suspense>
+            {aiPanelOpen && (
+              <>
+                {/* Resize handle */}
+                <div
+                  className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize z-10 hover:bg-gm-primary/30 transition-colors"
+                  onMouseDown={handleResizeStart}
+                />
+                <Suspense fallback={<AiPanelFallback />}><AiPanel /></Suspense>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -742,11 +754,12 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
         />
       )}
 
-      {isFullscreen && aiPanelOpen && (
+      {isFullscreen && (
         <div
           data-fullscreen-ai-panel="true"
+          aria-hidden={!aiPanelOpen}
           ref={fullscreenAiPanelRef}
-          className="fixed z-[45] flex flex-col overflow-hidden rounded-2xl border border-gm-border bg-gm-surface/92 shadow-lg backdrop-blur-xl animate-slideInRight"
+          className={`gm-layout-ai-panel gm-layout-ai-panel--fullscreen fixed z-[45] flex flex-col overflow-hidden rounded-2xl border border-gm-border bg-gm-surface/92 shadow-lg backdrop-blur-xl ${aiPanelOpen ? '' : 'gm-layout-ai-panel--closed'}`}
           style={{
             left: fullscreenAiPosition.x,
             top: fullscreenAiPosition.y,
@@ -755,28 +768,32 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
             contain: 'layout',
           }}
         >
-          <div className="min-h-0 min-w-0 flex-1">
-            <Suspense fallback={<AiPanelFallback />}><AiPanel
-              fullscreenDragHandleProps={{
-                onPointerDown: handleFullscreenAiDragStart,
-                onPointerMove: handleFullscreenAiDragMove,
-                onPointerUp: handleFullscreenAiDragEnd,
-                onPointerCancel: handleFullscreenAiDragEnd,
-            }}
-          /></Suspense>
-          </div>
-          <div
-            aria-label="调整 AI 助手窗口大小"
-            className="absolute bottom-0 right-0 z-30 flex h-5 w-5 cursor-grab items-center justify-center text-gm-text-secondary touch-none hover:text-gm-primary active:cursor-grabbing"
-            onPointerDown={handleFullscreenAiResizeStart}
-            onPointerMove={handleFullscreenAiResizeMove}
-            onPointerUp={handleFullscreenAiResizeEnd}
-            onPointerCancel={handleFullscreenAiResizeEnd}
-          >
-            <svg className="rotate-90" width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
-              <path d="M5 5l10 10M10 5l5 5" />
-            </svg>
-          </div>
+          {aiPanelOpen && (
+            <>
+              <div className="min-h-0 min-w-0 flex-1">
+                <Suspense fallback={<AiPanelFallback />}><AiPanel
+                  fullscreenDragHandleProps={{
+                    onPointerDown: handleFullscreenAiDragStart,
+                    onPointerMove: handleFullscreenAiDragMove,
+                    onPointerUp: handleFullscreenAiDragEnd,
+                    onPointerCancel: handleFullscreenAiDragEnd,
+                  }}
+                /></Suspense>
+              </div>
+              <div
+                aria-label="调整 AI 助手窗口大小"
+                className="absolute bottom-0 right-0 z-30 flex h-5 w-5 cursor-grab items-center justify-center text-gm-text-secondary touch-none hover:text-gm-primary active:cursor-grabbing"
+                onPointerDown={handleFullscreenAiResizeStart}
+                onPointerMove={handleFullscreenAiResizeMove}
+                onPointerUp={handleFullscreenAiResizeEnd}
+                onPointerCancel={handleFullscreenAiResizeEnd}
+              >
+                <svg className="rotate-90" width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+                  <path d="M5 5l10 10M10 5l5 5" />
+                </svg>
+              </div>
+            </>
+          )}
         </div>
       )}
 

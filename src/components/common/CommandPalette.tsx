@@ -206,7 +206,7 @@ export function CommandPalette({ open, onClose, mode = 'commands' }: CommandPale
     if (!open) return
     setQuery('')
     setSelectedIndex(0)
-    setTimeout(() => inputWrapperRef.current?.querySelector('input')?.focus(), 50)
+    inputWrapperRef.current?.querySelector('input')?.focus()
   }, [open])
 
   useEffect(() => {
@@ -251,7 +251,7 @@ export function CommandPalette({ open, onClose, mode = 'commands' }: CommandPale
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]">
       <div className="absolute inset-0 bg-black/20 animate-fadeIn" onClick={onClose} />
-      <div className="relative w-[560px] max-h-[400px] bg-gm-surface rounded-2xl shadow-lg border-2 border-gm-border overflow-hidden animate-slideInUp">
+      <div className="relative w-[560px] max-h-[400px] bg-gm-surface rounded-2xl shadow-lg border-2 border-gm-border overflow-hidden">
         <div ref={inputWrapperRef} className="flex items-center gap-2 px-3 py-2 border-b border-gm-border-subtle">
           <Input
             value={query}

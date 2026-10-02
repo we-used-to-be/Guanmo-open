@@ -294,7 +294,7 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
                 onDragLeave={handleDragLeave}
                 onDrop={(e) => handleDrop(e, tab.id)}
                 onDragEnd={handleDragEnd}
-                className={`h-full px-3 flex items-center gap-1.5 text-caption border-r border-gm-border-subtle group select-none cursor-pointer ${
+                className={`relative h-full px-3 flex items-center gap-1.5 text-caption border-r border-gm-border-subtle group select-none cursor-pointer ${
                   activeTabId === tab.id
                     ? 'bg-gm-canvas text-gm-text font-bold'
                     : 'text-gm-text-secondary hover:text-gm-text hover:bg-gm-surface-hover'
@@ -303,8 +303,15 @@ export function TabBar({ onOpenSettings }: TabBarProps) {
                     ? 'border-l-2 border-l-gm-primary'
                     : ''
                 }`}
-                style={activeTabId === tab.id ? { borderBottom: '2px solid var(--gm-active-indicator)' } : undefined}
               >
+                <span
+                  aria-hidden="true"
+                  data-tab-active-indicator
+                  className={`pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-gm-primary transition-opacity duration-100 ${
+                    activeTabId === tab.id ? 'opacity-100' : 'opacity-0'
+                  }`}
+                  style={{ backgroundColor: 'var(--gm-active-indicator)' }}
+                />
                 {rename.isRenaming(tab.id) ? (
                   <input
                     autoFocus

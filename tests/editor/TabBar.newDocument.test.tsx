@@ -32,6 +32,7 @@ describe('TabBar 新建文档按钮', () => {
     const button = screen.getByRole('button', { name: '新建文档 (Ctrl+N)' })
     const existingTab = screen.getByRole('button', { name: '已有文档.md' })
     expect(button).toHaveAttribute('title', '新建文档 (Ctrl+N)')
+    expect(existingTab.querySelector('[data-tab-active-indicator]')).toHaveClass('opacity-100')
     expect(existingTab.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 
     fireEvent.click(button)

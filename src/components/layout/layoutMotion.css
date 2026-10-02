@@ -1,0 +1,39 @@
+.gm-layout-sidebar.gm-instant-color {
+  min-width: 0;
+  transition: width 220ms cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+.gm-layout-ai-panel {
+  min-width: 0;
+  overflow: hidden;
+  transition:
+    width 220ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 140ms ease-out;
+}
+
+.gm-layout-ai-panel--closed {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.gm-layout-ai-panel--fullscreen {
+  transition:
+    opacity 140ms ease-out,
+    transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.gm-layout-ai-panel--fullscreen.gm-layout-ai-panel--closed {
+  transform: translateX(12px);
+}
+
+body.gm-layout-resizing .gm-layout-sidebar,
+body.gm-layout-resizing .gm-layout-ai-panel {
+  transition: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gm-layout-sidebar.gm-instant-color,
+  .gm-layout-ai-panel {
+    transition: none !important;
+  }
+}

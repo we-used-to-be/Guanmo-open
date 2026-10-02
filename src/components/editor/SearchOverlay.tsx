@@ -349,7 +349,7 @@ export function SearchOverlay({ onClose, editorViewRef, searchRequest, previewSo
     <div
       data-editor-search-overlay
       data-search-target={isEditor ? 'editor' : 'preview'}
-      className="absolute top-2 right-2 z-50 bg-gm-surface border border-gm-border rounded-xl shadow-lg p-3 animate-slideInUp min-w-[300px]"
+      className="absolute top-2 right-2 z-50 bg-gm-surface border border-gm-border rounded-xl shadow-lg p-3 min-w-[300px]"
     >
       <div className="flex flex-col gap-2">
         {/* Search row */}

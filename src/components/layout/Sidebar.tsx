@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { useEditorStore } from '@/stores/editorStore'
 import { isTauri } from '@/hooks/useTauri'
@@ -29,13 +29,36 @@ interface SidebarProps {
   onOpenSearch: () => void
 }
 
+const SIDEBAR_CONTENT_HANDOFF_DELAY_MS = 80
+
 export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpenSearch }: SidebarProps) {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
   const addWorkspaceRoot = useAppStore((s) => s.addWorkspaceRoot)
+  const [sidebarContentCollapsed, setSidebarContentCollapsed] = useState(collapsed)
   const recentFiles = useEditorStore((s) => s.recentFiles).filter((file) => isWorkspaceDisplayFile(file.path))
   const favorites = useEditorStore((s) => s.favorites).filter(isWorkspaceDisplayFile)
   const tabs = useEditorStore((s) => s.tabs)
   const browserFileSystem = getRuntimeCapabilities().browserFileSystem
+
+  useEffect(() => {
+    if (collapsed) {
+      setSidebarContentCollapsed(true)
+      return
+    }
+
+    const prefersReducedMotion = typeof window !== 'undefined'
+      && typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    if (prefersReducedMotion) {
+      setSidebarContentCollapsed(false)
+      return
+    }
+
+    const timerId = window.setTimeout(() => setSidebarContentCollapsed(false), SIDEBAR_CONTENT_HANDOFF_DELAY_MS)
+    return () => window.clearTimeout(timerId)
+  }, [collapsed])
+
+  const displayCollapsed = collapsed || sidebarContentCollapsed
 
   // Build favorites list with file names
   const favoriteFiles = favorites.map((path) => {
@@ -129,45 +152,48 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
     window.dispatchEvent(new Event('guanmo:workspace-refresh'))
   }, [])
 
-  if (collapsed) {
+  if (displayCollapsed) {
     return (
-      <div className="animal-cursor gm-instant-color w-14 flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col items-center py-3 gap-2">
-        <SidebarIcon label="展开侧边栏" onClick={toggleSidebar} tourTarget="sidebar-toggle">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
-        </SidebarIcon>
-        <SidebarIcon label="打开文件" onClick={handleOpenFile} tourTarget="open-file">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-            <path d="M14 2v6h6" />
-          </svg>
-        </SidebarIcon>
-        <SidebarIcon label="搜索" onClick={onOpenSearch}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="11" cy="11" r="8" />
-            <path d="M21 21l-4.35-4.35" />
-          </svg>
-        </SidebarIcon>
-        <SidebarIcon
-          label="打开文件夹"
-          onClick={handleOpenFolder}
-          disabled={!isTauri() && !browserFileSystem}
-          title={!isTauri() && !browserFileSystem ? '当前浏览器不支持目录工作区' : undefined}
-          tourTarget="open-folder"
-        >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
-            <path d="M12 11v6M9 14l3-3 3 3" />
-          </svg>
-        </SidebarIcon>
-        <div className="flex-1" />
-        <SidebarIcon label="设置" onClick={onOpenSettings} tourTarget="settings">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
-          </svg>
-        </SidebarIcon>
+      <div
+        className="animal-cursor gm-instant-color gm-layout-sidebar flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col items-center py-3 gap-2"
+        style={{ width: collapsed ? 56 : width }}
+      >
+          <SidebarIcon label="展开侧边栏" onClick={toggleSidebar} tourTarget="sidebar-toggle">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </SidebarIcon>
+          <SidebarIcon label="打开文件" onClick={handleOpenFile} tourTarget="open-file">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+              <path d="M14 2v6h6" />
+            </svg>
+          </SidebarIcon>
+          <SidebarIcon label="搜索" onClick={onOpenSearch}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8" />
+              <path d="M21 21l-4.35-4.35" />
+            </svg>
+          </SidebarIcon>
+          <SidebarIcon
+            label="打开文件夹"
+            onClick={handleOpenFolder}
+            disabled={!isTauri() && !browserFileSystem}
+            title={!isTauri() && !browserFileSystem ? '当前浏览器不支持目录工作区' : undefined}
+            tourTarget="open-folder"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+              <path d="M12 11v6M9 14l3-3 3 3" />
+            </svg>
+          </SidebarIcon>
+          <div className="flex-1" />
+          <SidebarIcon label="设置" onClick={onOpenSettings} tourTarget="settings">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
+            </svg>
+          </SidebarIcon>
       </div>
     )
   }
@@ -175,7 +201,7 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
   return (
     <div
       data-product-tour="sidebar-panel"
-      className="animal-cursor gm-instant-color relative flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col overflow-hidden"
+      className="animal-cursor gm-instant-color gm-layout-sidebar relative flex-shrink-0 bg-gm-surface border-r border-gm-border flex flex-col overflow-hidden"
       style={{ width }}
     >
       <div

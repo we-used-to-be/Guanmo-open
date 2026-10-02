@@ -23,7 +23,10 @@ describe('SearchOverlay 预览全文搜索', () => {
       />,
     )
 
-    expect(screen.getByPlaceholderText('搜索...')).toHaveValue('目标二')
+    const searchInput = screen.getByPlaceholderText('搜索...')
+    expect(searchInput).toHaveValue('目标二')
+    expect(searchInput).toHaveFocus()
+    expect(searchInput.closest('[data-editor-search-overlay]')).not.toHaveClass('animate-slideInUp')
     expect(screen.getByText('1/1')).toBeInTheDocument()
     expect(scrollToOffset).toHaveBeenLastCalledWith(content.lastIndexOf('目标二'))
   })
