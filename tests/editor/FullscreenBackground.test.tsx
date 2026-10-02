@@ -211,25 +211,26 @@ describe('Fullscreen background', () => {
     await releaseFullscreenBackground()
   })
 
-  it('does not load a background in edit mode or during the fullscreen transition', async () => {
+  it('shows one decoded background across all view modes after the fullscreen transition', async () => {
     readBackground.mockResolvedValue([137, 80, 78, 71])
     vi.stubGlobal('URL', class extends URL {
       static createObjectURL = vi.fn(() => 'blob:deferred-background')
       static revokeObjectURL = vi.fn()
     })
     useSettingsStore.getState().updateAppearanceSettings({ fullscreenBackgroundScene: 'snow', fullscreenBackgroundEnabled: true })
-    const { unmount } = render(<FullscreenControlBar {...props} />)
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(readBackground).not.toHaveBeenCalled()
-    unmount()
-
-    useEditorStore.getState().setViewMode('preview')
     document.documentElement.dataset.fullscreenTransitionPhase = 'switching'
-    const preview = render(<FullscreenControlBar {...props} />)
+    const { unmount } = render(<FullscreenControlBar {...props} />)
     expect(readBackground).not.toHaveBeenCalled()
     delete document.documentElement.dataset.fullscreenTransitionPhase
     await waitFor(() => expect(readBackground).toHaveBeenCalledWith('snow'))
-    preview.unmount()
+    await waitFor(() => expect(document.documentElement.style.getPropertyValue('--gm-fullscreen-background-image-1')).toContain('blob:deferred-background'))
+    for (const mode of ['preview', 'edit-preview', 'dual-preview', 'diff-preview', 'edit'] as const) {
+      act(() => useEditorStore.getState().setViewMode(mode))
+      expect(document.documentElement.style.getPropertyValue('--gm-fullscreen-background-image-1')).toContain('blob:deferred-background')
+    }
+    expect(readBackground).toHaveBeenCalledTimes(1)
+    expect(URL.revokeObjectURL).not.toHaveBeenCalledWith('blob:deferred-background')
+    unmount()
   })
 
   it('releases the decoded image after the fullscreen transition', async () => {

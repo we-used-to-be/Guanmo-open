@@ -10,7 +10,9 @@
   initial-value: 0%;
 }
 
-.gm-fullscreen-preview-content {
+.gm-fullscreen-preview-content,
+.gm-fullscreen-editor-content,
+.gm-fullscreen-diff-content {
   background-image: linear-gradient(
       color-mix(in srgb, var(--gm-surface) var(--gm-fullscreen-background-cover, 90%), transparent),
       color-mix(in srgb, var(--gm-surface) var(--gm-fullscreen-background-cover, 90%), transparent)
@@ -29,8 +31,18 @@
   background-attachment: fixed;
 }
 
-html[data-fullscreen-background-ready] .gm-fullscreen-preview-content {
+html[data-fullscreen-background-ready] .gm-fullscreen-preview-content,
+html[data-fullscreen-background-ready] .gm-fullscreen-editor-content,
+html[data-fullscreen-background-ready] .gm-fullscreen-diff-content {
   transition: --gm-fullscreen-background-mix 380ms ease, --gm-fullscreen-background-visible 380ms ease;
+}
+
+.gm-fullscreen-editor-content .cm-editor {
+  background-color: transparent !important;
+}
+
+.gm-fullscreen-editor-content .cm-gutters {
+  background-color: color-mix(in srgb, var(--gm-canvas) 55%, transparent) !important;
 }
 
 html[data-fullscreen-background-ready] .gm-fullscreen-preview-content .gm-code-block {
@@ -90,5 +102,7 @@ html[data-fullscreen-background-ready] .gm-fullscreen-preview-content .gm-markdo
 
 @media (prefers-reduced-motion: reduce) {
   .gm-fullscreen-background-scene { transition: none; }
-  .gm-fullscreen-preview-content { transition: none; }
+  .gm-fullscreen-preview-content,
+  .gm-fullscreen-editor-content,
+  .gm-fullscreen-diff-content { transition: none; }
 }

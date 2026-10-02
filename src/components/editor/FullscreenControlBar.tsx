@@ -51,7 +51,6 @@ export function FullscreenControlBar({
   const tabs = useEditorStore((s) => s.tabs)
   const activeTabId = useEditorStore((s) => s.activeTabId)
   const viewMode = useEditorStore((s) => s.viewMode)
-  const backgroundPreviewVisible = viewMode === 'preview' || viewMode === 'edit-preview' || viewMode === 'dual-preview'
   const setActiveTab = useEditorStore((s) => s.setActiveTab)
   const setViewMode = useEditorStore((s) => s.setViewMode)
   const closeTab = useEditorStore((s) => s.closeTab)
@@ -431,7 +430,7 @@ export function FullscreenControlBar({
   }, [backgroundScene, updateAppearanceSettings])
 
   useEffect(() => {
-    if (!backgroundPreviewVisible || !backgroundPath || !isTauri()) return
+    if (!backgroundPath || !isTauri()) return
     let cancelled = false
     void waitForFullscreenVisualIdle().then(() => {
       if (cancelled) return null
@@ -447,7 +446,7 @@ export function FullscreenControlBar({
       if (!cancelled) setBackgroundRevision((value) => value + 1)
     }).catch(() => undefined)
     return () => { cancelled = true }
-  }, [backgroundPath, backgroundPreviewVisible])
+  }, [backgroundPath])
 
   useEffect(() => {
     void updateFullscreenBackground({
@@ -455,9 +454,8 @@ export function FullscreenControlBar({
       path: backgroundPath,
       scene: backgroundScene,
       opacity: backgroundOpacity,
-      previewVisible: backgroundPreviewVisible,
     })
-  }, [backgroundEnabled, backgroundOpacity, backgroundPath, backgroundPreviewVisible, backgroundScene])
+  }, [backgroundEnabled, backgroundOpacity, backgroundPath, backgroundScene])
 
   useEffect(() => () => {
     void releaseFullscreenBackground()

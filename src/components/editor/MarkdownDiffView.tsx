@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import { eventMarker } from '@/services/eventMarker'
+import { useAppStore } from '@/stores/appStore'
 
 interface DiffLine {
   type: 'same' | 'added' | 'removed'
@@ -70,6 +71,7 @@ export const MarkdownDiffView = forwardRef<MarkdownDiffViewHandle, MarkdownDiffV
   documentKey,
   resource = 'diff',
 }, ref) {
+  const isFullscreen = useAppStore((s) => s.isFullscreen)
   const lifecycleMetadataRef = useRef({ documentKey, resource })
   const rootRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -118,7 +120,7 @@ export const MarkdownDiffView = forwardRef<MarkdownDiffViewHandle, MarkdownDiffV
   }), [])
 
   return (
-    <div ref={rootRef} className="h-full min-w-0 flex-1 overflow-auto bg-gm-surface">
+    <div ref={rootRef} className={`h-full min-w-0 flex-1 overflow-auto bg-gm-surface ${isFullscreen ? 'gm-fullscreen-diff-content' : ''}`}>
       <div className="sticky top-0 z-10 flex items-center justify-between border-b border-gm-border-subtle bg-gm-surface/95 px-4 py-2">
         <div className="text-caption font-bold text-gm-text">Markdown Diff</div>
         <div className="text-micro text-gm-text-tertiary">{changed} 行变化</div>

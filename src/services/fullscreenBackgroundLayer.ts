@@ -9,7 +9,6 @@ type BackgroundSelection = {
   path: string | null
   scene: string
   opacity: number
-  previewVisible: boolean
 }
 
 const layers: [BackgroundLayer, BackgroundLayer] = [{ key: null, url: null }, { key: null, url: null }]
@@ -121,7 +120,7 @@ export async function updateFullscreenBackground(selection: BackgroundSelection)
   if (request !== revision) return
 
   const root = document.documentElement
-  if (!selection.previewVisible || !isTauri()) {
+  if (!isTauri()) {
     clearBackground()
     return
   }
