@@ -92,20 +92,30 @@ fn valid_extension(extension: &str) -> bool {
     matches!(extension, "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp")
 }
 
-fn official_url(id: &str) -> Option<&'static str> {
-    match id {
-        "snow" => Some("https://raw.githubusercontent.com/we-used-to-be/Guanmo-open/main/resources/reading-backgrounds/snow.png"),
-        "sea" => Some("https://raw.githubusercontent.com/we-used-to-be/Guanmo-open/main/resources/reading-backgrounds/sea.png"),
-        "stars" => Some("https://raw.githubusercontent.com/we-used-to-be/Guanmo-open/main/resources/reading-backgrounds/stars.png"),
-        _ => None,
-    }
+const OFFICIAL_ASSET_REVISION: &str = "main";
+
+fn official_urls(id: &str) -> Option<[String; 2]> {
+    let version = match id {
+        "snow" => "f33e23c7",
+        "sea" => "fb5a9480",
+        "stars" => "923d854b",
+        _ => return None,
+    };
+    Some([
+        format!("https://cdn.jsdelivr.net/gh/we-used-to-be/Guanmo-open@{OFFICIAL_ASSET_REVISION}/resources/reading-backgrounds/{id}.png?v={version}"),
+        format!("https://raw.githubusercontent.com/we-used-to-be/Guanmo-open/refs/heads/main/resources/reading-backgrounds/{id}.png"),
+    ])
+}
+
+fn official_url(id: &str) -> Option<String> {
+    official_urls(id).map(|urls| urls[0].clone())
 }
 
 fn official_size(id: &str) -> Option<u64> {
     match id {
-        "snow" => Some(1_709_683),
-        "sea" => Some(1_915_040),
-        "stars" => Some(2_153_446),
+        "snow" => Some(1_967_810),
+        "sea" => Some(1_851_369),
+        "stars" => Some(2_089_812),
         _ => None,
     }
 }
@@ -151,6 +161,12 @@ pub fn read_reading_background(
             dir.join(format!("{}.{}", item.id, item.extension))
         }
     };
+    if let Some(expected_size) = official_size(&id) {
+        if !thumbnail && path.metadata().map(|metadata| metadata.len()).ok() != Some(expected_size)
+        {
+            return Err("official background needs download".into());
+        }
+    }
     let file = fs::File::open(path).map_err(|err| err.to_string())?;
     crate::read_bytes_with_limit(file, MAX_IMAGE_BYTES as u64)
 }
@@ -265,19 +281,34 @@ pub async fn download_reading_background(
     id: String,
     progress: Channel<u8>,
 ) -> Result<(), String> {
-    let url = official_url(&id).ok_or("unknown official background")?;
+    let urls = official_urls(&id).ok_or("unknown official background")?;
     let expected_size = official_size(&id).ok_or("unknown official background")?;
-    let response = reqwest::Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(90))
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|err| err.to_string())?
-        .get(url)
-        .send()
-        .await
-        .map_err(|err| err.to_string())?
-        .error_for_status()
         .map_err(|err| err.to_string())?;
+    let mut response = None;
+    let mut last_error = String::from("background download failed");
+    for url in urls {
+        match client.get(url).send().await {
+            Ok(candidate)
+                if candidate.status().is_success()
+                    && candidate
+                        .content_length()
+                        .is_some_and(|size| size != expected_size) =>
+            {
+                last_error = "invalid background size".into();
+            }
+            Ok(candidate) if candidate.status().is_success() => {
+                response = Some(candidate);
+                break;
+            }
+            Ok(candidate) => last_error = format!("HTTP {}", candidate.status()),
+            Err(err) => last_error = err.to_string(),
+        }
+    }
+    let response = response.ok_or(last_error)?;
     let total = response.content_length().unwrap_or(expected_size);
     if total != expected_size {
         return Err("invalid background size".into());

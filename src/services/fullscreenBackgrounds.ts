@@ -17,9 +17,9 @@ export type LocalBackground = LocalBackgroundRecord
 export type BackgroundLibrary = BackgroundLibraryRecord
 
 export const OFFICIAL_BACKGROUNDS: BackgroundItem[] = [
-  { id: 'snow', label: '雪山', kind: 'official', thumbnail: snowThumbnail, downloaded: false, extension: 'png' },
-  { id: 'sea', label: '海边', kind: 'official', thumbnail: seaThumbnail, downloaded: false, extension: 'png' },
-  { id: 'stars', label: '星空', kind: 'official', thumbnail: starsThumbnail, downloaded: false, extension: 'png' },
+  { id: 'snow', label: '码间絮语', kind: 'official', thumbnail: snowThumbnail, downloaded: false, extension: 'png' },
+  { id: 'sea', label: '晨雾花语', kind: 'official', thumbnail: seaThumbnail, downloaded: false, extension: 'png' },
+  { id: 'stars', label: '静谧星河', kind: 'official', thumbnail: starsThumbnail, downloaded: false, extension: 'png' },
 ]
 
 async function createThumbnail(bytes: Uint8Array, extension: string): Promise<number[]> {
