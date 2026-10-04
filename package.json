@@ -29,6 +29,7 @@
         "lint": "eslint src tests vite.config.ts vitest.config.ts",
         "typecheck": "tsc -b --pretty false",
         "test": "vitest run",
+        "test:smoke": "vitest run tests/smoke --maxWorkers=1",
         "test:watch": "vitest",
         "build": "tsc -b && vite build --mode web && node scripts/bundle-budget-check.mjs --mode web",
         "build:desktop": "tsc -b && vite build --mode desktop && node scripts/bundle-budget-check.mjs --mode desktop",

@@ -57,6 +57,14 @@ MEDIUM / HIGH 任务应提供以下简短提示词：
 - <本次明确不应该变化的功能>
 ```
 
+## Core Smoke Suite
+
+已落地的自动化入口：`npm run test:smoke`，使用现有 Vitest / Testing Library，单 worker 执行 `tests/smoke/`。挂载真实 Desktop `App`、App Shell、Store、CodeMirror、MarkdownPreview、AI / 阅读成果面板及桌面设置页；通过真实按钮打开匿名 Markdown、切换编辑 / 预览 / 分屏 / 全屏、打开设置 / 知识库、工作区侧栏和 A→B→A 标签页往返。
+
+宿主边界使用 Tauri 自带 `mockIPC`，SQLite 插件提供内存中的空查询结果，文件只返回匿名 fixture；关闭自动保存、自动入库和后台模式预热，联网更新使用既有缓存。未知 IPC、原生写文件及真实网络请求均使 Smoke 失败。运行时守卫捕获 `console.error`（仅排除 React act 调度警告）、`window.error`、`unhandledrejection`、根节点 / 壳层消失，并覆盖卸载期间异常；另有真实 render throw / ErrorBoundary 和错误事件、节点消失的故障注入测试，验证守卫确实会失败。
+
+自动化 `PASS` 仅证明 mock 宿主下 React Tree 的渲染与基础切换。`src/main.tsx` 原生启动、真实窗口 / WebView2、CSS 视觉白屏、长时间卡顿、文件授权 / 拖放 / 保存、SQLite 数据正确性、AI 联网及内容详情业务均不在此命令覆盖范围；原生项继续按 Human Acceptance 验收，未执行时记录 `NOT TESTED`。阅读成果和知识库当前覆盖空数据入口，复杂数据场景保留为后续定向扩展。
+
 ## Risk Signals（高风险信号，按需触发检查）
 
 风险不按修改行数判断：10 行核心状态代码可能比 500 行独立 UI 更危险。风险信号用于聚焦分析与检查范围（触发 Blast Radius 和 Review 中对应检查项），不机械升级风险级别：
@@ -80,6 +88,8 @@ MEDIUM / HIGH 任务应提供以下简短提示词：
 | TypeScript typecheck | `npm run typecheck` | 任何 `src/`、`tests/`、Vite 或 TypeScript 配置修改 |
 | Lint | `npm run lint` | 任何前端、测试或构建配置修改 |
 | Frontend unit/component tests | `npx vitest run <相关测试文件> --maxWorkers=1`；`npm test` | 有具体交互或逻辑回归风险时选定向测试；全量命令留给 CI、发布或用户明确要求 |
+| Core Smoke | `npm run test:smoke` | HIGH 的明确 Regression Surface、多任务 Integration Review；MEDIUM 或共享依赖变更按实际影响范围选择入口，低成本时可运行整套 Core Smoke |
+| Smoke typecheck | `npx tsc -p tests/smoke/tsconfig.json --pretty false` | Smoke 测试 / 守卫修改；覆盖测试代码及其实际引用的源码类型，不替代既有应用 typecheck |
 | Web build | `npm run build` | Web 入口、部署、构建配置或产物边界需要构建结果验收时；普通共享前端修改或 Review 不自动执行 |
 | Desktop frontend build | `npm run build:desktop` | 桌面产物、加载边界或体积变化需要构建结果验收时；普通桌面 UI 修改或 Review 不自动执行 |
 | File authorization | `npm run test:file-access` | 文件选择、打开、读写、删除、重命名、工作区、拖放、assets 或路径恢复修改 |
