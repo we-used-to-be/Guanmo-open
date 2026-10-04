@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-    Row, SqlitePool,
+    QueryBuilder, Row, Sqlite, SqlitePool,
 };
 use std::{
     cmp::Ordering,
@@ -731,6 +731,116 @@ fn tokenize(text: &str) -> Vec<String> {
     terms.into_iter().collect()
 }
 
+fn fts_query(text: &str) -> Option<String> {
+    let mut terms = tokenize(text);
+    if terms.iter().any(|term| {
+        term.chars().count() == 2
+            && !terms
+                .iter()
+                .any(|longer| longer.chars().count() > 3 && longer.contains(term))
+    }) {
+        return None;
+    }
+    let long_chinese: Vec<_> = terms
+        .iter()
+        .filter(|term| {
+            term.chars().count() > 3
+                && term
+                    .chars()
+                    .all(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch))
+        })
+        .cloned()
+        .collect();
+    for term in long_chinese {
+        let chars: Vec<_> = term.chars().collect();
+        terms.extend(chars.windows(3).map(|part| part.iter().collect::<String>()));
+    }
+    terms.retain(|term| term.chars().count() >= 3);
+    terms.sort_by(|left, right| {
+        right
+            .chars()
+            .count()
+            .cmp(&left.chars().count())
+            .then(left.cmp(right))
+    });
+    terms.dedup();
+    (!terms.is_empty()).then(|| {
+        terms
+            .into_iter()
+            .take(16)
+            .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(" OR ")
+    })
+}
+
+fn scoped_document_ids(index: &RagIndex, request: &RagSearchRequest) -> Option<Vec<String>> {
+    if request.file_paths.is_empty() {
+        return None;
+    }
+    let scope: HashSet<_> = request
+        .file_paths
+        .iter()
+        .map(|path| normalize_path(path))
+        .collect();
+    Some(
+        index
+            .documents
+            .values()
+            .filter(|doc| scope.contains(&normalize_path(&doc.file_path)))
+            .map(|doc| doc.id.clone())
+            .collect(),
+    )
+}
+
+async fn fts_keyword_scores(
+    pool: &SqlitePool,
+    document_ids: Option<Vec<String>>,
+    request: &RagSearchRequest,
+) -> Option<HashMap<String, f32>> {
+    if !request.keyword_search_enabled {
+        return None;
+    }
+    let query = fts_query(&request.query_text)?;
+    if document_ids.as_ref().is_some_and(Vec::is_empty) {
+        return Some(HashMap::new());
+    }
+    let mut sql = QueryBuilder::<Sqlite>::new(
+        "SELECT c.id, bm25(chunks_fts, 1.0, 2.0, 1.5) AS rank \
+         FROM chunks_fts JOIN chunks c ON c.rowid = chunks_fts.rowid \
+         WHERE chunks_fts MATCH ",
+    );
+    sql.push_bind(query);
+    if let Some(document_ids) = document_ids {
+        sql.push(" AND c.document_id IN (");
+        let mut separated = sql.separated(", ");
+        for id in document_ids {
+            separated.push_bind(id);
+        }
+        separated.push_unseparated(")");
+    }
+    sql.push(" ORDER BY rank LIMIT ");
+    sql.push_bind(request.top_k.saturating_mul(20).max(50) as i64);
+    let rows = sql.build().fetch_all(pool).await.ok()?;
+    let best = rows
+        .first()
+        .map(|row| -row.get::<f64, _>("rank"))
+        .unwrap_or(0.0);
+    Some(
+        rows.into_iter()
+            .map(|row| {
+                let rank = -row.get::<f64, _>("rank");
+                let score = if best > 0.0 {
+                    0.2 + 0.6 * (rank / best).clamp(0.0, 1.0)
+                } else {
+                    0.5
+                };
+                (row.get("id"), score as f32)
+            })
+            .collect(),
+    )
+}
+
 fn keyword_score(query: &str, terms: &[String], chunk: &ChunkRecord, doc: &DocumentRecord) -> f32 {
     if terms.is_empty() {
         return 0.0;
@@ -846,7 +956,16 @@ fn sort_and_diversify(index: &RagIndex, hits: Vec<RankedHit>, top_k: usize) -> V
     output
 }
 
+#[cfg(test)]
 fn search_index(index: &RagIndex, request: &RagSearchRequest) -> Vec<RagSearchHit> {
+    search_index_with_fts(index, request, None)
+}
+
+fn search_index_with_fts(
+    index: &RagIndex,
+    request: &RagSearchRequest,
+    fts_scores: Option<&HashMap<String, f32>>,
+) -> Vec<RagSearchHit> {
     let scope: Option<HashSet<String>> = (!request.file_paths.is_empty()).then(|| {
         request
             .file_paths
@@ -899,7 +1018,41 @@ fn search_index(index: &RagIndex, request: &RagSearchRequest) -> Vec<RagSearchHi
             if !in_scope(doc) {
                 continue;
             }
-            let score = keyword_score(&request.query_text, &terms, chunk, doc);
+            let score = if let Some(fts_scores) = fts_scores {
+                let fts_score = fts_scores.get(&chunk.id).copied().unwrap_or(0.0);
+                let name = doc
+                    .file_path
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .unwrap_or(&doc.title)
+                    .to_lowercase();
+                let title = doc.title.to_lowercase();
+                let name_match = terms
+                    .iter()
+                    .any(|term| name.contains(term) || title.contains(term));
+                if name_match {
+                    fts_score.max(keyword_score(&request.query_text, &terms, chunk, doc))
+                } else if fts_score > 0.0 {
+                    fts_score
+                } else if terms.iter().any(|term| {
+                    term.chars().count() == 2
+                        && term
+                            .chars()
+                            .all(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch))
+                        && (chunk.content.contains(term)
+                            || chunk
+                                .heading
+                                .as_deref()
+                                .is_some_and(|heading| heading.contains(term))
+                            || chunk.title_path.iter().any(|part| part.contains(term)))
+                }) {
+                    keyword_score(&request.query_text, &terms, chunk, doc).min(0.4)
+                } else {
+                    0.0
+                }
+            } else {
+                keyword_score(&request.query_text, &terms, chunk, doc)
+            };
             if score > 0.0 {
                 keyword_hits.push(RankedHit {
                     chunk_index,
@@ -1025,9 +1178,13 @@ pub async fn search_rag_index(
         let (documents, chunks) = load_raw_index(&pool, false).await?;
         request.query_vector = None;
         let (fallback, _) = build_index(documents, chunks);
-        return tauri::async_runtime::spawn_blocking(move || search_index(&fallback, &request))
-            .await
-            .map_err(|error| error.to_string());
+        let document_ids = scoped_document_ids(&fallback, &request);
+        let fts_scores = fts_keyword_scores(&pool, document_ids, &request).await;
+        return tauri::async_runtime::spawn_blocking(move || {
+            search_index_with_fts(&fallback, &request, fts_scores.as_ref())
+        })
+        .await
+        .map_err(|error| error.to_string());
     }
     if initialize_internal(&app, state.inner(), &CancellationToken::new())
         .await
@@ -1039,9 +1196,13 @@ pub async fn search_rag_index(
         let (documents, chunks) = load_raw_index(&pool, false).await?;
         request.query_vector = None;
         let (fallback, _) = build_index(documents, chunks);
-        return tauri::async_runtime::spawn_blocking(move || search_index(&fallback, &request))
-            .await
-            .map_err(|error| error.to_string());
+        let document_ids = scoped_document_ids(&fallback, &request);
+        let fts_scores = fts_keyword_scores(&pool, document_ids, &request).await;
+        return tauri::async_runtime::spawn_blocking(move || {
+            search_index_with_fts(&fallback, &request, fts_scores.as_ref())
+        })
+        .await
+        .map_err(|error| error.to_string());
     }
     let index = {
         let control = state
@@ -1053,9 +1214,26 @@ pub async fn search_rag_index(
             .clone()
             .ok_or_else(|| "RAG index unavailable".to_string())?
     };
+    let fts_scores = if request.keyword_search_enabled && fts_query(&request.query_text).is_some() {
+        let document_ids = {
+            let guard = index.read().map_err(|_| "RAG index poisoned".to_string())?;
+            scoped_document_ids(&guard, &request)
+        };
+        let pool = match database_path(&app) {
+            Ok(path) => open_readonly_pool(path).await.ok(),
+            Err(_) => None,
+        };
+        if let Some(pool) = pool {
+            fts_keyword_scores(&pool, document_ids, &request).await
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     tauri::async_runtime::spawn_blocking(move || {
         let index = index.read().map_err(|_| "RAG index poisoned".to_string())?;
-        Ok(search_index(&index, &request))
+        Ok(search_index_with_fts(&index, &request, fts_scores.as_ref()))
     })
     .await
     .map_err(|error| error.to_string())?
@@ -1064,7 +1242,179 @@ pub async fn search_rag_index(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::Executor;
     use std::time::Instant;
+
+    #[tokio::test]
+    async fn fts_keyword_query_ranks_and_scopes_chinese_chunks() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        pool.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, document_id TEXT, content TEXT, heading TEXT, title_path TEXT)")
+            .await.unwrap();
+        pool.execute("CREATE VIRTUAL TABLE chunks_fts USING fts5(content, heading, title_path, content='chunks', content_rowid='rowid', tokenize='trigram')")
+            .await.unwrap();
+        pool.execute("INSERT INTO chunks VALUES ('a', 'd1', '关键词检索', '关键词检索', '')")
+            .await
+            .unwrap();
+        pool.execute("INSERT INTO chunks VALUES ('b', 'd2', '关键词检索', '', '')")
+            .await
+            .unwrap();
+        pool.execute("INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild')")
+            .await
+            .unwrap();
+        let request = RagSearchRequest {
+            query_text: "关键词检索".into(),
+            query_vector: None,
+            top_k: 2,
+            threshold: 0.0,
+            file_paths: vec![],
+            keyword_search_enabled: true,
+            current_file_path: None,
+            prefer_current_file: false,
+            prefer_recent_documents: false,
+            keyword_only_fallback: false,
+        };
+        let scores = fts_keyword_scores(&pool, None, &request).await.unwrap();
+        assert!(scores["a"] > scores["b"]);
+        let scoped = fts_keyword_scores(&pool, Some(vec!["d2".into()]), &request)
+            .await
+            .unwrap();
+        assert_eq!(scoped.len(), 1);
+        assert!(scoped.contains_key("b"));
+        assert!(fts_query("检索").is_none());
+        assert!(fts_query("AI 关键词检索").is_none());
+    }
+
+    #[test]
+    fn fts_results_keep_legacy_two_character_chinese_recall() {
+        let documents = vec![RawDocument {
+            id: "d".into(),
+            file_path: "C:/anonymous.md".into(),
+            title: "anonymous".into(),
+            last_modified: 0,
+        }];
+        let chunk = |id: &str, content: &str| RawChunk {
+            id: id.into(),
+            document_id: "d".into(),
+            content: content.into(),
+            content_hash: Some(id.into()),
+            index: if id == "a" { 0 } else { 1 },
+            start_line: 1,
+            end_line: 1,
+            title_path: None,
+            heading: None,
+            source_type: "markdown".into(),
+            embedding: None,
+        };
+        let index = build_index(
+            documents,
+            vec![chunk("a", "关键词检索"), chunk("b", "词检方案")],
+        )
+        .0;
+        let request = RagSearchRequest {
+            query_text: "关键词检索".into(),
+            query_vector: None,
+            top_k: 2,
+            threshold: 0.0,
+            file_paths: vec![],
+            keyword_search_enabled: true,
+            current_file_path: None,
+            prefer_current_file: false,
+            prefer_recent_documents: false,
+            keyword_only_fallback: false,
+        };
+        let scores = HashMap::from([("a".into(), 0.8)]);
+        let hits = search_index_with_fts(&index, &request, Some(&scores));
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].chunk.id, "a");
+        assert_eq!(hits[1].chunk.id, "b");
+    }
+
+    #[tokio::test]
+    #[ignore = "manual anonymous keyword search baseline"]
+    async fn compare_legacy_and_fts_keyword_latency() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        pool.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, document_id TEXT, content TEXT, heading TEXT, title_path TEXT)")
+            .await.unwrap();
+        pool.execute("CREATE VIRTUAL TABLE chunks_fts USING fts5(content, heading, title_path, content='chunks', content_rowid='rowid', tokenize='trigram')")
+            .await.unwrap();
+        let mut transaction = pool.begin().await.unwrap();
+        let mut chunks = Vec::new();
+        for i in 0..5_000 {
+            let id = format!("c{i}");
+            let content = if i % 10 == 0 {
+                format!("ordinary paragraph with benchmark target {i}")
+            } else {
+                format!("ordinary paragraph with other material {i}")
+            };
+            sqlx::query("INSERT INTO chunks VALUES (?, 'd', ?, '', '')")
+                .bind(&id)
+                .bind(&content)
+                .execute(&mut *transaction)
+                .await
+                .unwrap();
+            chunks.push(RawChunk {
+                id,
+                document_id: "d".into(),
+                content,
+                content_hash: Some(format!("h{i}")),
+                index: i,
+                start_line: i,
+                end_line: i,
+                title_path: None,
+                heading: None,
+                source_type: "markdown".into(),
+                embedding: None,
+            });
+        }
+        transaction.commit().await.unwrap();
+        pool.execute("INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild')")
+            .await
+            .unwrap();
+        let index = build_index(
+            vec![RawDocument {
+                id: "d".into(),
+                file_path: "C:/anonymous.md".into(),
+                title: "anonymous".into(),
+                last_modified: 0,
+            }],
+            chunks,
+        )
+        .0;
+        let request = RagSearchRequest {
+            query_text: "benchmark target".into(),
+            query_vector: None,
+            top_k: 10,
+            threshold: 0.0,
+            file_paths: vec![],
+            keyword_search_enabled: true,
+            current_file_path: None,
+            prefer_current_file: false,
+            prefer_recent_documents: false,
+            keyword_only_fallback: false,
+        };
+        let started = Instant::now();
+        for _ in 0..20 {
+            std::hint::black_box(search_index(&index, &request));
+        }
+        let legacy_ms = started.elapsed().as_millis();
+        let started = Instant::now();
+        for _ in 0..20 {
+            let scores = fts_keyword_scores(&pool, None, &request).await.unwrap();
+            std::hint::black_box(search_index_with_fts(&index, &request, Some(&scores)));
+        }
+        println!(
+            "anonymous 5000 chunks / 20 queries: legacy={legacy_ms}ms fts={}ms",
+            started.elapsed().as_millis()
+        );
+    }
 
     #[test]
     fn active_initialization_can_be_cancelled_idempotently() {

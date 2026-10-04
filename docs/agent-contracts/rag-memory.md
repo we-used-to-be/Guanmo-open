@@ -13,6 +13,7 @@
 
 - RAG 文档使用精确 SHA-256 `documents.content_hash` 跳过未变化内容；Embedding 缓存只允许按 `embedding_model/preprocess_version/input_hash` 完整匹配复用。
 - RAG 更新必须在事务内增量写入文档、语义块、向量和队列任务；未变化块沿用旧 ID 与向量，已消失块及其向量必须删除，失败时保留旧索引。
+- `chunks_fts` 是 `chunks` 的可重建 FTS5 派生索引；schema 升级回填旧分块，增删改由 SQLite 触发器同步。双字中文与 FTS 查询失败时沿用原关键词匹配，不得丢失已有分块召回。
 - RAG 增量索引回归检查使用 `npm run test:rag-index`。
 
 ## 后台搜索边界

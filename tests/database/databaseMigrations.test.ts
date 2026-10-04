@@ -4,6 +4,7 @@ import {
   CURRENT_DB_SCHEMA_VERSION,
   DB_LEGACY_BACKFILL_STATEMENTS,
   DB_MIGRATIONS,
+  DB_POST_MIGRATION_STATEMENTS,
 } from '@/services/database/schema'
 
 class FakeSchemaDatabase {
@@ -87,6 +88,30 @@ describe('database schema versioning', () => {
 
     expect(database.selected).toEqual(['PRAGMA user_version'])
     expect(database.executed).toEqual([])
+  })
+
+  it('upgrades version 2 by creating and rebuilding the derived FTS index before advancing the version', async () => {
+    const database = new FakeSchemaDatabase({ userVersion: 2, existingSchema: true })
+
+    await initializeDatabaseSchema(database)
+
+    const createIndex = database.executed.indexOf(DB_POST_MIGRATION_STATEMENTS[1])
+    const rebuild = database.executed.indexOf(DB_POST_MIGRATION_STATEMENTS.at(-1)!)
+    expect(createIndex).toBeGreaterThanOrEqual(0)
+    expect(rebuild).toBeGreaterThan(createIndex)
+    expect(database.executed.at(-1)).toBe(`PRAGMA user_version = ${CURRENT_DB_SCHEMA_VERSION}`)
+  })
+
+  it('keeps version 2 when the FTS rebuild fails so the upgrade can retry', async () => {
+    const database = new FakeSchemaDatabase({ userVersion: 2, existingSchema: true })
+    const originalExecute = database.execute.bind(database)
+    database.execute = async (sql: string) => {
+      if (sql === DB_POST_MIGRATION_STATEMENTS.at(-1)) throw new Error('FTS rebuild failed')
+      return originalExecute(sql)
+    }
+
+    await expect(initializeDatabaseSchema(database)).rejects.toThrow('FTS rebuild failed')
+    expect(database.userVersion).toBe(2)
   })
 
   it('does not advance user_version when a legacy migration fails', async () => {

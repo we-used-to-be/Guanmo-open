@@ -291,7 +291,7 @@ export const DB_MIGRATIONS = [
   },
 ] as const
 
-export const CURRENT_DB_SCHEMA_VERSION = 2
+export const CURRENT_DB_SCHEMA_VERSION = 3
 
 export const DB_LEGACY_BACKFILL_STATEMENTS = [
   `WITH ordered_messages AS (
@@ -316,6 +316,24 @@ export const DB_LEGACY_BACKFILL_STATEMENTS = [
 export const DB_POST_MIGRATION_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS idx_memories_retrieval
    ON memories(status, scope_type, scope_key, category, updated_at DESC)`,
+  `CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+    content, heading, title_path, content='chunks', content_rowid='rowid', tokenize='trigram'
+  )`,
+  `CREATE TRIGGER IF NOT EXISTS chunks_fts_ai AFTER INSERT ON chunks BEGIN
+    INSERT INTO chunks_fts(rowid, content, heading, title_path)
+    VALUES (new.rowid, new.content, new.heading, new.title_path);
+  END`,
+  `CREATE TRIGGER IF NOT EXISTS chunks_fts_ad AFTER DELETE ON chunks BEGIN
+    INSERT INTO chunks_fts(chunks_fts, rowid, content, heading, title_path)
+    VALUES ('delete', old.rowid, old.content, old.heading, old.title_path);
+  END`,
+  `CREATE TRIGGER IF NOT EXISTS chunks_fts_au AFTER UPDATE ON chunks BEGIN
+    INSERT INTO chunks_fts(chunks_fts, rowid, content, heading, title_path)
+    VALUES ('delete', old.rowid, old.content, old.heading, old.title_path);
+    INSERT INTO chunks_fts(rowid, content, heading, title_path)
+    VALUES (new.rowid, new.content, new.heading, new.title_path);
+  END`,
+  "INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild')",
 ] as const
 
 export const DB_NAME = 'guanmo.db'
