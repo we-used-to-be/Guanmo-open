@@ -32,7 +32,8 @@ describe('设置兼容', () => {
       assistantVisualId: 'sprite',
       aiAssistantFontSize: 14,
       fullscreenTransitionEnabled: true,
-      sendMessageAnimationEnabled: false,
+      sendMessageAnimationEnabled: true,
+      fullscreenOptionAnimationEnabled: true,
       motionPreference: 'system',
     })
     expect(state.webSearch).toMatchObject({ provider: 'duckduckgo', maxResults: 5, timeout: 60000 })
@@ -64,7 +65,7 @@ describe('设置兼容', () => {
     const state = store.getState()
 
     expect(state.editor).toMatchObject({ fontSize: 18, lineHeight: 1.65, fullscreenContentPaddingPercent: 7, inlinePreviewEdit: true, autoSendAiShortcut: true, defaultOpenMode: 'preview' })
-    expect(state.appearance).toMatchObject({ themeId: 'dark', lastLightThemeId: 'warm', aiAvatarStyle: 'sprite', aiAssistantFontSize: 14, fullscreenTransitionEnabled: true, sendMessageAnimationEnabled: false })
+    expect(state.appearance).toMatchObject({ themeId: 'dark', lastLightThemeId: 'warm', aiAvatarStyle: 'sprite', aiAssistantFontSize: 14, fullscreenTransitionEnabled: true, sendMessageAnimationEnabled: true, fullscreenOptionAnimationEnabled: true })
   })
 
   it('将旧版全屏像素边距迁移为百分比', async () => {
@@ -101,7 +102,7 @@ describe('设置兼容', () => {
     expect(persisted.state?.appearance?.aiAssistantFontSize).toBe(18)
   })
 
-  it('保留发送消息动画开关并对非法值回退关闭', async () => {
+  it('保留发送消息动画开关并对非法值回退开启', async () => {
     const enabledStore = await loadSettingsStore({ appearance: { sendMessageAnimationEnabled: true } })
     expect(enabledStore.getState().appearance.sendMessageAnimationEnabled).toBe(true)
 
@@ -110,12 +111,12 @@ describe('设置兼容', () => {
     expect(persisted.state?.appearance?.sendMessageAnimationEnabled).toBe(false)
 
     const invalidStore = await loadSettingsStore({ appearance: { sendMessageAnimationEnabled: 'true' } })
-    expect(invalidStore.getState().appearance.sendMessageAnimationEnabled).toBe(false)
+    expect(invalidStore.getState().appearance.sendMessageAnimationEnabled).toBe(true)
   })
 
-  it('全屏选项动画默认关闭，兼容旧配置并持久化显式选择', async () => {
+  it('全屏选项动画默认开启，兼容旧配置并持久化显式选择', async () => {
     const defaultStore = await loadSettingsStore()
-    expect(defaultStore.getState().appearance.fullscreenOptionAnimationEnabled).toBe(false)
+    expect(defaultStore.getState().appearance.fullscreenOptionAnimationEnabled).toBe(true)
 
     const enabledStore = await loadSettingsStore({ appearance: { fullscreenOptionAnimationEnabled: true } })
     expect(enabledStore.getState().appearance.fullscreenOptionAnimationEnabled).toBe(true)
@@ -124,9 +125,9 @@ describe('设置兼容', () => {
     expect(persisted.state?.appearance?.fullscreenOptionAnimationEnabled).toBe(false)
 
     const missingStore = await loadSettingsStore({ appearance: { sendMessageAnimationEnabled: true } })
-    expect(missingStore.getState().appearance.fullscreenOptionAnimationEnabled).toBe(false)
+    expect(missingStore.getState().appearance.fullscreenOptionAnimationEnabled).toBe(true)
     const invalidStore = await loadSettingsStore({ appearance: { fullscreenOptionAnimationEnabled: 'true' } })
-    expect(invalidStore.getState().appearance.fullscreenOptionAnimationEnabled).toBe(false)
+    expect(invalidStore.getState().appearance.fullscreenOptionAnimationEnabled).toBe(true)
   })
 
   it('保留用户显式关闭快捷 AI 自动发送的设置', async () => {
