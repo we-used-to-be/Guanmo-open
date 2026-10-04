@@ -9,22 +9,16 @@ export const AI_SHORTCUT_LABEL_MAX_LENGTH = 12
 export const AI_SHORTCUT_PROMPT_MAX_LENGTH = 1000
 
 const DEFAULT_AI_SHORTCUT_ACTIONS: readonly AiShortcutAction[] = [
-  { id: 'explain', label: 'AI 解释这段', prompt: '请解释这段内容', enabled: true },
+  { id: 'explain', label: '解释', prompt: '请解释这段内容', enabled: true },
   {
     id: 'explain-with-context',
-    label: 'AI 结合上下文解释',
+    label: '结合上下文解释',
     prompt: '请结合上下文解释这段内容，优先读取选区附近内容，不要默认阅读全文',
     enabled: true,
   },
-  { id: 'summarize', label: 'AI 总结这段', prompt: '请总结这段内容', enabled: true },
-  { id: 'rewrite', label: 'AI 改写这段', prompt: '请改写这段内容，使其更清晰', enabled: true },
-  {
-    id: 'format',
-    label: 'AI 优化格式',
-    prompt: '请优化选中文本的 Markdown 格式：可以调整标题、列表、引用、代码块、表格等 Markdown 标记；不得改变原文内容、语义和顺序，不得新增信息。',
-    enabled: true,
-  },
-  { id: 'translate', label: 'AI 翻译', prompt: '请翻译这段内容', enabled: true },
+  { id: 'translate', label: '翻译', prompt: '翻译，直接输出译文，并在关键词或专业术语后用括号标注其音标，不要添加任何解释。', enabled: true },
+  { id: 'web-search', label: '联网搜索', prompt: '联网搜索', enabled: true },
+  { id: 'knowledge-search', label: '检索知识库相关内容', prompt: '检索知识库中与这有关的内容', enabled: true },
 ]
 
 export function createDefaultAiShortcutActions(): AiShortcutAction[] {

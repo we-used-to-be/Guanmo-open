@@ -39,14 +39,20 @@ describe('设置兼容', () => {
     expect(state.ai.timeout).toBe(60000)
     expect(state.ai.maxContextLength).toBe(8192)
     expect(state.ai.embedding.timeout).toBe(60000)
-    expect(state.aiShortcutActions).toHaveLength(6)
+    expect(state.aiShortcutActions).toHaveLength(5)
     expect(state.aiShortcutActions.map((action) => action.label)).toEqual([
-      'AI 解释这段',
-      'AI 结合上下文解释',
-      'AI 总结这段',
-      'AI 改写这段',
-      'AI 优化格式',
-      'AI 翻译',
+      '解释',
+      '结合上下文解释',
+      '翻译',
+      '联网搜索',
+      '检索知识库相关内容',
+    ])
+    expect(state.aiShortcutActions.map((action) => action.prompt)).toEqual([
+      '请解释这段内容',
+      '请结合上下文解释这段内容，优先读取选区附近内容，不要默认阅读全文',
+      '翻译，直接输出译文，并在关键词或专业术语后用括号标注其音标，不要添加任何解释。',
+      '联网搜索',
+      '检索知识库中与这有关的内容',
     ])
   })
 
@@ -277,7 +283,7 @@ describe('设置兼容', () => {
       editor: { fontSize: 18 },
     })
 
-    expect(store.getState().aiShortcutActions).toHaveLength(6)
+    expect(store.getState().aiShortcutActions).toHaveLength(5)
     expect(store.getState().editor.fontSize).toBe(18)
   })
 
@@ -308,7 +314,7 @@ describe('设置兼容', () => {
     const brokenStore = await loadSettingsStore({
       aiShortcutActions: [{ id: '', label: '', prompt: '' }],
     })
-    expect(brokenStore.getState().aiShortcutActions).toHaveLength(6)
+    expect(brokenStore.getState().aiShortcutActions).toHaveLength(5)
   })
 })
 

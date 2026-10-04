@@ -59,7 +59,7 @@ describe('快捷操作设置', () => {
   it('支持按钮排序与启停', () => {
     render(<AiShortcutSettings />)
 
-    fireEvent.click(screen.getByRole('button', { name: '下移“AI 解释这段”' }))
+    fireEvent.click(screen.getByRole('button', { name: '下移“解释”' }))
     expect(useSettingsStore.getState().aiShortcutActions.slice(0, 2).map((item) => item.id)).toEqual([
       'explain-with-context',
       'explain',
@@ -75,14 +75,14 @@ describe('快捷操作设置', () => {
     render(<AiShortcutSettings />)
 
     fireEvent.click(screen.getAllByRole('button', { name: '删除' })[0])
-    expect(useSettingsStore.getState().aiShortcutActions).toHaveLength(6)
+    expect(useSettingsStore.getState().aiShortcutActions).toHaveLength(5)
 
     confirm.mockReturnValue(true)
     fireEvent.click(screen.getAllByRole('button', { name: '删除' })[0])
-    expect(useSettingsStore.getState().aiShortcutActions).toHaveLength(5)
+    expect(useSettingsStore.getState().aiShortcutActions).toHaveLength(4)
 
     fireEvent.click(screen.getByRole('button', { name: '恢复默认' }))
-    expect(useSettingsStore.getState().aiShortcutActions).toHaveLength(6)
+    expect(useSettingsStore.getState().aiShortcutActions).toHaveLength(5)
     expect(useSettingsStore.getState().aiShortcutActions[0].id).toBe('explain')
   })
 
@@ -90,7 +90,7 @@ describe('快捷操作设置', () => {
     render(<AiShortcutSettings />)
     expect(screen.queryByRole('button', { name: /拖动/ })).not.toBeInTheDocument()
     expect(screen.queryByText('命令样例')).not.toBeInTheDocument()
-    expect(screen.getByText('AI 解释这段')).not.toHaveAttribute('title')
+    expect(screen.getByText('解释')).not.toHaveAttribute('title')
     expect(screen.getByText('请解释这段内容')).not.toHaveAttribute('title')
   })
 
@@ -98,9 +98,9 @@ describe('快捷操作设置', () => {
     render(<AiShortcutSettings />)
 
     const row = document.querySelector('[data-ai-shortcut-row="explain"]')!
-    const orderControls = within(row).getByLabelText('调整“AI 解释这段”顺序')
+    const orderControls = within(row).getByLabelText('调整“解释”顺序')
     expect(row.firstElementChild).toBe(orderControls)
-    expect(within(orderControls).getByRole('button', { name: '上移“AI 解释这段”' })).toHaveClass('h-5', 'w-6')
-    expect(within(orderControls).getByRole('button', { name: '下移“AI 解释这段”' })).toHaveClass('h-5', 'w-6')
+    expect(within(orderControls).getByRole('button', { name: '上移“解释”' })).toHaveClass('h-5', 'w-6')
+    expect(within(orderControls).getByRole('button', { name: '下移“解释”' })).toHaveClass('h-5', 'w-6')
   })
 })
