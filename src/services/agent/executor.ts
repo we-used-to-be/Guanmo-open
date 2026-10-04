@@ -600,6 +600,7 @@ async function executeTool(
   }
 
   const toolSpanId = startAgentTraceSpan(diagnosticRunId, 'tool', { tool: name })
+  const diagnosticStartedAt = performance.now()
   let execution: Awaited<ReturnType<typeof runToolWithTimeout>>
   try {
     execution = await runToolWithTimeout(
@@ -609,6 +610,8 @@ async function executeTool(
     )
   } catch (error) {
     finishAgentTraceSpan(diagnosticRunId, toolSpanId, 'error', { result: 'exception' })
+    void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+      recordDiagnostic('agent.tool_failed', 'error', performance.now() - diagnosticStartedAt, undefined, name as AgentToolName)).catch(() => undefined)
     throw error
   }
   finishAgentTraceSpan(
@@ -616,6 +619,12 @@ async function executeTool(
     toolSpanId,
     execution.status === 'success' ? 'success' : execution.status === 'tool_error' ? 'error' : execution.status,
   )
+  const toolDurationMs = performance.now() - diagnosticStartedAt
+  if (execution.status !== 'success' || toolDurationMs >= 1000) {
+    const event = execution.status === 'success' ? 'agent.tool_slow' : 'agent.tool_failed'
+    void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+      recordDiagnostic(event, execution.status === 'success' ? 'slow' : 'error', toolDurationMs, undefined, name as AgentToolName)).catch(() => undefined)
+  }
   if (execution.status !== 'success') {
     const result = execution.status === 'timeout'
       ? '工具执行超时。'

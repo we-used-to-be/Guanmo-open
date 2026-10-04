@@ -5,21 +5,16 @@
 //! 时刻），前端通过 `performance.timeOrigin + performance.now()` 换算，
 //! 两侧对齐到同一系统时钟（误差通常为毫秒级）。
 //!
-//! 默认（未启用 `startup-metrics` feature）所有采集函数为空实现，
-//! `record_startup_metrics` 命令静默丢弃前端数据，不产生任何文件 I/O；
-//! 启用 feature 的性能测试版 Release 才会在启动完成后由前端一次性发送
-//! 点位，并追加写入 JSONL（一次启动一行，位于
-//! `app_config_dir/startup-metrics.jsonl`）。
+//! 普通 Release 在启动完成后一次性上报现有关键点位，写入有界诊断日志。
+//! `startup-metrics` feature 额外保留性能测试用的完整 JSONL 历史
+//!（`app_config_dir/startup-metrics.jsonl`）。
 
-#[cfg(feature = "startup-metrics")]
 use std::collections::HashMap;
 #[cfg(feature = "startup-metrics")]
 use std::io::Write;
-#[cfg(feature = "startup-metrics")]
 use std::sync::{Mutex, OnceLock};
 
 use serde_json::Value;
-#[cfg(feature = "startup-metrics")]
 use serde_json::{json, Map};
 #[cfg(feature = "startup-metrics")]
 use tauri::Manager;
@@ -38,8 +33,7 @@ const METRICS_FILE: &str = "startup-metrics.jsonl";
 /// 内置核心插件初始化（无法逐个拆分）+ build() 收尾 + 事件循环启动 +
 /// 窗口/WebView2 创建（无法内部拆分）。HOOK 后缀点位经 run_on_main_thread
 /// 消息分发，时刻受消息泵时序影响，仅作参考，非精确创建时刻。
-#[cfg(feature = "startup-metrics")]
-const POINT_ORDER: [&str; 29] = [
+const POINT_ORDER: [&str; 35] = [
     "T0_PROCESS_START",
     "T1_TAURI_SETUP_START",
     "RUN_PROLOGUE_DONE",
@@ -69,15 +63,19 @@ const POINT_ORDER: [&str; 29] = [
     "T11_WINDOW_SHOW",
     "T12_SESSION_RESTORED",
     "T13_DOCUMENT_VISIBLE",
+    "DATABASE_READY",
+    "SECRETS_HYDRATED",
+    "APP_READY",
+    "EDITOR_VISIBLE",
+    "PREVIEW_VISIBLE",
+    "PREVIEW_RENDER_COMPLETE",
 ];
 
-#[cfg(feature = "startup-metrics")]
 static POINTS: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
 
 #[cfg(feature = "startup-metrics")]
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
-#[cfg(feature = "startup-metrics")]
 fn now_epoch_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -86,7 +84,7 @@ fn now_epoch_ms() -> u64 {
 }
 
 /// Windows：取真实进程创建时刻（延迟调用也返回创建时间，而非当前时间）。
-#[cfg(all(feature = "startup-metrics", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 fn process_creation_epoch_ms() -> u64 {
     use windows_sys::Win32::Foundation::FILETIME;
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
@@ -125,12 +123,11 @@ fn process_creation_epoch_ms() -> u64 {
 }
 
 /// 非 Windows 平台：回退为当前时间（T0 与 T1 重合，仅用于开发环境）。
-#[cfg(all(feature = "startup-metrics", not(target_os = "windows")))]
+#[cfg(not(target_os = "windows"))]
 fn process_creation_epoch_ms() -> u64 {
     now_epoch_ms()
 }
 
-#[cfg(feature = "startup-metrics")]
 fn insert_point(name: &str, epoch_ms: u64) {
     // get_or_init：首次插入时初始化容器（此前只用 get() 导致容器永远为 None，
     // Rust 侧 T0/T1/T2 被静默丢弃）。
@@ -142,16 +139,12 @@ fn insert_point(name: &str, epoch_ms: u64) {
 
 /// T0：进程启动时刻。应在 `run()` 最开始调用（Windows 上任意时刻调用均可取回创建时刻）。
 pub fn mark_process_start() {
-    #[cfg(feature = "startup-metrics")]
     insert_point("T0_PROCESS_START", process_creation_epoch_ms());
 }
 
 /// 记录一个 Rust 侧点位（Unix epoch 毫秒）。
 pub fn mark(point: &'static str) {
-    #[cfg(feature = "startup-metrics")]
     insert_point(point, now_epoch_ms());
-    #[cfg(not(feature = "startup-metrics"))]
-    let _ = point;
 }
 
 /// 插件初始化标记插件：`initialize` 钩子在 `build()` 内按注册顺序同步执行，
@@ -229,23 +222,21 @@ impl<R: tauri::Runtime> tauri::plugin::Plugin<R> for HookObserverPlugin {
 }
 
 /// 接收前端启动完成后一次性发送的点位，与 Rust 侧点位合并、计算分段耗时，
-/// 并追加写入 JSONL。未启用 feature 时为空实现：静默接收并丢弃，
-/// 保证前后端接口在正式版本中始终兼容。
+/// 并写入生产诊断日志；启用 feature 时额外追加原性能测试 JSONL。
 #[tauri::command]
 pub async fn record_startup_metrics(app: tauri::AppHandle, payload: Value) -> Result<(), String> {
+    let record_json = build_record(&app, &payload);
+    crate::diagnostics::record_startup(app.clone(), record_json.clone()).await?;
     #[cfg(feature = "startup-metrics")]
     {
-        record(&app, payload)
+        record(&app, record_json)
     }
     #[cfg(not(feature = "startup-metrics"))]
     {
-        // 正式版本：埋点关闭，丢弃数据且不产生任何 I/O。
-        let _ = (app, payload);
         Ok(())
     }
 }
 
-#[cfg(feature = "startup-metrics")]
 fn segment_json(epoch: &HashMap<String, u64>, from: &str, to: &str) -> Value {
     let ms = match (epoch.get(from), epoch.get(to)) {
         (Some(from_ms), Some(to_ms)) => json!(*to_ms as i64 - *from_ms as i64),
@@ -254,8 +245,7 @@ fn segment_json(epoch: &HashMap<String, u64>, from: &str, to: &str) -> Value {
     json!({ "from": from, "to": to, "ms": ms })
 }
 
-#[cfg(feature = "startup-metrics")]
-fn record(app: &tauri::AppHandle, payload: Value) -> Result<(), String> {
+fn build_record(app: &tauri::AppHandle, payload: &Value) -> Value {
     let mut epoch: HashMap<String, u64> = HashMap::new();
     if let Some(points) = POINTS.get() {
         if let Ok(guard) = points.lock() {
@@ -290,9 +280,9 @@ fn record(app: &tauri::AppHandle, payload: Value) -> Result<(), String> {
         }
     }
 
-    let record = json!({
+    json!({
         "schema": 2,
-        "recordedAt": payload.get("recordedAt").cloned().unwrap_or(Value::Null),
+        "recordedAtEpochMs": now_epoch_ms(),
         "appVersion": app.package_info().version.to_string(),
         "points": points_json,
         "segments": {
@@ -302,10 +292,18 @@ fn record(app: &tauri::AppHandle, payload: Value) -> Result<(), String> {
             "totalStartup": segment_json(&epoch, "T0_PROCESS_START", "T13_DOCUMENT_VISIBLE"),
             "tauriSetupTotal": segment_json(&epoch, "T1_TAURI_SETUP_START", "SETUP_CALLBACK_START"),
             "pluginInitTotal": segment_json(&epoch, "PLUGIN_INIT_BEGIN", "PLUGIN_NOTIFICATION_INITIALIZED"),
+            "databaseReady": segment_json(&epoch, "T4_HTML_START", "DATABASE_READY"),
+            "appReady": segment_json(&epoch, "T0_PROCESS_START", "APP_READY"),
+            "editorVisible": segment_json(&epoch, "T0_PROCESS_START", "EDITOR_VISIBLE"),
+            "previewVisible": segment_json(&epoch, "T0_PROCESS_START", "PREVIEW_VISIBLE"),
+            "previewRenderComplete": segment_json(&epoch, "T0_PROCESS_START", "PREVIEW_RENDER_COMPLETE"),
         },
         "missingPoints": missing,
-    });
+    })
+}
 
+#[cfg(feature = "startup-metrics")]
+fn record(app: &tauri::AppHandle, record: Value) -> Result<(), String> {
     let line = serde_json::to_string(&record).map_err(|err| err.to_string())?;
     let dir = app.path().app_config_dir().map_err(|err| err.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;

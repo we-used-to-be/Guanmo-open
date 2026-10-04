@@ -475,7 +475,7 @@ export async function embedPendingChunks(): Promise<EmbedResult> {
  * Search for relevant chunks using embeddings or keyword fallback.
  * @param filePaths - 可选的文件路径过滤（用于用户显式添加的上下文文件范围）
  */
-export async function searchRelevant(
+async function searchRelevantInner(
   query: string,
   options?: Partial<RAGConfig> & {
     filePaths?: string[]
@@ -521,6 +521,29 @@ export async function searchRelevant(
     preferRecentDocuments,
     keywordOnlyFallback: indexMode === 'fallback',
   }, options?.onProgress, options?.signal)
+}
+
+export async function searchRelevant(
+  query: string,
+  options?: Partial<RAGConfig> & {
+    filePaths?: string[]
+    currentFilePath?: string
+    signal?: AbortSignal
+    onProgress?: (progress: RagSearchProgress) => void
+  },
+): Promise<SearchResult[]> {
+  const startedAt = performance.now()
+  try {
+    const results = await searchRelevantInner(query, options)
+    const durationMs = performance.now() - startedAt
+    if (durationMs >= 1000) void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+      recordDiagnostic('rag.search_slow', 'slow', durationMs, results.length)).catch(() => undefined)
+    return results
+  } catch (error) {
+    void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+      recordDiagnostic('rag.search_failed', 'error', performance.now() - startedAt)).catch(() => undefined)
+    throw error
+  }
 }
 
 export async function getRagStatsAsync(): Promise<RAGStats> {

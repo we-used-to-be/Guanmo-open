@@ -77,15 +77,15 @@ export function markStartupPoint(
   }
 }
 
-// ==================== Release 冷启动埋点（startup-metrics feature 构建启用）====================
+// ==================== Release 冷启动埋点 ====================
 //
 // 前端不做任何运行期主动采样：全部点位复用既有 performance.mark 缓冲与浏览器
 // paint timing，启动完成后一次性发送给 Rust（单次 IPC），由 Rust 合并 T0/T1/T2
 // 并追加写入 JSONL。时间基准统一为 Unix epoch 毫秒：
 // performance.timeOrigin + entry.startTime。
 //
-// 正式版本（未启用 feature）中 Rust 端 record_startup_metrics 为空实现，
-// 该单次 IPC 数据被静默丢弃，不产生文件写入；Web 构建不调度任何定时器。
+// 正式桌面版本记录到有界诊断日志；startup-metrics feature 额外保留原始性能测试文件。
+// Web 构建不调度任何定时器。
 
 /** T 点位 → 既有 performance.mark 点名（不含前缀）。T6 由 paint timing 单独提供。 */
 const RELEASE_METRIC_MARKS: Readonly<Record<string, string>> = {
@@ -98,6 +98,12 @@ const RELEASE_METRIC_MARKS: Readonly<Record<string, string>> = {
   T11_WINDOW_SHOW: 'window-shown',
   T12_SESSION_RESTORED: 'startup-session-restore-complete',
   T13_DOCUMENT_VISIBLE: 'active-document-first-visible',
+  DATABASE_READY: 'database-ready',
+  SECRETS_HYDRATED: 'secrets-hydrated',
+  APP_READY: 'app-ready',
+  EDITOR_VISIBLE: 'editor-first-visible',
+  PREVIEW_VISIBLE: 'preview-first-visible',
+  PREVIEW_RENDER_COMPLETE: 'preview-render-complete',
 }
 
 const METRICS_FLUSH_SETTLED_DELAY_MS = 1500

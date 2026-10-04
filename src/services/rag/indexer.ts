@@ -82,6 +82,25 @@ async function indexDocumentWithinSerializedOperation(
   title: string,
   content: string,
 ): Promise<boolean> {
+  const startedAt = performance.now()
+  try {
+    const result = await indexDocumentWithinSerializedOperationCore(filePath, title, content)
+    const durationMs = performance.now() - startedAt
+    if (durationMs >= 1000) void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+      recordDiagnostic('rag.index_slow', 'slow', durationMs)).catch(() => undefined)
+    return result
+  } catch (error) {
+    void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+      recordDiagnostic('rag.index_failed', 'error', performance.now() - startedAt)).catch(() => undefined)
+    throw error
+  }
+}
+
+async function indexDocumentWithinSerializedOperationCore(
+  filePath: string,
+  title: string,
+  content: string,
+): Promise<boolean> {
   const result = await ingestDocument(filePath, title || getName(filePath), content)
   if (!result) return false
   const { stats, unchanged } = result

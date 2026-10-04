@@ -103,12 +103,34 @@ class TauriSQLiteAdapter implements DBAdapter {
 
   async execute(sql: string, params: unknown[] = []): Promise<{ rowsAffected: number }> {
     if (!this.db) throw new Error('Database not initialized')
-    return this.db.execute(sql, params)
+    const startedAt = performance.now()
+    try {
+      const result = await this.db.execute(sql, params)
+      const durationMs = performance.now() - startedAt
+      if (durationMs >= 200) void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+        recordDiagnostic('database.query_slow', 'slow', durationMs)).catch(() => undefined)
+      return result
+    } catch (error) {
+      void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+        recordDiagnostic('database.query_failed', 'error', performance.now() - startedAt)).catch(() => undefined)
+      throw error
+    }
   }
 
   async select<T>(sql: string, params: unknown[] = []): Promise<T[]> {
     if (!this.db) throw new Error('Database not initialized')
-    return this.db.select(sql, params) as Promise<T[]>
+    const startedAt = performance.now()
+    try {
+      const result = await this.db.select(sql, params) as T[]
+      const durationMs = performance.now() - startedAt
+      if (durationMs >= 200) void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+        recordDiagnostic('database.query_slow', 'slow', durationMs)).catch(() => undefined)
+      return result
+    } catch (error) {
+      void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+        recordDiagnostic('database.query_failed', 'error', performance.now() - startedAt)).catch(() => undefined)
+      throw error
+    }
   }
 
   async close(): Promise<void> {
@@ -175,6 +197,8 @@ export async function initDatabase(): Promise<void> {
     console.log('[DB] Tauri SQLite initialized')
     setRuntimeState({ status: 'ready' })
   } catch (err) {
+    void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+      recordDiagnostic('database.init_failed', 'error')).catch(() => undefined)
     const message = err instanceof Error ? err.message : String(err)
     db = null
     setRuntimeState({ status: 'error', error: message })

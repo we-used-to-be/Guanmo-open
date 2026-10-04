@@ -233,6 +233,8 @@ function invokeStream(request: NativeHttpRequest, signal?: AbortSignal): Promise
         settled = true
         reject(normalized)
       } else {
+        void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+          recordDiagnostic('ai.request_failed', 'error')).catch(() => undefined)
         controller?.error(normalized)
       }
     }
@@ -301,7 +303,7 @@ function invokeStream(request: NativeHttpRequest, signal?: AbortSignal): Promise
   })
 }
 
-export async function externalFetch(input: string | URL | Request, init?: RequestInit & { timeoutMs?: number }): Promise<Response> {
+async function externalFetchInner(input: string | URL | Request, init?: RequestInit & { timeoutMs?: number }): Promise<Response> {
   if (!isTauri()) {
     throw new UnsupportedCapabilityError('外部 API 请求')
   }
@@ -315,6 +317,21 @@ export async function externalFetch(input: string | URL | Request, init?: Reques
     if (choice === 'cancel') throw normalized
     await authorizeApiOrigin(normalized.origin, choice)
     return invokeStream(request, init?.signal ?? (input instanceof Request ? input.signal : undefined))
+  }
+}
+
+export async function externalFetch(input: string | URL | Request, init?: RequestInit & { timeoutMs?: number }): Promise<Response> {
+  const startedAt = performance.now()
+  try {
+    const response = await externalFetchInner(input, init)
+    const durationMs = performance.now() - startedAt
+    if (durationMs >= 1000) void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+      recordDiagnostic('ai.request_slow', 'slow', durationMs)).catch(() => undefined)
+    return response
+  } catch (error) {
+    void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+      recordDiagnostic('ai.request_failed', 'error', performance.now() - startedAt)).catch(() => undefined)
+    throw error
   }
 }
 

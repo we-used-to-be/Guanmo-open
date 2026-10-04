@@ -367,6 +367,8 @@ function tokenizeHtmlTags(value: string): HtmlTagToken[] {
 }
 
 export function createMarkdownPreviewModel(rawContent: string): MarkdownPreviewModel {
+  const diagnosticStartedAt = performance.now()
+  try {
   const normalizedContent = normalizeLatexForModel(rawContent)
   const root = remarkParser.parse(normalizedContent) as unknown as {
     children: MdastPositioned[]
@@ -488,6 +490,17 @@ export function createMarkdownPreviewModel(rawContent: string): MarkdownPreviewM
     ...htmlCompatibility,
     toc,
     _blockStartOffsets,
+  }
+  } catch (error) {
+    void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+      recordDiagnostic('markdown.parse_failed', 'error', performance.now() - diagnosticStartedAt)).catch(() => undefined)
+    throw error
+  } finally {
+    const durationMs = performance.now() - diagnosticStartedAt
+    if (durationMs >= 100) {
+      void import('@/services/productionDiagnostics').then(({ recordDiagnostic }) =>
+        recordDiagnostic('markdown.parse_slow', 'slow', durationMs)).catch(() => undefined)
+    }
   }
 }
 

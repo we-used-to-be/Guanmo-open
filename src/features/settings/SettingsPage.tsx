@@ -66,6 +66,7 @@ import { UsageActivity } from '@/features/settings/UsageActivity'
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '@/services/requestTimeout'
 import { AdvancedTimeoutSettings } from '@/features/settings/AdvancedTimeoutSettings'
 import { ThemeManager } from '@/features/settings/ThemeManager'
+import { DiagnosticsSettings } from '@/features/settings/DiagnosticsSettings'
 import { requestProductTour } from '@/features/productTour/productTourEvents'
 import { AssistantVisual } from '@/components/ai/AssistantVisual'
 import type { AssistantState } from '@/services/assistantState'
@@ -117,6 +118,7 @@ const TABS_CONFIG = [
   { key: 'ai-shortcuts', text: '快捷操作', children: <AiShortcutSettings /> },
   { key: 'shortcuts', text: '快捷键', children: <ShortcutSettings /> },
   { key: 'general', text: '通用', children: <GeneralSettings /> },
+  { key: 'diagnostics', text: '诊断', children: <DiagnosticsSettings /> },
 ]
 
 export function SettingsPage({ initialSection = null, onSectionChange }: { initialSection?: string | null; onSectionChange?: (section: string) => void }) {

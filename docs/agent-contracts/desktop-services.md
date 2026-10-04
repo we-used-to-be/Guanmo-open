@@ -20,3 +20,10 @@
 - 报告 schema 当前为 v2；导出保留 v1 内存与 JS Heap 字段别名，读取旧报告时通过 `migratePerfReport` 迁移。
 - 报告不得包含完整文件路径、文档/对话内容、凭据或用户名。
 - 前端专项回归位于 `tests/performance/`；桌面面板构建验证使用 `npm run build:desktop`。
+
+## 生产诊断日志
+
+- 普通桌面 Release 将既有启动点位在首屏稳定后一次性写入诊断日志，保留进程、Tauri、WebView、真实编辑/预览表面、数据库和 `app-ready` 的独立语义；未出现的点位明确记录为缺失。
+- Rust 独占写入应用日志目录，前端只上报固定事件码、受限状态、耗时、数量及白名单内的 Agent 工具名；禁止原始错误、堆栈、路径、SQL、URL、请求/响应、Markdown、Prompt、AI 回复、RAG chunk 和批注正文进入日志。
+- JSONL 单文件上限 2 MiB，最多 5 份，写入和导出时清理超过 7 天的诊断文件。详细模式默认关闭，只额外采集慢路径；设置页可以导出包含 summary、environment、performance/startup 和 events 的 ZIP。清除操作只处理 `diagnostics-0.jsonl` 至 `diagnostics-4.jsonl`。
+- 开发模式 `PerfMonitorPanel` 与 Agent Trace 仍按原有 DEV 开关运行；生产诊断不启用其 Timer、RAF 或 Observer 采样器。
