@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { Download, Plus, Trash2 } from 'lucide-react'
+import { Copy, Download, Plus, Trash2 } from 'lucide-react'
 import { useEditorStore, type Tab } from '@/stores/editorStore'
 import { useAppStore } from '@/stores/appStore'
 import { FULLSCREEN_CONTENT_PADDING_PERCENT, useSettingsStore, type ThemeId } from '@/stores/settingsStore'
@@ -31,6 +31,60 @@ const MODES: Array<{ key: ViewMode; label: string }> = [
 ]
 const PANEL_CONTENT_REVEAL_DELAY = 190
 const FULLSCREEN_PADDING_DEBOUNCE_MS = 150
+const FULLSCREEN_BACKGROUND_IMAGE_PROMPT = `请根据用户描述生成一张适合作为「Markdown 全屏阅读模式」背景的 16:9 横向壁纸。
+
+用户描述：
+【{{用户描述}}】
+
+这不是普通插画、海报或风景壁纸，而是一张专门为长时间阅读设计的主题背景图。阅读舒适度始终优先于画面表现。
+
+设计要求：
+
+- 画面中央约 55%～65% 区域必须保持大面积干净留白，用于承载正文内容。
+- 人物、角色、植物、物件和主要主题元素主要分布在最左侧、最右侧以及四个角落。
+- 两侧元素数量不要过多，尺寸适中偏小，整体保持轻盈、疏松。
+- 人物可以从边缘探出、倚靠边缘或从角落进入画面，让其更像阅读壁纸中的边缘装饰。
+- 人物尽量正面朝向观者，与观者对视，或者自然看向画面外侧；尽量不要让人物集中看向中央。
+- 不要让人物、大型物体或高对比装饰进入中央正文区域。
+- 左右视觉重量保持基本平衡，但不要做成完全对称构图。
+
+背景要求：
+
+- 不要以完整风景作为背景。
+- 避免大片天空、草原、森林、城市、街道、山脉、海洋、建筑群等明显风景场景。
+- 背景以柔和、统一、低对比、低饱和的色面为主，并根据主题自动选择协调的颜色。
+- 可以加入轻微渐变、纸张质感、蜡笔、彩铅、水彩或粉笔纹理，但必须非常克制。
+- 中央区域尤其要保持颜色均匀、平静、低干扰。
+
+装饰要求：
+
+- 可以在画面边缘和四角加入少量与主题相关的小装饰，例如星星、花朵、云朵、小玩具、叶片、符号、线条、几何涂鸦等。
+- 装饰越靠近中央越稀疏。
+- 不要使用密集纹理、复杂图案或大面积高对比装饰。
+
+整体风格：
+
+- 温柔、治愈、轻松、简洁。
+- 低视觉噪声、低对比度。
+- 适合长时间阅读。
+- 中央安静、干净、宽松。
+- 两侧保留足够的主题辨识度。
+- 最终效果更像「在柔和纯净的阅读底图四周加入少量主题人物和装饰」，而不是「完整主题插画」。
+
+禁止：
+
+- 不要生成文字、标题、Logo、水印、边框或 UI。
+- 不要做海报式排版。
+- 不要生成完整叙事场景。
+- 不要把风景作为主体背景。
+- 不要让中央出现主要人物或大型主体。
+- 不要让人物和装饰包围正文区域。
+- 不要使用过强阴影、强光效、复杂透视、大面积深色或高频纹理。
+
+如果主题表达与阅读舒适度发生冲突，始终优先保证中央留白、低干扰背景和正文阅读体验。
+
+输出要求：
+高清、清晰、16:9 横向构图，适合作为软件全屏阅读背景直接使用。`.trim()
 interface FullscreenControlBarProps {
   productTourStep: number | null
   fileDrawerOpen: boolean
@@ -470,6 +524,15 @@ export function FullscreenControlBar({
     updateAppearanceSettings({ themeId: nextTheme })
   }, [updateAppearanceSettings])
 
+  const copyFullscreenBackgroundPrompt = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(FULLSCREEN_BACKGROUND_IMAGE_PROMPT)
+      toast.success('已复制生图提示词')
+    } catch {
+      toast.error('生图提示词复制失败')
+    }
+  }, [])
+
   const contextTab = contextMenu ? tabs.find((tab) => tab.id === contextMenu.tabId) : null
 
   const handleTabContextMenu = useCallback((e: React.MouseEvent, tabId: string) => {
@@ -819,14 +882,26 @@ export function FullscreenControlBar({
                 <div className="text-body font-bold text-gm-text">阅读背景</div>
                 <div className="mt-0.5 text-caption text-gm-text-tertiary">仅显示在全屏预览区域</div>
               </div>
-              <button
-                type="button"
-                aria-pressed={backgroundEnabled}
-                onClick={() => updateAppearanceSettings({ fullscreenBackgroundEnabled: !backgroundEnabled })}
-                className="gm-fullscreen-file-action rounded-lg px-3 py-2 text-body font-semibold transition-colors"
-              >
-                {backgroundEnabled ? '停用背景' : '启用背景'}
-              </button>
+              <div className="ml-auto flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  title="复制适合阅读背景的生图提示词"
+                  aria-label="复制生图提示词"
+                  onClick={() => void copyFullscreenBackgroundPrompt()}
+                  className="gm-fullscreen-file-action flex items-center gap-1.5 rounded-lg px-3 py-2 text-body font-semibold transition-colors"
+                >
+                  <Copy size={14} aria-hidden="true" />
+                  生图提示词
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={backgroundEnabled}
+                  onClick={() => updateAppearanceSettings({ fullscreenBackgroundEnabled: !backgroundEnabled })}
+                  className="gm-fullscreen-file-action rounded-lg px-3 py-2 text-body font-semibold transition-colors"
+                >
+                  {backgroundEnabled ? '停用背景' : '启用背景'}
+                </button>
+              </div>
             </div>
             <div className="mt-4">
               <div className="mb-2 text-caption font-semibold text-gm-text-secondary">图片可见度</div>
