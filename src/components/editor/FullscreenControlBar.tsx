@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from 'react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { invoke } from '@tauri-apps/api/core'
 import { Copy, Download, Plus, Trash2 } from 'lucide-react'
 import { useEditorStore, type Tab } from '@/stores/editorStore'
@@ -19,8 +20,10 @@ import { SettingSlider } from '@/components/common/SettingSlider'
 import { isTauri, openFileDialog } from '@/hooks/useTauri'
 import { deleteReadingBackground, downloadReadingBackground, importReadingBackground, listReadingBackgrounds, OFFICIAL_BACKGROUNDS, readReadingBackground, type BackgroundItem, type BackgroundLibrary } from '@/services/fullscreenBackgrounds'
 import { releaseFullscreenBackground, updateFullscreenBackground, waitForFullscreenVisualIdle } from '@/services/fullscreenBackgroundLayer'
+import { createMorphingSurfaceMotion, type MorphingLayoutTarget } from '@/components/common/useMorphingMotion'
 
 type ViewMode = 'edit' | 'preview' | 'edit-preview' | 'dual-preview' | 'diff-preview'
+type FullscreenOptionPanelId = 'padding' | 'theme' | 'background'
 
 const MODES: Array<{ key: ViewMode; label: string }> = [
   { key: 'edit', label: '编辑' },
@@ -119,6 +122,7 @@ export function FullscreenControlBar({
   const backgroundOpacity = useSettingsStore((s) => s.appearance.fullscreenBackgroundOpacity)
   const backgroundEnabled = useSettingsStore((s) => s.appearance.fullscreenBackgroundEnabled)
   const backgroundScene = useSettingsStore((s) => s.appearance.fullscreenBackgroundScene)
+  const optionAnimationEnabled = useSettingsStore((s) => s.appearance.fullscreenOptionAnimationEnabled)
   const fullscreenContentPaddingPercent = useSettingsStore((s) => s.editor.fullscreenContentPaddingPercent)
   const updateAppearanceSettings = useSettingsStore((s) => s.updateAppearanceSettings)
   const updateEditorSettings = useSettingsStore((s) => s.updateEditorSettings)
@@ -131,9 +135,10 @@ export function FullscreenControlBar({
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null)
   const [kbStatus, setKbStatus] = useState<'idle' | 'checking' | 'not-indexed' | 'indexed' | 'adding'>('idle')
   const rename = useFileRename()
-  const [paddingCardOpen, setPaddingCardOpen] = useState(false)
-  const [themeCardOpen, setThemeCardOpen] = useState(false)
-  const [backgroundCardOpen, setBackgroundCardOpen] = useState(false)
+  const [activeOptionPanel, setActiveOptionPanel] = useState<FullscreenOptionPanelId | null>(null)
+  const paddingCardOpen = activeOptionPanel === 'padding'
+  const themeCardOpen = activeOptionPanel === 'theme'
+  const backgroundCardOpen = activeOptionPanel === 'background'
   const [hoveredBackgroundScene, setHoveredBackgroundScene] = useState<string | null>(null)
   const [backgroundLibrary, setBackgroundLibrary] = useState<BackgroundLibrary>({ downloadedOfficialIds: [], localBackgrounds: [] })
   const [localThumbnailUrls, setLocalThumbnailUrls] = useState<Record<string, string>>({})
@@ -144,6 +149,11 @@ export function FullscreenControlBar({
   const contentTimerRef = useRef<number | null>(null)
   const pointerWithinControlRef = useRef(false)
   const shellRef = useRef<HTMLDivElement>(null)
+  const barRef = useRef<HTMLDivElement>(null)
+  const paddingButtonRef = useRef<HTMLDivElement>(null)
+  const themeButtonRef = useRef<HTMLDivElement>(null)
+  const backgroundButtonRef = useRef<HTMLDivElement>(null)
+  const keyboardOpenedOptionRef = useRef(false)
   const widthBeforeRef = useRef<number>(0)
   const widthAnimatingRef = useRef(false)
   const renderedTabModeRef = useRef(false)
@@ -173,6 +183,7 @@ export function FullscreenControlBar({
   const switchPanel = useCallback((nextTabMode: boolean) => {
     clearPanelTimers()
     setTabMode(nextTabMode)
+    if (nextTabMode) setActiveOptionPanel(null)
 
     if (renderedTabModeRef.current === nextTabMode) {
       setContentVisible(true)
@@ -214,12 +225,12 @@ export function FullscreenControlBar({
 
   useEffect(() => {
     if (productTourStep === null) {
-      setPaddingCardOpen(false)
+      setActiveOptionPanel(null)
       return
     }
     clearHideTimer()
     setVisible(true)
-    setPaddingCardOpen(productTourStep === 2)
+    setActiveOptionPanel(productTourStep === 2 ? 'padding' : null)
     switchPanel(productTourStep === 3)
   }, [clearHideTimer, productTourStep, switchPanel])
 
@@ -269,22 +280,13 @@ export function FullscreenControlBar({
         setFileMenuOpen(false)
         return
       }
-      if (paddingCardOpen) {
+      if (activeOptionPanel) {
         e.preventDefault()
         e.stopPropagation()
-        setPaddingCardOpen(false)
-        return
-      }
-      if (themeCardOpen) {
-        e.preventDefault()
-        e.stopPropagation()
-        setThemeCardOpen(false)
-        return
-      }
-      if (backgroundCardOpen) {
-        e.preventDefault()
-        e.stopPropagation()
-        setBackgroundCardOpen(false)
+        setActiveOptionPanel(null)
+        const trigger = activeOptionPanel === 'padding' ? paddingButtonRef.current
+          : activeOptionPanel === 'theme' ? themeButtonRef.current : backgroundButtonRef.current
+        trigger?.querySelector('button')?.focus()
         return
       }
       if (fileDrawerOpen) {
@@ -315,17 +317,15 @@ export function FullscreenControlBar({
 
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [backgroundCardOpen, contextMenu, exitFullscreen, fileDrawerOpen, fileMenuOpen, onCloseFileDrawer, paddingCardOpen, switchPanel, tabMode, themeCardOpen])
+  }, [activeOptionPanel, contextMenu, exitFullscreen, fileDrawerOpen, fileMenuOpen, onCloseFileDrawer, switchPanel, tabMode])
 
   useEffect(() => {
     if (!paddingCardOpen && !themeCardOpen && !backgroundCardOpen && !fileMenuOpen) return
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null
       if (target?.closest('.gm-product-tour')) return
-      if (target?.closest('[data-fullscreen-padding-control], [data-fullscreen-theme-control], [data-fullscreen-background-control], [data-fullscreen-file-menu]')) return
-      setPaddingCardOpen(false)
-      setThemeCardOpen(false)
-      setBackgroundCardOpen(false)
+      if (target?.closest('[data-fullscreen-padding-control], [data-fullscreen-theme-control], [data-fullscreen-background-control], [data-fullscreen-option-panel], [data-fullscreen-file-menu]')) return
+      setActiveOptionPanel(null)
       setFileMenuOpen(false)
     }
     window.addEventListener('pointerdown', handlePointerDown, true)
@@ -367,40 +367,35 @@ export function FullscreenControlBar({
     }
   })
 
-  const togglePaddingCard = useCallback(() => {
+  const togglePaddingCard = useCallback((event?: ReactMouseEvent) => {
+    keyboardOpenedOptionRef.current = event?.detail === 0
     clearHideTimer()
     setVisible(true)
-    setThemeCardOpen(false)
-    setBackgroundCardOpen(false)
     setFileMenuOpen(false)
-    setPaddingCardOpen((open) => !open)
+    setActiveOptionPanel((current) => current === 'padding' ? null : 'padding')
   }, [clearHideTimer])
 
-  const toggleThemeCard = useCallback(() => {
+  const toggleThemeCard = useCallback((event?: ReactMouseEvent) => {
+    keyboardOpenedOptionRef.current = event?.detail === 0
     clearHideTimer()
     setVisible(true)
-    setPaddingCardOpen(false)
-    setBackgroundCardOpen(false)
     setFileMenuOpen(false)
-    setThemeCardOpen((open) => !open)
+    setActiveOptionPanel((current) => current === 'theme' ? null : 'theme')
   }, [clearHideTimer])
 
   const toggleFileMenu = useCallback(() => {
     clearHideTimer()
     setVisible(true)
-    setPaddingCardOpen(false)
-    setThemeCardOpen(false)
-    setBackgroundCardOpen(false)
+    setActiveOptionPanel(null)
     setFileMenuOpen((open) => !open)
   }, [clearHideTimer])
 
-  const toggleBackgroundCard = useCallback(() => {
+  const toggleBackgroundCard = useCallback((event?: ReactMouseEvent) => {
+    keyboardOpenedOptionRef.current = event?.detail === 0
     clearHideTimer()
     setVisible(true)
-    setPaddingCardOpen(false)
-    setThemeCardOpen(false)
     setFileMenuOpen(false)
-    setBackgroundCardOpen((open) => !open)
+    setActiveOptionPanel((current) => current === 'background' ? null : 'background')
   }, [clearHideTimer])
 
   useEffect(() => {
@@ -658,6 +653,7 @@ export function FullscreenControlBar({
       />
       <div
         data-fullscreen-control-bar="true"
+        ref={barRef}
         className={`fixed left-1/2 top-4 z-50 max-w-[calc(100vw-32px)] -translate-x-1/2 overflow-visible transition-[opacity,transform] duration-300 ease-out ${
           visible ? 'translate-y-0 opacity-100' : '-translate-y-1.5 opacity-0 pointer-events-none'
         }`}
@@ -694,7 +690,7 @@ export function FullscreenControlBar({
               <BubbleButton onClick={toggleAiPanel} active={aiPanelOpen} title="切换 AI 助手" variant="text">
                 AI
               </BubbleButton>
-              <div data-fullscreen-padding-control="true">
+              <div ref={paddingButtonRef} data-fullscreen-padding-control="true">
                 <BubbleButton
                   onClick={togglePaddingCard}
                   active={paddingCardOpen}
@@ -706,7 +702,7 @@ export function FullscreenControlBar({
                   边距
                 </BubbleButton>
               </div>
-              <div data-fullscreen-theme-control="true">
+              <div ref={themeButtonRef} data-fullscreen-theme-control="true">
                 <BubbleButton
                   onClick={toggleThemeCard}
                   active={themeCardOpen}
@@ -717,7 +713,7 @@ export function FullscreenControlBar({
                   主题
                 </BubbleButton>
               </div>
-              {isTauri() && <div data-fullscreen-background-control="true">
+              {isTauri() && <div ref={backgroundButtonRef} data-fullscreen-background-control="true">
                 <BubbleButton onClick={toggleBackgroundCard} active={backgroundCardOpen} title="设置阅读背景" ariaExpanded={backgroundCardOpen} ariaControls="fullscreen-background-card" variant="text">
                   背景
                 </BubbleButton>
@@ -817,14 +813,9 @@ export function FullscreenControlBar({
           </button>
         </div>
 
-        {paddingCardOpen && (
-          <div
-            id="fullscreen-padding-card"
-            data-fullscreen-padding-control="true"
-            role="dialog"
-            aria-label="调整全屏正文边距"
-            className="gm-fullscreen-spacing-card absolute left-1/2 top-[calc(100%+10px)] w-[min(320px,calc(100vw-32px))] -translate-x-1/2 rounded-2xl border p-4"
-          >
+        <AnimatePresence initial={false}>
+        {paddingCardOpen && !renderedTabMode && (
+          <FullscreenOptionPanel key="padding" id="fullscreen-padding-card" triggerRef={paddingButtonRef} hostRef={barRef} width={320} animationEnabled={optionAnimationEnabled && !renderedTabMode} keyboardOpen={keyboardOpenedOptionRef.current}>
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="text-body font-bold text-gm-text">正文边距</div>
@@ -847,17 +838,11 @@ export function FullscreenControlBar({
               <span>紧凑</span>
               <span>宽松</span>
             </div>
-          </div>
+          </FullscreenOptionPanel>
         )}
 
         {themeCardOpen && (
-          <div
-            id="fullscreen-theme-card"
-            data-fullscreen-theme-control="true"
-            role="dialog"
-            aria-label="选择主题"
-            className="gm-fullscreen-spacing-card absolute left-1/2 top-[calc(100%+10px)] w-[min(340px,calc(100vw-32px))] -translate-x-1/2 rounded-2xl border p-4"
-          >
+          <FullscreenOptionPanel key="theme" id="fullscreen-theme-card" triggerRef={themeButtonRef} hostRef={barRef} width={340} animationEnabled={optionAnimationEnabled && !renderedTabMode} keyboardOpen={keyboardOpenedOptionRef.current}>
             <div>
               <div className="text-body font-bold text-gm-text">主题</div>
               <div className="mt-0.5 text-caption text-gm-text-tertiary">选择阅读与控制条配色</div>
@@ -867,16 +852,10 @@ export function FullscreenControlBar({
               themes={fullscreenThemes}
               onChange={selectFullscreenTheme}
             />
-          </div>
+          </FullscreenOptionPanel>
         )}
         {backgroundCardOpen && (
-          <div
-            id="fullscreen-background-card"
-            data-fullscreen-background-control="true"
-            role="dialog"
-            aria-label="设置全屏阅读背景"
-            className="gm-fullscreen-spacing-card absolute left-1/2 top-[calc(100%+10px)] w-[min(440px,calc(100vw-32px))] -translate-x-1/2 rounded-2xl border p-4"
-          >
+          <FullscreenOptionPanel key="background" id="fullscreen-background-card" triggerRef={backgroundButtonRef} hostRef={barRef} width={440} animationEnabled={optionAnimationEnabled && !renderedTabMode} keyboardOpen={keyboardOpenedOptionRef.current}>
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="text-body font-bold text-gm-text">阅读背景</div>
@@ -939,8 +918,9 @@ export function FullscreenControlBar({
                 </div>
               )}
             </div>
-          </div>
+          </FullscreenOptionPanel>
         )}
+        </AnimatePresence>
       </div>
 
       {contextMenu && (
@@ -1022,6 +1002,153 @@ export function FullscreenControlBar({
       )}
     </>
   )
+}
+
+function FullscreenOptionPanel({
+  id,
+  triggerRef,
+  hostRef,
+  width,
+  animationEnabled,
+  keyboardOpen,
+  children,
+}: {
+  id: string
+  triggerRef: RefObject<HTMLDivElement | null>
+  hostRef: RefObject<HTMLDivElement | null>
+  width: number
+  animationEnabled: boolean
+  keyboardOpen: boolean
+  children: ReactNode
+}) {
+  const panelRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
+  const reducedMotion = useReducedMotion() ?? false
+  const shouldAnimate = animationEnabled && !reducedMotion
+  const [layout, setLayout] = useState(() => {
+    const source = readOptionPanelSource(hostRef.current, triggerRef.current?.querySelector('button') ?? null)
+    return { source, target: source }
+  })
+
+  useLayoutEffect(() => {
+    const host = hostRef.current
+    const trigger = triggerRef.current?.querySelector('button')
+    const panel = panelRef.current
+    const content = contentRef.current
+    if (!host || !trigger || !panel || !content) return
+
+    let frame: number | null = null
+    const measure = () => {
+      frame = null
+      const hostRect = host.getBoundingClientRect()
+      const buttonRect = trigger.getBoundingClientRect()
+      const availableWidth = Math.max(0, Math.min(width, window.innerWidth - 32, hostRect.width - 32))
+      content.style.width = String(availableWidth) + 'px'
+      const panelHeight = content.scrollHeight + 2
+      const left = Math.max(16, Math.min(
+        buttonRect.left + buttonRect.width / 2 - hostRect.left - availableWidth / 2,
+        hostRect.width - availableWidth - 16,
+      ))
+      const belowTop = buttonRect.bottom - hostRect.top + 10
+      const roomBelow = window.innerHeight - buttonRect.bottom - 16
+      const roomAbove = buttonRect.top - 26
+      const top = panelHeight > roomBelow && roomAbove > roomBelow
+        ? Math.max(16, buttonRect.top - hostRect.top - panelHeight - 10)
+        : belowTop
+      const source = readOptionPanelSource(host, trigger)
+      const target: MorphingLayoutTarget = {
+        left,
+        top,
+        width: availableWidth,
+        height: panelHeight,
+        borderRadius: 16,
+        padding: 0,
+      }
+      setLayout((current) => sameMorphingTarget(current.source, source) && sameMorphingTarget(current.target, target)
+        ? current
+        : { source, target })
+    }
+    const scheduleMeasure = () => {
+      if (frame === null) frame = requestAnimationFrame(measure)
+    }
+    measure()
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(scheduleMeasure)
+    observer?.observe(host)
+    observer?.observe(content)
+    window.addEventListener('resize', scheduleMeasure)
+
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame)
+      observer?.disconnect()
+      window.removeEventListener('resize', scheduleMeasure)
+      trigger.style.opacity = ''
+    }
+  }, [hostRef, triggerRef, width])
+
+  useLayoutEffect(() => {
+    if (!keyboardOpen) return
+    const firstControl = panelRef.current?.querySelector<HTMLElement>('button, input, [tabindex]:not([tabindex="-1"])')
+    firstControl?.focus()
+  }, [keyboardOpen])
+
+  const surface = createMorphingSurfaceMotion(layout.source, layout.target, !shouldAnimate)
+  const closing = createMorphingSurfaceMotion(layout.target, layout.source, !shouldAnimate)
+  const button = triggerRef.current?.querySelector<HTMLButtonElement>('button')
+  const beginMorph = () => { if (shouldAnimate && button) button.style.opacity = '0' }
+  const finishMorph = () => { if (button) button.style.opacity = '' }
+
+  return (
+    <motion.div
+      ref={panelRef}
+      id={id}
+      data-fullscreen-option-panel="true"
+      role="dialog"
+      aria-label={id === 'fullscreen-padding-card' ? '调整全屏正文边距' : id === 'fullscreen-theme-card' ? '选择主题' : '设置全屏阅读背景'}
+      className="absolute z-[60] overflow-hidden rounded-2xl"
+      initial={shouldAnimate ? surface.initial : surface.animate}
+      animate={surface.animate}
+      exit={shouldAnimate ? { ...closing.animate, opacity: 0 } : { ...surface.animate, opacity: 0 }}
+      transition={shouldAnimate ? surface.transition : { duration: 0 }}
+      onAnimationStart={beginMorph}
+      onAnimationComplete={finishMorph}
+      style={{ visibility: 'visible', pointerEvents: 'auto' }}
+    >
+      <div
+        aria-hidden="true"
+        className="gm-fullscreen-spacing-card absolute left-0 top-0 rounded-2xl border"
+        style={{ width: layout.target.width, height: layout.target.height, pointerEvents: 'none' }}
+      />
+      <div
+        ref={contentRef}
+        data-fullscreen-option-panel-content="true"
+        className="relative box-border h-max p-4"
+      >
+        {children}
+      </div>
+    </motion.div>
+  )
+}
+
+function readOptionPanelSource(host: HTMLElement | null, trigger: HTMLElement | null): MorphingLayoutTarget {
+  const hostRect = host?.getBoundingClientRect()
+  const triggerRect = trigger?.getBoundingClientRect()
+  const triggerStyle = trigger ? getComputedStyle(trigger) : null
+  const width = triggerRect?.width ?? 0
+  const height = triggerRect?.height ?? 0
+  const requestedRadius = Number.parseFloat(triggerStyle?.borderTopLeftRadius ?? '') || height / 2
+  return {
+    left: (triggerRect?.left ?? 0) - (hostRect?.left ?? 0),
+    top: (triggerRect?.top ?? 0) - (hostRect?.top ?? 0),
+    width,
+    height,
+    borderRadius: Math.min(requestedRadius, height / 2),
+    padding: 0,
+  }
+}
+
+function sameMorphingTarget(a: MorphingLayoutTarget, b: MorphingLayoutTarget) {
+  return a.left === b.left && a.top === b.top && a.width === b.width && a.height === b.height
+    && a.borderRadius === b.borderRadius && a.padding === b.padding
 }
 
 function BubbleButton({

@@ -113,6 +113,22 @@ describe('设置兼容', () => {
     expect(invalidStore.getState().appearance.sendMessageAnimationEnabled).toBe(false)
   })
 
+  it('全屏选项动画默认关闭，兼容旧配置并持久化显式选择', async () => {
+    const defaultStore = await loadSettingsStore()
+    expect(defaultStore.getState().appearance.fullscreenOptionAnimationEnabled).toBe(false)
+
+    const enabledStore = await loadSettingsStore({ appearance: { fullscreenOptionAnimationEnabled: true } })
+    expect(enabledStore.getState().appearance.fullscreenOptionAnimationEnabled).toBe(true)
+    enabledStore.getState().updateAppearanceSettings({ fullscreenOptionAnimationEnabled: false })
+    const persisted = JSON.parse(localStorage.getItem('guanmo-settings') || '{}') as { state?: { appearance?: { fullscreenOptionAnimationEnabled?: boolean } } }
+    expect(persisted.state?.appearance?.fullscreenOptionAnimationEnabled).toBe(false)
+
+    const missingStore = await loadSettingsStore({ appearance: { sendMessageAnimationEnabled: true } })
+    expect(missingStore.getState().appearance.fullscreenOptionAnimationEnabled).toBe(false)
+    const invalidStore = await loadSettingsStore({ appearance: { fullscreenOptionAnimationEnabled: 'true' } })
+    expect(invalidStore.getState().appearance.fullscreenOptionAnimationEnabled).toBe(false)
+  })
+
   it('保留用户显式关闭快捷 AI 自动发送的设置', async () => {
     const store = await loadSettingsStore({ editor: { autoSendAiShortcut: false } })
     expect(store.getState().editor.autoSendAiShortcut).toBe(false)

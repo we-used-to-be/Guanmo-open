@@ -33,13 +33,112 @@ const local = (count: number) => Array.from({ length: count }, (_, index) => ({ 
 
 afterEach(() => {
   useEditorStore.getState().setViewMode('edit')
-  useSettingsStore.getState().updateAppearanceSettings({ fullscreenBackgroundPath: null, fullscreenBackgroundOpacity: 40, fullscreenBackgroundEnabled: false, fullscreenBackgroundScene: 'custom' })
+  useSettingsStore.getState().updateAppearanceSettings({ fullscreenBackgroundPath: null, fullscreenBackgroundOpacity: 40, fullscreenBackgroundEnabled: false, fullscreenBackgroundScene: 'custom', fullscreenOptionAnimationEnabled: false })
   delete document.documentElement.dataset.fullscreenTransitionPhase
   vi.unstubAllGlobals()
   vi.clearAllMocks()
 })
 
 describe('Fullscreen background', () => {
+  it('morphs the button radius and leaves option text fully visible during opening', async () => {
+    useSettingsStore.getState().updateAppearanceSettings({ fullscreenOptionAnimationEnabled: true })
+    const rect = (left: number, top: number, width: number, height: number) => ({
+      left, top, width, height, right: left + width, bottom: top + height,
+      x: left, y: top, toJSON: () => ({}),
+    }) as DOMRect
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.matches('[data-fullscreen-control-bar]')) return rect(100, 40, 600, 60)
+      if (this.matches('[data-fullscreen-theme-control] button')) return rect(260, 50, 56, 36)
+      return rect(0, 0, 100, 30)
+    })
+    try {
+      const { container } = render(<FullscreenControlBar {...props} />)
+      const trigger = container.querySelector<HTMLButtonElement>('[data-fullscreen-theme-control] button')!
+      trigger.style.borderRadius = '9999px'
+      fireEvent.click(trigger)
+      const panel = await waitFor(() => {
+        const element = container.querySelector<HTMLElement>('#fullscreen-theme-card')
+        expect(element).not.toBeNull()
+        expect(Number.parseFloat(element!.style.borderRadius)).toBeLessThanOrEqual(18)
+        return element!
+      })
+      expect(panel.querySelector('[data-fullscreen-option-panel-content]')?.getAttribute('style') ?? '').not.toContain('opacity')
+    } finally {
+      rectSpy.mockRestore()
+    }
+  })
+
+  it('anchors the theme panel below its button and closes with Escape or an outside click', async () => {
+    const rect = (left: number, top: number, width: number, height: number) => ({
+      left, top, width, height, right: left + width, bottom: top + height,
+      x: left, y: top, toJSON: () => ({}),
+    }) as DOMRect
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.matches('[data-fullscreen-control-bar]')) return rect(100, 40, 600, 60)
+      if (this.matches('[data-fullscreen-theme-control] button')) return rect(630, 60, 50, 30)
+      return rect(0, 0, 100, 30)
+    })
+    try {
+      const { container } = render(<FullscreenControlBar {...props} />)
+      const trigger = container.querySelector<HTMLButtonElement>('[data-fullscreen-theme-control] button')!
+      fireEvent.click(trigger)
+      const panel = await waitFor(() => {
+        const element = container.querySelector<HTMLElement>('#fullscreen-theme-card')
+        expect(element).not.toBeNull()
+        expect(element!.style.left).toBe('244px')
+        expect(element!.style.top).toBe('60px')
+        return element!
+      })
+      expect(panel).toHaveAttribute('role', 'dialog')
+
+      fireEvent.keyDown(window, { key: 'Escape' })
+      expect(trigger).toHaveFocus()
+      await waitFor(() => expect(container.querySelector('#fullscreen-theme-card')).toBeNull())
+
+      fireEvent.click(trigger)
+      fireEvent.pointerDown(document.body)
+      await waitFor(() => expect(container.querySelector('#fullscreen-theme-card')).toBeNull())
+    } finally {
+      rectSpy.mockRestore()
+    }
+  })
+
+  it('sizes the background panel to its content without an internal scrollbar', async () => {
+    const rect = (left: number, top: number, width: number, height: number) => ({
+      left, top, width, height, right: left + width, bottom: top + height,
+      x: left, y: top, toJSON: () => ({}),
+    }) as DOMRect
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.matches('[data-fullscreen-control-bar]')) return rect(100, 40, 600, 60)
+      if (this.matches('[data-fullscreen-background-control] button')) return rect(600, 60, 50, 30)
+      return rect(0, 0, 100, 30)
+    })
+    const previousScrollHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight')
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get(this: HTMLElement) { return this.hasAttribute('data-fullscreen-option-panel-content') ? 520 : 0 },
+    })
+    listBackgrounds.mockResolvedValue({ downloadedOfficialIds: [], localBackgrounds: [] })
+    try {
+      const { container } = render(<FullscreenControlBar {...props} />)
+      fireEvent.click(container.querySelector('[data-fullscreen-background-control] button')!)
+      const panel = await waitFor(() => {
+        const element = container.querySelector<HTMLElement>('#fullscreen-background-card')
+        expect(element).not.toBeNull()
+        expect(element!.style.height).toBe('522px')
+        return element!
+      })
+      expect((panel.firstElementChild as HTMLElement).style.width).toBe('440px')
+      expect((panel.firstElementChild as HTMLElement).style.height).toBe('522px')
+      expect(panel.className).not.toContain('overflow-y-auto')
+      expect(panel.querySelector('[data-fullscreen-option-panel-content]')).not.toHaveClass('overflow-y-auto')
+    } finally {
+      rectSpy.mockRestore()
+      if (previousScrollHeight) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', previousScrollHeight)
+      else delete (HTMLElement.prototype as Partial<HTMLElement>).scrollHeight
+    }
+  })
+
   it('keeps legacy zero brightness compatible', () => {
     const merge = useSettingsStore.persist.getOptions().merge!
     const restored = merge({ appearance: { fullscreenBackgroundBrightness: 0, fullscreenBackgroundPath: 'C:\\Pictures\\reading.png' } }, useSettingsStore.getState())

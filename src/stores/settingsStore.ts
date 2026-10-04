@@ -64,6 +64,7 @@ interface AppearanceSettings extends AppearanceConfigV1 {
   aiAssistantFontSize: AiAssistantFontSize
   fullscreenTransitionEnabled: boolean
   sendMessageAnimationEnabled: boolean
+  fullscreenOptionAnimationEnabled: boolean
   lastLightThemeId: NonDarkThemeId
   fullscreenBackgroundPath: string | null
   fullscreenBackgroundOpacity: number
@@ -166,6 +167,7 @@ const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   aiAssistantFontSize: 14,
   fullscreenTransitionEnabled: true,
   sendMessageAnimationEnabled: false,
+  fullscreenOptionAnimationEnabled: false,
   lastLightThemeId: 'warm',
   fullscreenBackgroundPath: null,
   fullscreenBackgroundOpacity: 40,
@@ -556,6 +558,9 @@ export const useSettingsStore = create<SettingsState>()(
               sendMessageAnimationEnabled: typeof savedAppearance.sendMessageAnimationEnabled === 'boolean'
                 ? savedAppearance.sendMessageAnimationEnabled
                 : current.appearance.sendMessageAnimationEnabled,
+              fullscreenOptionAnimationEnabled: typeof savedAppearance.fullscreenOptionAnimationEnabled === 'boolean'
+                ? savedAppearance.fullscreenOptionAnimationEnabled
+                : current.appearance.fullscreenOptionAnimationEnabled,
               fullscreenBackgroundPath: typeof savedAppearance.fullscreenBackgroundPath === 'string' && savedAppearance.fullscreenBackgroundPath
                 ? savedAppearance.fullscreenBackgroundPath
                 : null,

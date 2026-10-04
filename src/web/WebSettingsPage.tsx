@@ -391,6 +391,9 @@ function WebGeneralSettings() {
           <Switch checked={appearance.customCursorEnabled} onChange={(value) => updateAppearanceSettings({ customCursorEnabled: value })} />
         </SettingField>
         <SectionTitle>动效</SectionTitle>
+        <SettingField label="全屏选项展开动画" description="边距、主题和背景面板从对应按钮展开；系统启用减少动态效果时会自动跳过">
+          <Switch checked={appearance.fullscreenOptionAnimationEnabled} onChange={(value) => updateAppearanceSettings({ fullscreenOptionAnimationEnabled: value })} />
+        </SettingField>
         <SettingField label="发送消息动画" description="发送时让光点从按钮飞出并展开为消息；滚动消息列表会立即结束动画">
           <Switch checked={appearance.sendMessageAnimationEnabled} onChange={(value) => updateAppearanceSettings({ sendMessageAnimationEnabled: value })} />
         </SettingField>

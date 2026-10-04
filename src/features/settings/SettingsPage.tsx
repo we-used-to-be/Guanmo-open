@@ -1532,7 +1532,7 @@ function GeneralSettings() {
       modePerformancePolicy: 'balanced',
       defaultOpenMode: 'preview',
     })
-    updateAppearanceSettings({ customCursorEnabled: true, aiAvatarStyle: 'sprite', aiAssistantFontSize: 14, fullscreenTransitionEnabled: true, sendMessageAnimationEnabled: false, themeId: 'warm' })
+    updateAppearanceSettings({ customCursorEnabled: true, aiAvatarStyle: 'sprite', aiAssistantFontSize: 14, fullscreenTransitionEnabled: true, sendMessageAnimationEnabled: false, fullscreenOptionAnimationEnabled: false, themeId: 'warm' })
     updateWebSearchConfig({ provider: 'duckduckgo', apiKey: '', maxResults: 5, customUrl: '', timeout: DEFAULT_REQUEST_TIMEOUT_MS })
     updateUsageTrackingSettings({ enabled: true })
     resetAiShortcutActions()
@@ -1711,6 +1711,9 @@ function GeneralSettings() {
       <SectionTitle>动效</SectionTitle>
       <SettingField label="全屏过渡动画" description="用轻微失焦遮盖全屏尺寸切换；系统启用减少动态效果时会自动跳过">
         <Switch checked={appearance.fullscreenTransitionEnabled} onChange={(v) => updateAppearanceSettings({ fullscreenTransitionEnabled: v })} />
+      </SettingField>
+      <SettingField label="全屏选项展开动画" description="边距、主题和背景面板从对应按钮展开；系统启用减少动态效果时会自动跳过">
+        <Switch checked={appearance.fullscreenOptionAnimationEnabled} onChange={(v) => updateAppearanceSettings({ fullscreenOptionAnimationEnabled: v })} />
       </SettingField>
       <SettingField label="发送消息动画" description="发送时让光点从按钮飞出并展开为消息；滚动消息列表会立即结束动画">
         <Switch checked={appearance.sendMessageAnimationEnabled} onChange={(v) => updateAppearanceSettings({ sendMessageAnimationEnabled: v })} />
