@@ -34,6 +34,7 @@ import { requestProductTour } from './features/productTour/productTourEvents'
 import { hasShownProductTourInvite, markProductTourInviteShown } from './features/productTour/productTourStorage'
 import { markStartupPoint, waitForStartupPoint } from './services/startupPerformance'
 import { hasBootSnapshotContent } from './services/bootSnapshot'
+import { scheduleRagWarmupAfterFirstSurface } from './services/rag/startupWarmup'
 
 syncDocumentTheme(useSettingsStore.getState().appearance.themeId)
 
@@ -195,18 +196,6 @@ function scheduleIdleWarmup(): void {
     },
     2,
     'Embedding 客户端初始化'
-  )
-
-  // 向量库延迟加载：不在启动时预热，首次使用 RAG 时才加载
-  // 性能档位允许时，仅在首屏后闲时预热；用户活动、切文档或内存压力会取消。
-  scheduleIdleTask(
-    'rag-index-warmup',
-    async () => {
-      const { warmNativeRagIndexWhileIdle } = await import('./services/rag/warmupScheduler')
-      await warmNativeRagIndexWhileIdle()
-    },
-    3,
-    'RAG 索引预热',
   )
 
   // AI 状态校验：完全异步，不阻塞任何操作
@@ -434,6 +423,7 @@ function App() {
     let cancelled = false
     let stopReadingReminderRuntime: (() => void) | undefined
     let stopAiPanelPreload: (() => void) | undefined
+    let stopRagWarmup: (() => void) | undefined
     async function init() {
       const appInitStartedAt = performance.now()
 
@@ -489,6 +479,7 @@ function App() {
           markStartupPoint('app-ready')
         }
         logDuration('ui ready', appInitStartedAt)
+        if (cancelled) return
 
         // ==================== 首屏后：注册闲时预热任务 ====================
         if (READING_REMINDER_FEATURE_AVAILABLE) {
@@ -505,6 +496,7 @@ function App() {
 
         scheduleIdleWarmup()
         stopAiPanelPreload = scheduleAiPanelPreload()
+        stopRagWarmup = scheduleRagWarmupAfterFirstSurface()
 
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
@@ -527,6 +519,7 @@ function App() {
       cancelled = true
       stopReadingReminderRuntime?.()
       stopAiPanelPreload?.()
+      stopRagWarmup?.()
     }
   }, [])
 

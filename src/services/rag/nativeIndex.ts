@@ -110,6 +110,8 @@ function ensureDesktop(): void {
   if (!isTauri()) throw new UnsupportedCapabilityError('RAG 索引')
 }
 
+let initializationPromise: Promise<RagIndexState> | null = null
+
 function awaitForRequest<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return operation
   if (signal.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'))
@@ -127,13 +129,15 @@ export async function getNativeRagIndexState(): Promise<RagIndexState> {
 
 export async function initializeNativeRagIndex(signal?: AbortSignal): Promise<RagIndexState> {
   ensureDesktop()
-  const abort = () => { void invoke('cancel_rag_index_initialization').catch(() => undefined) }
-  signal?.addEventListener('abort', abort, { once: true })
-  try {
-    return decodeRagIndexState(await awaitForRequest(invoke('initialize_rag_index'), signal))
-  } finally {
-    signal?.removeEventListener('abort', abort)
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+  // The native initialization is shared by warmup and searches. Cancelling one
+  // waiter must not discard work needed by another request.
+  if (!initializationPromise) {
+    initializationPromise = invoke('initialize_rag_index')
+      .then(decodeRagIndexState)
+      .finally(() => { initializationPromise = null })
   }
+  return awaitForRequest(initializationPromise, signal)
 }
 
 export async function searchNativeRagIndex(

@@ -13,8 +13,9 @@ describe('RAG warmup performance policy', () => {
     expect(decideRagWarmup({ policy: 'speed', documentCount: 500, recentlyUsed: false, userActive: false, memoryPressure: false })).toBe('idle-warmup')
   })
 
-  it('cancels initialization for user activity or memory pressure', () => {
-    expect(decideRagWarmup({ policy: 'speed', documentCount: 10, recentlyUsed: true, userActive: true, memoryPressure: false })).toBe('cancel')
+  it('keeps speed eligible during activity, but defers balanced and respects memory pressure', () => {
+    expect(decideRagWarmup({ policy: 'speed', documentCount: 10, recentlyUsed: true, userActive: true, memoryPressure: false })).toBe('idle-warmup')
+    expect(decideRagWarmup({ policy: 'balanced', documentCount: 10, recentlyUsed: true, userActive: true, memoryPressure: false })).toBe('cancel')
     expect(decideRagWarmup({ policy: 'speed', documentCount: 10, recentlyUsed: true, userActive: false, memoryPressure: true })).toBe('cancel')
   })
 })
