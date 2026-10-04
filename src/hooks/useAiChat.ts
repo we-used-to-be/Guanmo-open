@@ -31,8 +31,9 @@ import {
 import { READING_REMINDER_FEATURE_AVAILABLE } from '@/services/readingReminderFeature'
 import { finishAgentTrace, finishAgentTraceSpan, startAgentTrace, startAgentTraceSpan, type AgentTraceStatus } from '@/services/devAgentDiagnostics'
 
-export function getAgentProgressText(step: AgentStep): string {
+export function getAgentProgressText(step: AgentStep, knowledgeActionMessage?: string): string {
   if (step.type === 'progress') {
+    if (knowledgeActionMessage) return knowledgeActionMessage
     return {
       rag_initializing: '正在初始化索引库…',
       rag_ready: '索引库已就绪，正在检索…',
@@ -46,6 +47,7 @@ export function getAgentProgressText(step: AgentStep): string {
       ? `${getAgentToolLabel(step.toolName)}已完成，正在整理下一步...`
       : '工具结果已返回，正在整理下一步...'
   }
+  if (step.actionMessage) return step.actionMessage
 
   switch (step.toolName) {
     case 'search_knowledge':
@@ -412,12 +414,18 @@ export function useAiChat() {
         let pendingActionCount = 0
         let liveAgentStepCount = 0
         let hasVisibleStreamContent = false
+        let knowledgeActionMessage: string | undefined
         const handleAgentStep = (step: AgentStep) => {
           if (!isCurrentRequest()) return
           liveAgentStepCount++
           addAgentStep(step)
+          if (step.type === 'action' && step.toolName === 'search_knowledge') {
+            knowledgeActionMessage = step.actionMessage
+          } else if (step.type === 'thought' || step.type === 'observation' && step.toolName === 'search_knowledge') {
+            knowledgeActionMessage = undefined
+          }
           if (step.type !== 'thought' || !hasVisibleStreamContent) {
-            updateRequestMessage(step.type === 'thought' ? planningText : getAgentProgressText(step))
+            updateRequestMessage(step.type === 'thought' ? planningText : getAgentProgressText(step, knowledgeActionMessage))
           }
           if (step.type !== 'thought') hasVisibleStreamContent = false
           const event = decodeAgentStepEvent(step)

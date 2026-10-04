@@ -3,7 +3,7 @@ import type { ChatMessage, ChatMessageSource, ReadingArtifactMessageReference } 
 import { getAiClient, isAiReady } from '@/services/ai/aiClient'
 import { getAllTools, getTool, getToolDescriptions, getToolsForLLM } from './toolRegistry'
 import { registerBuiltinTools } from './tools'
-import { parseToolCall, stripToolCallJson } from './toolCallParser'
+import { normalizeActionMessage, parseToolCall, stripToolCallJson } from './toolCallParser'
 import {
   detectIntentScores,
   shouldAllowMemoryWrite,
@@ -79,17 +79,19 @@ ${CONTEXT_SAFETY_PROMPT}
 
 你是一个 MD 文档助手，擅长 Markdown 格式的写作、润色和编辑。
 
-你可以使用工具来帮助用户完成任务。当需要使用工具时，请严格按以下 JSON 格式输出，不要输出其他内容：
-{"tool": "工具名", "args": {"参数名": "参数值"}}
+你可以使用工具来帮助用户完成任务。当需要使用工具时，每次工具调用都必须生成一句给用户看的行动说明。使用 JSON 格式调用时，请严格按以下格式输出，不要输出其他内容：
+{"tool": "工具名", "args": {"参数名": "参数值"}, "actionMessage": "我会先搜索相关资料"}
+
+actionMessage 必须是简短的单行行动说明，只描述接下来要做的事，不是工具参数；不要放入 args，不要包含路径、原文或“已完成”等结果性表述。使用原生 tool call 协议时，必须把这句话放在同轮独立的文本 content 中。批量调用时用一句话概括本批次动作。
 
 当你判断需要弹出文本修改确认卡片时，也可以输出以下 JSON。系统会校验 needsEditConfirmation，并自动转换为 replace_current_tab_text 工具调用：
-{"needsEditConfirmation": true, "targetId": "本轮可编辑目标 ID", "oldText": "当前编辑器中要替换的原文", "newText": "替换后的新文本", "changeSummary": "简短变更摘要"}
+{"needsEditConfirmation": true, "targetId": "本轮可编辑目标 ID", "oldText": "当前编辑器中要替换的原文", "newText": "替换后的新文本", "changeSummary": "简短变更摘要", "actionMessage": "我会先生成修改确认卡片"}
 修改用户添加到聊天框的 selection 或 file 标签所指向的文件时，优先使用【本轮可编辑目标】里的 targetId：
-{"needsEditConfirmation": true, "targetId": "edit-target-1", "oldText": "目标文件中的原文", "newText": "替换后的新文本", "changeSummary": "调整语气、保留原意"}
+{"needsEditConfirmation": true, "targetId": "edit-target-1", "oldText": "目标文件中的原文", "newText": "替换后的新文本", "changeSummary": "调整语气、保留原意", "actionMessage": "我会先生成修改确认卡片"}
 修改 selection 标签时不要回传 oldText，由工具读取授权范围内的当前原文：
-{"needsEditConfirmation": true, "targetId": "edit-target-1", "newText": "替换后的新文本", "changeSummary": "润色表达、保留原意"}
+{"needsEditConfirmation": true, "targetId": "edit-target-1", "newText": "替换后的新文本", "changeSummary": "润色表达、保留原意", "actionMessage": "我会先生成修改确认卡片"}
 修改整份已授权文件时，不要回传完整 oldText，使用：
-{"needsEditConfirmation": true, "targetId": "edit-target-1", "replaceWholeDocument": true, "newText": "替换后的完整新稿", "changeSummary": "优化标题层级、压缩重复、保留原意"}
+{"needsEditConfirmation": true, "targetId": "edit-target-1", "replaceWholeDocument": true, "newText": "替换后的完整新稿", "changeSummary": "优化标题层级、压缩重复、保留原意", "actionMessage": "我会先生成修改确认卡片"}
 
 当你能直接回答时，直接输出答案文本。
 
@@ -1226,7 +1228,7 @@ async function runAgentInternal({
 
     // Get AI response with timeout
     let content: string
-    let nativeToolCalls: Array<{ name: string; args: Record<string, unknown> }> = []
+    const nativeToolCalls: Array<{ name: string; args: Record<string, unknown>; actionMessage?: string }> = []
 
     try {
       const response = await requestAgentCompletion()
@@ -1234,9 +1236,10 @@ async function runAgentInternal({
 
       // 收集所有原生工具调用
       if (response.toolCalls && response.toolCalls.length > 0) {
+        const actionMessage = normalizeActionMessage(stripToolCallJson(content))
         for (const tc of response.toolCalls) {
           if (getTool(tc.name)) {
-            nativeToolCalls.push({ name: tc.name, args: tc.args })
+            nativeToolCalls.push({ name: tc.name, args: tc.args, actionMessage })
           }
         }
       }
@@ -1259,7 +1262,7 @@ async function runAgentInternal({
     })
 
     // 解析工具调用（原生优先，JSON降级）
-    let parsedToolCalls: Array<{ name: string; args: Record<string, unknown>; rawJson?: string }> = []
+    let parsedToolCalls: Array<{ name: string; args: Record<string, unknown>; rawJson?: string; actionMessage?: string }> = []
 
     if (nativeToolCalls.length > 0) {
       parsedToolCalls = nativeToolCalls.map(tc => ({ ...tc, rawJson: undefined }))
@@ -1298,11 +1301,11 @@ async function runAgentInternal({
             '系统校验失败：本轮用户表达了文本修改或撤销意图，但你的回复没有生成修改确认卡片。',
             '请不要只回复"已修改""已撤销"或修改后的文本。',
             '你必须重新输出以下两种 JSON 之一：',
-            '{"needsEditConfirmation": true, "targetId": "本轮可编辑目标 ID", "oldText": "当前编辑器中要替换的原文", "newText": "替换后的新文本", "changeSummary": "简短变更摘要"}',
+            '{"needsEditConfirmation": true, "targetId": "本轮可编辑目标 ID", "oldText": "当前编辑器中要替换的原文", "newText": "替换后的新文本", "changeSummary": "简短变更摘要", "actionMessage": "我会先生成修改确认卡片"}',
             '修改已添加的 selection 或 file 标签时必须优先使用【本轮可编辑目标】里的 targetId。',
             '修改 selection 标签时省略 oldText，由工具读取授权选区当前完整原文，不得选择文档内其他相同文本。',
             '修改整份已授权文件时增加 "replaceWholeDocument": true，并省略 oldText。',
-            '或 {"tool": "replace_current_tab_text", "args": {"targetId": "本轮可编辑目标 ID", "newText": "替换后的新文本", "replaceWholeDocument": false, "changeSummary": "简短变更摘要"}}',
+            '或 {"tool": "replace_current_tab_text", "args": {"targetId": "本轮可编辑目标 ID", "newText": "替换后的新文本", "replaceWholeDocument": false, "changeSummary": "简短变更摘要"}, "actionMessage": "我会先生成修改确认卡片"}',
           ].join('\n'),
         })
         continue
@@ -1343,6 +1346,7 @@ async function runAgentInternal({
         content: `调用工具: ${toolCall.name}`,
         toolName: toolCall.name,
         toolArgs: toolCall.args,
+        actionMessage: toolCall.actionMessage,
         timestamp: Date.now(),
       })
     }

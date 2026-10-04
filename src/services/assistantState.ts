@@ -1,4 +1,5 @@
 import { useChatStore, type RagStatus, type TimelineType } from '@/stores/chatStore'
+import type { AgentStep } from '@/services/agent/types'
 
 /**
  * AI 助手角色状态。
@@ -95,9 +96,18 @@ interface ChatSnapshot {
   ragStatus: RagStatus
   lastTimelineType: TimelineType | null
   lastAssistantContent: string | undefined
+  lastAgentStepType: AgentStep['type'] | null
+  lastActionMessage: string | undefined
 }
 
-function takeSnapshot(state: { messages: { role: string; content: string }[]; streaming: boolean; error: string | null; ragStatus: RagStatus; timeline: { type: TimelineType }[] }): ChatSnapshot {
+function takeSnapshot(state: {
+  messages: { role: string; content: string }[]
+  streaming: boolean
+  error: string | null
+  ragStatus: RagStatus
+  timeline: { type: TimelineType }[]
+  agentSteps: AgentStep[]
+}): ChatSnapshot {
   let lastAssistantContent: string | undefined
   for (let i = state.messages.length - 1; i >= 0; i--) {
     if (state.messages[i].role === 'assistant') {
@@ -111,6 +121,8 @@ function takeSnapshot(state: { messages: { role: string; content: string }[]; st
     ragStatus: state.ragStatus,
     lastTimelineType: state.timeline.length > 0 ? state.timeline[state.timeline.length - 1].type : null,
     lastAssistantContent,
+    lastAgentStepType: state.agentSteps.length > 0 ? state.agentSteps[state.agentSteps.length - 1].type : null,
+    lastActionMessage: [...state.agentSteps].reverse().find((step) => step.actionMessage)?.actionMessage,
   }
 }
 
@@ -119,6 +131,20 @@ function deriveStreamingPhase(cur: ChatSnapshot): AssistantState {
   if (cur.lastTimelineType === 'web_search_start') return 'searching'
   if (cur.ragStatus === 'initializing' || cur.ragStatus === 'searching' || cur.ragStatus === 'fallback') {
     return 'retrieving'
+  }
+  if (
+    cur.lastAgentStepType === 'action'
+    && cur.lastActionMessage !== undefined
+    && (cur.lastAssistantContent === undefined || isProgressPlaceholder(cur.lastAssistantContent) || cur.lastAssistantContent === cur.lastActionMessage)
+  ) return 'thinking'
+  if (cur.lastAssistantContent !== undefined && cur.lastAssistantContent === cur.lastActionMessage) return 'thinking'
+  if (cur.lastTimelineType === 'answer_streaming') {
+    if (
+      cur.lastAssistantContent !== undefined
+      && !isProgressPlaceholder(cur.lastAssistantContent)
+      && cur.lastAssistantContent !== cur.lastActionMessage
+    ) return 'generating'
+    return 'thinking'
   }
   if (cur.lastAssistantContent !== undefined && !isProgressPlaceholder(cur.lastAssistantContent)) {
     return 'generating'

@@ -4,6 +4,28 @@ export interface ParsedToolCall {
   name: string
   args: Record<string, unknown>
   rawJson: string
+  actionMessage?: string
+}
+
+const ACTION_MESSAGE_MAX_LENGTH = 120
+
+/**
+ * 只接受短的单行纯文本过程说明，避免把 JSON、路径或大段模型输出带到用户界面。
+ */
+export function normalizeActionMessage(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const message = value.trim()
+  if (
+    !message
+    || message.length > ACTION_MESSAGE_MAX_LENGTH
+    || /[\r\n]/.test(message)
+    || message.startsWith('```')
+    || message.startsWith('{')
+    || message.startsWith('[')
+    || /(?:https?:\/\/|[A-Za-z]:[\\/]|\\\\|^\/)/.test(message)
+  ) return undefined
+  if (/"(?:tool|args|needsEditConfirmation|actionMessage)"\s*:/.test(message)) return undefined
+  return message
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -64,7 +86,12 @@ export function parseToolCall(text: string): ParsedToolCall | null {
     try {
       const parsed = JSON.parse(candidate)
       if (parsed.tool && typeof parsed.tool === 'string' && getTool(parsed.tool)) {
-        return { name: parsed.tool, args: isRecord(parsed.args) ? parsed.args : {}, rawJson: candidate }
+        return {
+          name: parsed.tool,
+          args: isRecord(parsed.args) ? parsed.args : {},
+          rawJson: candidate,
+          actionMessage: normalizeActionMessage(parsed.actionMessage),
+        }
       }
       if (parsed.needsEditConfirmation === true) {
         return {
@@ -78,6 +105,7 @@ export function parseToolCall(text: string): ParsedToolCall | null {
             ...(typeof parsed.changeSummary === 'string' ? { changeSummary: parsed.changeSummary } : {}),
           },
           rawJson: candidate,
+          actionMessage: normalizeActionMessage(parsed.actionMessage),
         }
       }
     } catch {
@@ -120,12 +148,14 @@ export function hideLikelyToolJsonPrefix(text: string): string {
       || firstKey.startsWith('tool')
       || 'needseditconfirmation'.startsWith(firstKey)
       || firstKey.startsWith('needseditconfirmation')
+      || 'actionmessage'.startsWith(firstKey)
+      || firstKey.startsWith('actionmessage')
     ))
   )
   const fencedBody = trimmed.replace(/^```(?:json)?\s*/i, '')
   const looksLikeFencedToolCall = trimmed.startsWith('```')
     && (fencedBody === '' || (fencedBody.startsWith('{') && (fencedBody.length === 1 || /^[\s"']/.test(fencedBody.slice(1)))))
-  if (looksLikeStructuredToolCall || looksLikeFencedToolCall || /"tool"\s*:|needsEditConfirmation/.test(trimmed)) {
+  if (looksLikeStructuredToolCall || looksLikeFencedToolCall || /"(?:tool|actionMessage)"\s*:|needsEditConfirmation/.test(trimmed)) {
     const stripped = stripToolCallJson(text)
     return stripped === text.trim() ? '' : stripped
   }

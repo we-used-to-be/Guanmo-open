@@ -17,6 +17,7 @@ function resetChatStore() {
     error: null,
     ragStatus: 'idle',
     timeline: [],
+    agentSteps: [],
   })
 }
 
@@ -110,6 +111,27 @@ describe('AI 助手状态派生（assistantState）', () => {
     useChatStore.getState().updateMessageContent('assistant-1', '本地知识库检索已完成，正在整理下一步...')
     expect(getAssistantState()).toBe('thinking')
     expect(events).toEqual(['reading', 'thinking', 'generating', 'thinking'])
+    unsubscribe()
+  })
+
+  it('工具行动说明保持执行中的助手状态，最终回答开始后才进入 generating', () => {
+    seedConversation()
+    const { events, unsubscribe } = trackEvents()
+    useChatStore.getState().setStreaming(true)
+    useChatStore.getState().addAgentStep({
+      type: 'action',
+      content: '调用工具: web_search',
+      toolName: 'web_search',
+      actionMessage: '我会先搜索相关资料',
+      timestamp: 3,
+    })
+    useChatStore.getState().updateMessageContent('assistant-1', '我会先搜索相关资料')
+    expect(getAssistantState()).toBe('thinking')
+    useChatStore.getState().addTimelineItem({ type: 'answer_streaming', label: '生成最终回答' })
+    expect(getAssistantState()).toBe('thinking')
+    useChatStore.getState().updateMessageContent('assistant-1', '搜索结果表明，文档主题是……')
+    expect(getAssistantState()).toBe('generating')
+    expect(events).toEqual(['reading', 'thinking', 'generating'])
     unsubscribe()
   })
 

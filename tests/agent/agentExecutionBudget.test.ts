@@ -356,6 +356,60 @@ describe('Agent execution budget', () => {
       .map((step) => step.toolName)).toEqual(['get_current_time', 'list_memories'])
   })
 
+  it('原生工具调用把同轮文本作为行动说明传给每个 action 事件', async () => {
+    responseQueue.push(
+      [{
+        content: '我会先查看当前时间',
+        done: true,
+        toolCallDeltas: [
+          { index: 0, name: 'get_current_time', arguments: '{}' },
+          { index: 1, name: 'list_memories', arguments: '{}' },
+        ],
+      }],
+      [{ content: '匿名多工具答案', done: true }],
+    )
+    const onStep = vi.fn()
+
+    await runAgent({
+      query: '匿名多工具行动说明',
+      candidateToolNames: ['get_current_time', 'list_memories'],
+      streamEnabled: true,
+      onStep,
+    })
+
+    expect(onStep.mock.calls
+      .map(([step]) => step)
+      .filter((step) => step.type === 'action')
+      .map((step) => step.actionMessage)).toEqual(['我会先查看当前时间', '我会先查看当前时间'])
+  })
+
+  it('JSON 降级工具调用读取顶层行动说明且不把它放进工具参数', async () => {
+    responseQueue.push(
+      [{
+        content: '{"tool":"get_current_time","args":{},"actionMessage":"我会先查看当前时间"}',
+        done: true,
+      }],
+      [{ content: '匿名工具答案', done: true }],
+    )
+    const onStep = vi.fn()
+
+    await runAgent({
+      query: '匿名 JSON 行动说明',
+      candidateToolNames: ['get_current_time'],
+      streamEnabled: true,
+      onStep,
+    })
+
+    const action = onStep.mock.calls
+      .map(([step]) => step)
+      .find((step) => step.type === 'action')
+    expect(action).toMatchObject({
+      actionMessage: '我会先查看当前时间',
+      toolArgs: {},
+    })
+    expect(action.toolArgs).not.toHaveProperty('actionMessage')
+  })
+
   it('同轮相同只读工具与参数只执行一次', async () => {
     responseQueue.push(
       [{

@@ -47,6 +47,8 @@ export interface AgentStep {
   content: string
   toolName?: string
   toolArgs?: Record<string, unknown>
+  /** 模型为用户提供的、尚未执行的行动说明；仅用于过程展示。 */
+  actionMessage?: string
   timestamp: number
   progressStage?: AgentProgressStage
 }
