@@ -59,6 +59,7 @@ describe('MarkdownPreview 内嵌 HTML', () => {
 
     await waitFor(() => expect(container.querySelector('svg')).toBeInTheDocument())
     expect(container.querySelector('svg')).toHaveAttribute('width', '100%')
+    expect(container.querySelector('svg')).toHaveClass('gm-markdown-embedded-svg')
     expect(container.querySelector('svg title')).toHaveTextContent('payment-info 阶段两个支付插件')
     expect(container.querySelector('svg desc')).toHaveTextContent('StripeDirect 和 PayPalStandardPro')
     expect(container.querySelector('svg style')).toBeInTheDocument()

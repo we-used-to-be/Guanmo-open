@@ -1658,6 +1658,11 @@ html[data-gm-runtime='web'] .gm-settings-tabs--web > div:nth-child(2) {
   padding-right: var(--gm-fullscreen-content-padding-percent, 7%);
 }
 
+.gm-fullscreen-preview-content .gm-markdown-embedded-svg {
+  max-width: 100%;
+  height: auto;
+}
+
 .gm-fullscreen-preview-content[data-preview-masked] > * {
   visibility: hidden;
 }

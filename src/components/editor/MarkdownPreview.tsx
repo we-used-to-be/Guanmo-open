@@ -2614,6 +2614,9 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
               {children}
             </td>
           ),
+          svg: ({ node: _node, className, ...props }) => (
+            <svg {...props} className={['gm-markdown-embedded-svg', className].filter(Boolean).join(' ')} />
+          ),
           img: ({ src, alt, title, width, height, node }) => {
             // eslint-disable-next-line react-hooks/rules-of-hooks
             const base = useBlockLineBase()
