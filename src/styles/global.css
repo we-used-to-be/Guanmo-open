@@ -1011,6 +1011,16 @@ html[data-fullscreen-transition-phase='focusing'] #root {
   100% { transform: scale(1); opacity: 1; }
 }
 
+@keyframes gmContextMenuFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes gmFeatureIntroStepFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 @keyframes gmReleaseModalScrimIn {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -1087,6 +1097,14 @@ html[data-fullscreen-transition-phase='focusing'] #root {
   animation: bounceIn 0.5s var(--gm-ease);
 }
 
+.animate-context-menu-in {
+  animation: gmContextMenuFadeIn 120ms ease-out both;
+}
+
+.gm-feature-intro-step-content {
+  animation: gmFeatureIntroStepFadeIn 140ms ease-out both;
+}
+
 .gm-release-modal-scrim {
   animation: gmReleaseModalScrimIn 180ms ease-out;
 }
@@ -1156,6 +1174,28 @@ html[data-fullscreen-transition-phase='focusing'] #root {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .animate-slideInUp,
+  .animate-slideInRight,
+  .animate-bounceIn {
+    animation: fadeIn var(--gm-duration-fast) ease-out;
+  }
+
+  .animate-context-menu-in,
+  .gm-feature-intro-step-content {
+    animation: none;
+  }
+
+  .gm-tooltip {
+    animation: fadeIn var(--gm-duration-fast) ease-out !important;
+  }
+
+  .gm-feature-intro-scrim,
+  .gm-feature-intro-dialog {
+    transition: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
+
   .gm-release-modal-scrim,
   .gm-release-modal-dialog,
   .gm-legacy-modal-scrim,

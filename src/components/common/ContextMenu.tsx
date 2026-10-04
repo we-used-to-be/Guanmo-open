@@ -54,7 +54,7 @@ export function ContextMenu({
     <div
       ref={menuRef}
       data-context-menu="true"
-      className="fixed z-50 max-h-[70vh] overflow-y-auto rounded-xl border border-gm-border bg-gm-surface py-1.5 shadow-lg animate-bounceIn"
+      className="fixed z-50 max-h-[70vh] overflow-y-auto rounded-xl border border-gm-border bg-gm-surface py-1.5 shadow-lg animate-context-menu-in"
       style={{ left: adjusted.x, top: adjusted.y, minWidth, maxWidth }}
       onClick={(e) => e.stopPropagation()}
     >

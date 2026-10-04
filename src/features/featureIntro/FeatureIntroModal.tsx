@@ -16,6 +16,7 @@ export function FeatureIntroModal({
   const [closing, setClosing] = useState(false)
   const [entering, setEntering] = useState(true)
   const [imageLoading, setImageLoading] = useState(true)
+  const [imageLoadingStep, setImageLoadingStep] = useState<number | null>(0)
   const closingRef = useRef(false)
   const closeTimerRef = useRef<number>()
   const enterTimerRef = useRef<number>()
@@ -84,6 +85,7 @@ export function FeatureIntroModal({
 
   // 切换步骤时重置图片加载状态
   useEffect(() => {
+    setImageLoadingStep(null)
     if (features[step]?.image) {
       setImageLoading(true)
     }
@@ -92,6 +94,9 @@ export function FeatureIntroModal({
   if (!open) return null
 
   const currentFeature = features[step]
+  const currentImageVisible = !currentFeature.image
+    || currentFeature.image.startsWith('<svg')
+    || (imageLoadingStep === step && !imageLoading)
 
   return (
     <div
@@ -104,7 +109,7 @@ export function FeatureIntroModal({
         role="dialog"
         aria-modal="true"
         aria-label="特性介绍"
-        className={`gm-feature-intro-dialog relative flex w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-gm-border bg-gm-surface shadow-2xl transition-all duration-200 ${entering || closing ? 'scale-95 opacity-0' : 'scale-100 opacity-100'}`}
+        className={`gm-feature-intro-dialog relative flex w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-gm-border bg-gm-surface shadow-2xl transition-[opacity,transform] duration-200 ${entering || closing ? 'scale-95 opacity-0' : 'scale-100 opacity-100'}`}
         style={{ minHeight: '480px' }}
       >
         {/* 关闭按钮 */}
@@ -147,29 +152,32 @@ export function FeatureIntroModal({
             </svg>
           </button>
 
-          <div className="flex w-full flex-1 flex-col">
+          <div key={step} className="gm-feature-intro-step-content flex w-full flex-1 flex-col">
             {/* 插图区 — 有图时渲染，无图时隐藏 */}
             {currentFeature.image && (
               <div
                 className="mx-auto flex w-full max-w-xl flex-[7] items-start justify-center overflow-hidden rounded-lg border border-gm-border/50"
                 style={{ maxHeight: '300px' }}
               >
-                {imageLoading && (
+                {!currentImageVisible && (
                   <div className="flex h-full w-full items-center justify-center py-8">
                     <div className="h-8 w-8 animate-spin rounded-full border-2 border-gm-border border-t-gm-primary" />
                   </div>
                 )}
                 {currentFeature.image.startsWith('<svg') ? (
                   <div
-                    className={imageLoading ? 'hidden' : ''}
+                    className={currentImageVisible ? '' : 'hidden'}
                     dangerouslySetInnerHTML={{ __html: currentFeature.image }}
                   />
                 ) : (
                   <img
                     src={currentFeature.image}
                     alt={currentFeature.title}
-                    className={`max-h-full w-full object-contain ${imageLoading ? 'hidden' : ''}`}
-                    onLoad={() => setImageLoading(false)}
+                    className={`max-h-full w-full object-contain ${currentImageVisible ? '' : 'hidden'}`}
+                    onLoad={() => {
+                      setImageLoadingStep(step)
+                      setImageLoading(false)
+                    }}
                   />
                 )}
               </div>
@@ -197,7 +205,7 @@ export function FeatureIntroModal({
                 aria-label={`第 ${index + 1} 步`}
                 aria-current={index === step ? 'step' : undefined}
                 onClick={() => setStep(index)}
-                className={`h-2.5 rounded-full transition-all ${
+                className={`h-2.5 rounded-full transition-[width,background-color] duration-150 ${
                   index === step
                     ? 'w-6 bg-gm-primary'
                     : 'w-2.5 bg-gm-border hover:bg-gm-text-tertiary'

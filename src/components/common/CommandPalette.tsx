@@ -278,7 +278,7 @@ export function CommandPalette({ open, onClose, mode = 'commands' }: CommandPale
               <button
                 key={cmd.id}
                 onClick={() => executeCommand(cmd)}
-                className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-all duration-150 mx-2 rounded-xl ${
+                className={`w-full flex items-center gap-3 px-4 py-2.5 text-left mx-2 rounded-xl ${
                   index === selectedIndex ? 'bg-gm-primary-subtle text-gm-text' : 'text-gm-text-secondary hover:bg-gm-surface-hover'
                 }`}
                 style={{ width: 'calc(100% - 16px)' }}
