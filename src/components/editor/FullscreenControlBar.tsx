@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from 'react'
+import type { CSSProperties } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { invoke } from '@tauri-apps/api/core'
 import { Copy, Download, Plus, Trash2 } from 'lucide-react'
@@ -98,7 +99,7 @@ interface FullscreenControlBarProps {
 }
 
 export function FullscreenControlBar({
-  productTourStep,
+  productTourStep = null,
   fileDrawerOpen,
   onToggleFileDrawer,
   onCloseFileDrawer,
@@ -651,11 +652,11 @@ export function FullscreenControlBar({
         onMouseEnter={handleControlMouseEnter}
         onMouseLeave={handleControlMouseLeave}
       />
-      <div
+        <div
         data-fullscreen-control-bar="true"
         ref={barRef}
-        className={`fixed left-1/2 top-4 z-50 max-w-[calc(100vw-32px)] -translate-x-1/2 overflow-visible transition-[opacity,transform] duration-300 ease-out ${
-          visible ? 'translate-y-0 opacity-100' : '-translate-y-1.5 opacity-0 pointer-events-none'
+        className={`fixed left-1/2 top-4 z-50 max-w-[calc(100vw-32px)] -translate-x-1/2 overflow-visible transition-opacity duration-300 ease-out ${
+          visible ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
         onMouseEnter={handleControlMouseEnter}
         onMouseLeave={handleControlMouseLeave}
@@ -664,6 +665,11 @@ export function FullscreenControlBar({
           ref={shellRef}
           className="gm-fullscreen-control-shell gm-instant-color relative max-w-[min(960px,calc(100vw-32px))] overflow-hidden rounded-2xl border px-3 py-2 [backface-visibility:hidden] [isolation:isolate]"
         >
+          <div
+            aria-hidden="true"
+            className={`gm-fullscreen-control-glass ${backgroundEnabled ? 'gm-fullscreen-control-glass--background' : ''}`}
+            style={{ '--gm-fullscreen-glass-cover': `${100 - backgroundOpacity * 0.3}%` } as CSSProperties}
+          />
           {/* 一级：模式按钮 */}
           <div className={`flex w-full max-w-full items-center gap-2 transition-opacity duration-200 ease-out ${
             renderedTabMode ? 'absolute inset-0 opacity-0 pointer-events-none' : `relative ${contentVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}`

@@ -222,19 +222,25 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
   useEffect(() => {
     if (isFullscreen) {
       useAppStore.getState().closeAiPanel()
-      const size = clampFullscreenAiSize(fullscreenAiSizeRef.current.width, fullscreenAiSizeRef.current.height)
-      const position = clampFullscreenAiPosition(fullscreenAiPositionRef.current.x, fullscreenAiPositionRef.current.y, size)
+      const { fullscreenAiSize: savedSize, fullscreenAiPosition: savedPosition } = useAppStore.getState()
+      const size = clampFullscreenAiSize(
+        savedSize?.width ?? fullscreenAiSizeRef.current.width,
+        savedSize?.height ?? fullscreenAiSizeRef.current.height,
+      )
+      const position = clampFullscreenAiPosition(
+        savedPosition?.x ?? fullscreenAiPositionRef.current.x,
+        savedPosition?.y ?? fullscreenAiPositionRef.current.y,
+        size,
+      )
       fullscreenAiSizeRef.current = size
       setFullscreenAiSize(size)
-      persistFullscreenAiSize(size)
       fullscreenAiPositionRef.current = position
       setFullscreenAiPosition(position)
-      persistFullscreenAiPosition(position)
       setFullscreenFileDrawerOpen(false)
     } else {
       setFullscreenFileDrawerOpen(false)
     }
-  }, [isFullscreen, persistFullscreenAiPosition, persistFullscreenAiSize])
+  }, [isFullscreen])
 
   // Sidebar resize
   const isSidebarResizing = useRef(false)
@@ -431,18 +437,24 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
   useEffect(() => {
     if (!isFullscreen) return
     const handleResize = () => {
-      const size = clampFullscreenAiSize(fullscreenAiSizeRef.current.width, fullscreenAiSizeRef.current.height)
-      const position = clampFullscreenAiPosition(fullscreenAiPositionRef.current.x, fullscreenAiPositionRef.current.y, size)
+      const { fullscreenAiSize: savedSize, fullscreenAiPosition: savedPosition } = useAppStore.getState()
+      const size = clampFullscreenAiSize(
+        savedSize?.width ?? fullscreenAiSizeRef.current.width,
+        savedSize?.height ?? fullscreenAiSizeRef.current.height,
+      )
+      const position = clampFullscreenAiPosition(
+        savedPosition?.x ?? fullscreenAiPositionRef.current.x,
+        savedPosition?.y ?? fullscreenAiPositionRef.current.y,
+        size,
+      )
       fullscreenAiSizeRef.current = size
       setFullscreenAiSize(size)
-      persistFullscreenAiSize(size)
       fullscreenAiPositionRef.current = position
       setFullscreenAiPosition(position)
-      persistFullscreenAiPosition(position)
     }
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
-  }, [isFullscreen, persistFullscreenAiPosition, persistFullscreenAiSize])
+  }, [isFullscreen])
 
   const handleFullscreenAiDragStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault()

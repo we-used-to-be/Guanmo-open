@@ -156,14 +156,35 @@ body {
 }
 
 .gm-fullscreen-control-shell {
-  background: var(--gm-fullscreen-control-bg);
+  background: transparent;
   border-color: var(--gm-fullscreen-control-border);
   box-shadow: var(--gm-fullscreen-control-shadow);
   color: var(--gm-text);
-  backdrop-filter: blur(18px);
   transition-property: width, max-width, transform, opacity, box-shadow, background-color, border-color !important;
   transition-duration: 440ms !important;
   transition-timing-function: cubic-bezier(0.18, 0.9, 0.18, 1) !important;
+}
+
+.gm-fullscreen-control-glass {
+  position: absolute;
+  inset-block: 0;
+  left: 50%;
+  width: min(960px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  z-index: 0;
+  pointer-events: none;
+  background: var(--gm-fullscreen-control-bg);
+  backdrop-filter: blur(18px);
+}
+
+.gm-fullscreen-control-glass--background {
+  background: color-mix(in srgb, var(--gm-code-bg) var(--gm-fullscreen-glass-cover), transparent);
+  backdrop-filter: blur(8px) saturate(110%);
+  -webkit-backdrop-filter: blur(8px) saturate(110%);
+}
+
+.gm-fullscreen-control-shell > :not(.gm-fullscreen-control-glass) {
+  z-index: 1;
 }
 
 html[data-fullscreen-transition-phase='blurring'] #root,
