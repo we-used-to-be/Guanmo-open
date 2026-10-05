@@ -259,6 +259,9 @@ async function connectPage(port, child) {
 function readStartupMarks(cdp) {
   const names = JSON.stringify(startupMarkNames)
   return cdp.evaluate(`(() => {
+    if (!document.documentElement || !document.body) {
+      return { timeOrigin: performance.timeOrigin, readyState: document.readyState, marks: [] }
+    }
     const wanted = new Set(${names})
     const marks = performance.getEntriesByType('mark')
       .filter((entry) => entry.name.startsWith('guanmo:startup:'))

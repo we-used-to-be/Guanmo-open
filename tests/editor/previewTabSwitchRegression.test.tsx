@@ -777,6 +777,32 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
   })
 
   describe('tab switch in preview mode', () => {
+    it('keeps the newer preview viewport when saving a cached editor before destruction', () => {
+      setupEditor([anonymousTab('tab-a', 'a'.repeat(50))], 'tab-a', 'preview')
+      useEditorStore.setState({ readingPositions: { 'tab-a': { previewScrollTop: 900, topLine: 25, previewLineOffset: 30 } } })
+      const view = new EditorView({ doc: 'a'.repeat(50), parent: document.createElement('div') })
+      view.dispatch({ selection: { anchor: 3, head: 8 } })
+      const { result } = renderHook(() => useReadingPositionBridge({
+        activeTabId: 'tab-a', viewMode: 'preview', viewModeRef: { current: 'preview' },
+        editorViewRef: { current: view },
+        leftPreviewContainerRef: { current: null }, rightPreviewContainerRef: { current: null },
+        leftMarkdownPreviewRef: { current: null }, rightMarkdownPreviewRef: { current: null },
+        restoredPreviewKeysRef: { current: { left: null, right: null } },
+        scrollSyncSessionRef: { current: new ScrollSyncSession() },
+        clearPreviewSwitching: vi.fn(), setPreviewRestoreTick: vi.fn(), flushReadingPositions: vi.fn(),
+        updateEditorHeading: vi.fn(), setTocFocus: vi.fn(),
+      }))
+      try {
+        act(() => result.current.saveEditorPositionForTab('tab-a', view))
+        expect(result.current.readingPositionsRef.current.get('tab-a')).toMatchObject({
+          previewScrollTop: 900, topLine: 25, previewLineOffset: 30,
+          editorScrollTop: undefined, cursor: 8, selection: { anchor: 3, head: 8 },
+        })
+      } finally {
+        view.destroy()
+      }
+    })
+
     it('restores a remounted editor but ignores a later document switch', () => {
       setupEditor([anonymousTab('tab-a', '# A'), anonymousTab('tab-b', '# B')], 'tab-a', 'edit-preview')
       useEditorStore.setState({ readingPositions: { 'tab-a': { editorScrollTop: 680 } } })
@@ -809,6 +835,37 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
       expect(newView.scrollDOM.scrollTop).toBe(0)
       oldView.destroy()
       newView.destroy()
+    })
+
+    it.each(['', ' \n\t'])('finishes restoring blank content %j after the preview mounts', (content) => {
+      setupEditor([anonymousTab('tab-a', content)], 'tab-a', 'preview')
+      useEditorStore.setState({ readingPositions: { 'tab-a': { topLine: 1, previewScrollTop: 0 } } })
+      const container = document.createElement('div')
+      Object.defineProperty(container, 'clientHeight', { value: 600 })
+      const previewRef = { current: null as MarkdownPreviewHandle | null }
+      const restoredKeys = { current: { left: null as string | null, right: null as string | null } }
+      const { result } = renderHook(() => useReadingPositionBridge({
+        activeTabId: 'tab-a', viewMode: 'preview', viewModeRef: { current: 'preview' },
+        editorViewRef: { current: null },
+        leftPreviewContainerRef: { current: container }, rightPreviewContainerRef: { current: null },
+        leftMarkdownPreviewRef: previewRef, rightMarkdownPreviewRef: { current: null },
+        restoredPreviewKeysRef: restoredKeys,
+        scrollSyncSessionRef: { current: new ScrollSyncSession() },
+        clearPreviewSwitching: vi.fn(), setPreviewRestoreTick: vi.fn(), flushReadingPositions: vi.fn(),
+        updateEditorHeading: vi.fn(), setTocFocus: vi.fn(),
+      }))
+      act(() => {
+        result.current.restorePreviewReadingPosition('tab-a', container, 'left')
+        vi.advanceTimersByTime(50)
+      })
+      expect(restoredKeys.current.left).toBeNull()
+      previewRef.current = {
+        getLineForTop: () => undefined,
+        getTopForLine: () => undefined,
+      } as unknown as MarkdownPreviewHandle
+      act(() => vi.advanceTimersByTime(50))
+      expect(restoredKeys.current.left).toBe('tab-a:preview')
+      expect(scheduledCallbacks.raf.size).toBe(0)
     })
 
     it.each([undefined, 100])('waits for layout, aligns offset %s and stops correcting after user input', (previewLineOffset) => {

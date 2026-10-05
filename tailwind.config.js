@@ -1,6 +1,11 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+  content: [
+    './index.html',
+    './src/**/*.{js,ts,jsx,tsx}',
+    // DEV-only panels are absent from production JS and must not add utilities to its CSS.
+    ...(process.env.NODE_ENV === 'production' ? ['!./src/components/devtools/**'] : []),
+  ],
   theme: {
     extend: {
       colors: {

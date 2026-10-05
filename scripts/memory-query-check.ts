@@ -40,7 +40,9 @@ assert.equal(buildMemoryEmbeddingQuery([]), null)
 
 assert.ok(DB_POST_MIGRATION_STATEMENTS.some((sql) => sql.includes('idx_memories_retrieval')))
 const dbSource = readFileSync('src/services/database/db.ts', 'utf8')
-assert.match(dbSource, /await this\.runMigrations\(\)[\s\S]*DB_POST_MIGRATION_STATEMENTS/, '兼容索引必须在旧列迁移完成后创建')
+const schemaInitializer = dbSource.slice(dbSource.indexOf('export async function initializeDatabaseSchema('), dbSource.indexOf('// --- Tauri SQLite adapter ---'))
+assert.match(schemaInitializer, /for \(const migration of DB_MIGRATIONS\)[\s\S]*await database\.execute\(migration\.sql\)[\s\S]*await executeLatestSchema\(database, true\)[\s\S]*for \(const statement of DB_POST_MIGRATION_STATEMENTS\)[\s\S]*await database\.execute\(statement\)/, '兼容索引必须在旧列迁移完成后创建')
+assert.match(dbSource, /await initializeDatabaseSchema\(this\.db\)/, '数据库 adapter 必须执行版本化 schema 初始化')
 
 const persistence = readFileSync('src/services/database/persistence.ts', 'utf8')
 const memoryService = readFileSync('src/services/memory/memoryService.ts', 'utf8')

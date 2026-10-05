@@ -852,7 +852,8 @@ function ExpandableText({
     const computed = window.getComputedStyle(element)
     const fontSize = Number.parseFloat(computed.fontSize) || 14
     const lineHeight = Number.parseFloat(computed.lineHeight) || fontSize * 1.5
-    const measuredHeight = Math.max(element.scrollHeight, element.getBoundingClientRect().height)
+    // Layout height stays stable while ancestor motion transforms visual bounds.
+    const measuredHeight = element.scrollHeight
     const fallbackHeight = text.split(/\r?\n/).length * lineHeight
     const fullHeight = Math.max(measuredHeight, fallbackHeight)
     const collapsedHeight = Math.min(fullHeight, lineHeight * lines)
@@ -861,8 +862,7 @@ function ExpandableText({
       ? current
       : { fullHeight, collapsedHeight, overflow })
     setHasMeasured(true)
-    onOverflowChange(overflow)
-  }, [lines, onOverflowChange, text])
+  }, [lines, text])
 
   useLayoutEffect(() => {
     measure()
@@ -872,6 +872,10 @@ function ExpandableText({
     observer.observe(element)
     return () => observer.disconnect()
   }, [measure])
+
+  useEffect(() => {
+    if (hasMeasured) onOverflowChange(metrics.overflow)
+  }, [hasMeasured, metrics.overflow, onOverflowChange])
 
   useEffect(() => {
     setEnableMotion(true)

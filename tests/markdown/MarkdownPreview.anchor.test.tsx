@@ -127,7 +127,9 @@ describe('MarkdownPreview 页内锚点（模型驱动定位）', () => {
     })
 
     // 远距离跳转不滚过全文：正文渐隐后直接定位，目标挂载并校正后再渐显。
-    expect(host.style.opacity).toBe('0')
+    const previewRoot = host.querySelector<HTMLElement>('.gm-markdown-preview')!
+    expect(previewRoot.style.opacity).toBe('0')
+    expect(host.style.opacity).toBe('')
     let heading = host.querySelector<HTMLElement>('[data-md-block-type="heading"]')
     let elapsedFrames = 0
     while (!heading && elapsedFrames < 45) {
@@ -151,7 +153,7 @@ describe('MarkdownPreview 页内锚点（模型驱动定位）', () => {
 
     // 最终真实标题对齐到预览顶部留白
     expect(host.scrollTop).toBeCloseTo(Number.parseFloat(heading?.style.top ?? '0') - 24, 0)
-    expect(host.style.opacity).toBe('')
+    expect(previewRoot.style.opacity).toBe('')
     expect(scrollTopWrites.length).toBeLessThanOrEqual(4)
 
     // 稳定后不再产生滚动写入：无滚动反馈循环

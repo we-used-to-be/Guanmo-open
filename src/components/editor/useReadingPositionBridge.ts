@@ -115,19 +115,26 @@ export function useReadingPositionBridge({
     return readingPositionsRef.current.get(tabId)?.editorScrollTop ?? 0
   }, [])
 
-  const saveEditorPositionForTab = useCallback((tabId: string | null | undefined, view = editorViewRef.current) => {
+  const saveEditorPositionForTab = useCallback((tabId: string | null | undefined, snapshotView?: EditorView | null) => {
+    const view = snapshotView ?? editorViewRef.current
     if (!tabId || !view || !readingPositionsRef.current) return
     const mode = useEditorStore.getState().viewMode
-    if ((mode !== 'edit' && mode !== 'edit-preview') || editorRestoreFrameRef.current !== null) return
+    // Explicit snapshots must survive mode changes and pending restore frames before destruction.
+    if (!snapshotView && ((mode !== 'edit' && mode !== 'edit-preview') || editorRestoreFrameRef.current !== null)) return
     const topLine = getEditorTopLine(view)
     const mainIndex = view.state.selection.ranges.indexOf(view.state.selection.main)
     const ranges = view.state.selection.ranges.map((range) => ({
       anchor: range.anchor,
       head: range.head,
     }))
+    // A cached editor can be destroyed after the user has moved the preview.
+    const preservePreviewPosition = snapshotView
+      && typeof readingPositionsRef.current.get(tabId)?.previewScrollTop === 'number'
     readingPositionsRef.current.save(tabId, {
-      editorScrollTop: view.scrollDOM.scrollTop,
-      ...(typeof topLine === 'number' ? { topLine } : {}),
+      ...(!preservePreviewPosition ? {
+        editorScrollTop: view.scrollDOM.scrollTop,
+        ...(typeof topLine === 'number' ? { topLine } : {}),
+      } : {}),
       cursor: view.state.selection.main.head,
       selection: { anchor: view.state.selection.main.anchor, head: view.state.selection.main.head },
       ranges: ranges.length > 1 ? ranges : undefined,
@@ -541,6 +548,12 @@ export function useReadingPositionBridge({
         return
       }
       const handle = pane === 'left' ? leftMarkdownPreviewRef.current : rightMarkdownPreviewRef.current
+      if (handle && state.tabs.find((tab) => tab.id === tabId)?.content.trim() === '') {
+        restoringPreviewTabsRef.current[pane] = null
+        reveal()
+        logRestoreResult('空白文档无需逐帧对齐')
+        return
+      }
       let layoutReady = false
       if (handle) {
         const currentLine = handle.getLineForTop(container.scrollTop + SCROLL_SYNC_TOP_OFFSET)

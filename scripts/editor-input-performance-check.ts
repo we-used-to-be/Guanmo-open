@@ -11,7 +11,9 @@ assert.ok(updateListener, '应能定位 CodeMirror update listener')
 assert.doesNotMatch(updateListener, /doc\.toString\(\)/, '逐键 update listener 不得同步序列化全文')
 assert.match(codeMirrorSource, /inputBuffer\.flush\(\)[\s\S]*view\.destroy\(\)/, '销毁编辑器前必须刷新草稿')
 assert.match(editorAreaSource, /const handleSave[\s\S]*useEditorStore\.getState\(\)/, '保存必须读取刷新后的最新 store 内容')
-assert.match(editorAreaSource, /const toc = useMemo\(\(\) => extractToc\(activePreview\.content\)/, 'TOC 应基于延迟后的内容派生')
+assert.match(editorAreaSource, /const previewToc = useMemo\(\(\) => extractToc\(activePreview\.content\), \[activePreview\.content\]\)/, '预览 TOC 应基于延迟后的内容派生')
+assert.match(editorAreaSource, /const editorToc = useMemo\(\(\) => extractToc\(activeTab\?\.content \|\| ''\), \[activeTab\?\.content\]\)/, '编辑 TOC 不得依赖未挂载的预览')
+assert.match(editorAreaSource, /const toc = viewMode === 'edit' \? editorToc : previewToc/, '目录必须按当前模式选择内容来源')
 assert.match(editorAreaSource, /const modeDerivationsEnabled = viewMode !== 'edit'/, '纯编辑模式不得计算预览签名和 diff 行数')
 
 for (const size of [50_000, 200_000]) {

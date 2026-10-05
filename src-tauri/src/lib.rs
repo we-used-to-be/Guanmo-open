@@ -1183,9 +1183,8 @@ fn read_binary_file_by_path(
             .map_err(|err| err.to_string())?;
         Ok(bytes)
     };
-    bytes.map_err(|err| {
+    bytes.inspect_err(|_| {
         report_file_access_failure("read.binary");
-        err
     })
 }
 

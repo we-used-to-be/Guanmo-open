@@ -130,6 +130,27 @@ describe('ReadingArtifactCenter', () => {
     })
   })
 
+  it('keeps card measurement stable while ancestor motion changes its visual bounds', async () => {
+    let measurements = 0
+    let layoutMeasurements = 0
+    const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+      const height = this.textContent === '“匿名原文”' ? 63 + (++measurements % 2 ? 0.5 : 1.5) : 0
+      return { x: 0, y: 0, width: 320, height, top: 0, right: 320, bottom: height, left: 0, toJSON: () => ({}) }
+    })
+    const scrollHeight = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function () {
+      return this.textContent === '“匿名原文”' ? (++layoutMeasurements % 2 ? 65 : 63) : 120
+    })
+    try {
+      render(<ReadingArtifactCenter onOpenAiSource={vi.fn()} />)
+      expect(await screen.findByText('人工批注')).toBeInTheDocument()
+      expect(layoutMeasurements).toBeLessThanOrEqual(2)
+      fireEvent.click(screen.getByRole('tab', { name: '按文档' }))
+      expect(await screen.findByText('A.md')).toBeInTheDocument()
+    } finally {
+      bounds.mockRestore()
+      scrollHeight.mockRestore()
+    }
+  })
   it('shows recent results once and builds document plus independent entries', async () => {
     render(<ReadingArtifactCenter onOpenAiSource={vi.fn()} />)
 

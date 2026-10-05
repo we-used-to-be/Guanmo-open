@@ -735,9 +735,12 @@ fn fts_query(text: &str) -> Option<String> {
     let mut terms = tokenize(text);
     if terms.iter().any(|term| {
         term.chars().count() == 2
-            && !terms
-                .iter()
-                .any(|longer| longer.chars().count() > 3 && longer.contains(term))
+            && (!term
+                .chars()
+                .all(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch))
+                || !terms
+                    .iter()
+                    .any(|longer| longer.chars().count() > 3 && longer.contains(term)))
     }) {
         return None;
     }
@@ -819,8 +822,9 @@ async fn fts_keyword_scores(
         }
         separated.push_unseparated(")");
     }
-    sql.push(" ORDER BY rank LIMIT ");
-    sql.push_bind(request.top_k.saturating_mul(20).max(50) as i64);
+    // Keep all matching IDs until content deduplication and document diversification.
+    // A global LIMIT here lets one long document crowd out every other document.
+    sql.push(" ORDER BY rank");
     let rows = sql.build().fetch_all(pool).await.ok()?;
     let best = rows
         .first()
@@ -1244,6 +1248,93 @@ mod tests {
     use super::*;
     use sqlx::Executor;
     use std::time::Instant;
+
+    #[tokio::test]
+    async fn fts_candidates_preserve_cross_document_recall_and_short_english_terms() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        pool.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, document_id TEXT, content TEXT, heading TEXT, title_path TEXT)")
+            .await.unwrap();
+        pool.execute("CREATE VIRTUAL TABLE chunks_fts USING fts5(content, heading, title_path, content='chunks', content_rowid='rowid', tokenize='trigram')")
+            .await.unwrap();
+        let documents = vec!["d1", "d2"]
+            .into_iter()
+            .map(|id| RawDocument {
+                id: id.into(),
+                file_path: format!("C:/anonymous-{id}.md"),
+                title: "anonymous".into(),
+                last_modified: 0,
+            })
+            .collect();
+        let mut chunks = Vec::new();
+        for i in 0..101 {
+            let id = format!("c{i}");
+            let document_id = if i < 100 { "d1" } else { "d2" };
+            let content = if i < 100 {
+                format!("target target target golang paragraph {i}")
+            } else {
+                format!(
+                    "{}go routines",
+                    "target plus other unrelated material ".repeat(20)
+                )
+            };
+            let heading = if i < 100 { "target" } else { "" };
+            sqlx::query("INSERT INTO chunks VALUES (?, ?, ?, ?, '')")
+                .bind(&id)
+                .bind(document_id)
+                .bind(&content)
+                .bind(heading)
+                .execute(&pool)
+                .await
+                .unwrap();
+            chunks.push(RawChunk {
+                id: id.clone(),
+                document_id: document_id.into(),
+                content,
+                content_hash: Some(id),
+                index: i,
+                start_line: 1,
+                end_line: 1,
+                title_path: None,
+                heading: Some(heading.into()),
+                source_type: "markdown".into(),
+                embedding: None,
+            });
+        }
+        pool.execute("INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild')")
+            .await
+            .unwrap();
+        let index = build_index(documents, chunks).0;
+        let mut request = RagSearchRequest {
+            query_text: "target".into(),
+            query_vector: None,
+            top_k: 2,
+            threshold: 0.0,
+            file_paths: vec![],
+            keyword_search_enabled: true,
+            current_file_path: None,
+            prefer_current_file: false,
+            prefer_recent_documents: false,
+            keyword_only_fallback: false,
+        };
+        let scores = fts_keyword_scores(&pool, None, &request).await.unwrap();
+        let hits = search_index_with_fts(&index, &request, Some(&scores));
+        assert_eq!(hits.len(), 2);
+        assert!(hits.iter().any(|hit| hit.chunk.document_id == "d2"));
+
+        // A two-character English term remains an independent OR alternative.
+        request.query_text = "go golang".into();
+        let short_scores = fts_keyword_scores(&pool, None, &request).await;
+        assert!(short_scores.is_none());
+        let short_hits = search_index_with_fts(&index, &request, short_scores.as_ref());
+        assert!(short_hits.iter().any(|hit| hit.chunk.document_id == "d2"));
+        assert!(fts_query("go").is_none());
+        assert!(fts_query("golang").is_some());
+        assert!(fts_query("关键词检索").is_some());
+    }
 
     #[tokio::test]
     async fn fts_keyword_query_ranks_and_scopes_chinese_chunks() {

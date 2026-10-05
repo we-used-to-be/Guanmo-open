@@ -371,7 +371,7 @@ mod tests {
             label: "第二张".into(),
             extension: "png".into(),
         };
-        write_local_index(&dir, &[first.clone()]).unwrap();
+        write_local_index(&dir, std::slice::from_ref(&first)).unwrap();
         write_local_index(&dir, &[first, second]).unwrap();
         let saved: Vec<LocalBackground> =
             serde_json::from_slice(&fs::read(local_index_path(&dir)).unwrap()).unwrap();
