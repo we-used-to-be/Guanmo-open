@@ -29,7 +29,7 @@
 
 MEDIUM / HIGH 任务应提供以下简短提示词：
 
-  `使用 ai-code-review Skill 执行本次模型 Review；只审查当前任务范围，遵循 AGENTS.md 和本项目 Review Profile。`
+  `使用 ai-code-review Skill 执行本次模型 Review；以当前任务 diff 为起点，根据 Blast Radius 和 Regression Surface 检查直接修改及有证据支持的间接影响，不进行无目标的全仓扫描；遵循 AGENTS.md 和本项目 Review Profile。`
 
 - 只有用户明确指明调用 `ai-code-review` Skill 后，才执行对应风险级别的模型 Review、P0/P1 判断和最多一次 Fix → Re-review；Machine Gate 优先复用已有结果，不为模型 Review 自动补跑复杂命令。
 
@@ -57,13 +57,110 @@ MEDIUM / HIGH 任务应提供以下简短提示词：
 - <本次明确不应该变化的功能>
 ```
 
+## Regression Surface（修改后回归影响面）
+
+Blast Radius 不只用于修改前分析，还必须作为修改后 Review 与验收范围的输入。Review 以当前 diff 为起点，而不是以实际修改文件为审查边界。
+
+当本次修改命中共享依赖、全局状态、生命周期、初始化、路由、全局样式、跨层接口等风险信号时，必须沿有实际依赖关系或架构证据支持的影响链识别 Regression Surface；不得因为某页面或模块“本次没有直接修改”就自动排除验证。
+
+重点检查以下间接影响来源：
+
+- 共享组件、共享 Hook、公共 Service / 工具函数；
+- 全局 Store、Context、事件总线及跨模块共享状态；
+- Router、App Shell、布局容器及页面装载边界；
+- 全局 CSS、主题变量、Portal / Overlay；
+- 初始化、恢复、lazy import、Suspense、mount / unmount 生命周期；
+- Worker、缓存、异步任务、共享队列及 race condition；
+- Tauri command、SQLite、文件系统等跨层接口；
+- 被多个页面共同消费的数据模型、文档模型和渲染基础设施。
+
+Review 必须回答：
+
+1. 本次 diff 的直接影响是什么；
+2. 哪些未修改模块依赖这些修改；
+3. 哪些用户可见功能存在可信的回归风险；
+4. 哪些“本次不应该变化”的功能需要验证；
+5. 每个高可信影响项当前证据是 `PASS` / `FAIL` / `NOT TESTED` 中的哪一种。
+
+输出保持简短：
+
+```md
+### Regression Surface
+
+直接影响：
+- <本次实际修改产生的行为变化>
+
+间接影响：
+- <有依赖关系或架构证据支持的未修改模块 / 页面>
+
+需要回归：
+- <需要定向测试或 Smoke 的入口>
+
+残余风险：
+- <仍为 NOT TESTED 的影响项>
+```
+
+不得无目标扩展为全仓扫描；没有依赖证据的模块不因“可能相关”而纳入 Review。
+
+## Smoke Regression Gate
+
+Code Review 不能仅依赖静态阅读、类型检查、单元测试或构建结果。Regression Surface 涉及用户可访问页面、共享状态、共享组件、Router / App Shell、全局布局、生命周期、初始化流程或跨页面基础设施时，应执行最小 Smoke Regression。
+
+Smoke Test 只验证：
+
+- 页面 / 功能能够进入；
+- 不出现白屏、卡死或未捕获异常；
+- 核心 UI 完成首次渲染；
+- 基础交互仍可使用；
+- 页面 / Tab 往返切换后应用仍保持可操作。
+
+Smoke Test 不等于完整 E2E，不要求遍历所有业务路径，也不得为了形式上的“全覆盖”引入高成本全量测试。
+
+Smoke 范围按风险控制：
+
+- `LOW`：默认只验证当前修改功能；未命中共享依赖或 Regression Surface 时不扩大范围。
+- `MEDIUM`：验证当前功能，并验证 Regression Surface 中 1～3 个最可能受到间接影响的入口。
+- `HIGH`：验证当前功能、全部明确 Regression Surface，并执行 Core Smoke Suite。
+- `Integration Review`：多个任务汇合后执行 Core Smoke Suite。
+
+当前环境无法执行自动化 Core Smoke 时，相关项必须明确记录为人工 `PASS`、`FAIL` 或 `NOT TESTED`，不得用代码阅读替代。
+
 ## Core Smoke Suite
+
+Core Smoke 只验证核心入口“能进入、能首屏渲染、不会拖垮整个应用”，不进行完整业务验收。
+
+建议覆盖：
+
+1. 应用启动并进入主界面；
+2. 打开 Markdown 文档；
+3. 编辑模式；
+4. 预览模式；
+5. 分屏模式；
+6. 全屏阅读；
+7. AI 助手入口；
+8. 阅读成果 / 批注入口；
+9. 知识库入口；
+10. 设置页；
+11. 工作区 / 文件侧边栏；
+12. 页面 / Tab 往返切换。
+
+每项只记录 `PASS` / `FAIL` / `NOT TESTED`。
 
 已落地的自动化入口：`npm run test:smoke`，使用现有 Vitest / Testing Library，单 worker 执行 `tests/smoke/`。挂载真实 Desktop `App`、App Shell、Store、CodeMirror、MarkdownPreview、AI / 阅读成果面板及桌面设置页；通过真实按钮打开匿名 Markdown、切换编辑 / 预览 / 分屏 / 全屏、打开设置 / 知识库、工作区侧栏和 A→B→A 标签页往返。
 
 宿主边界使用 Tauri 自带 `mockIPC`，SQLite 插件提供内存中的空查询结果，文件只返回匿名 fixture；关闭自动保存、自动入库和后台模式预热，联网更新使用既有缓存。未知 IPC、原生写文件及真实网络请求均使 Smoke 失败。运行时守卫捕获 `console.error`（仅排除 React act 调度警告）、`window.error`、`unhandledrejection`、根节点 / 壳层消失，并覆盖卸载期间异常；另有真实 render throw / ErrorBoundary 和错误事件、节点消失的故障注入测试，验证守卫确实会失败。
 
 自动化 `PASS` 仅证明 mock 宿主下 React Tree 的渲染与基础切换。`src/main.tsx` 原生启动、真实窗口 / WebView2、CSS 视觉白屏、长时间卡顿、文件授权 / 拖放 / 保存、SQLite 数据正确性、AI 联网及内容详情业务均不在此命令覆盖范围；原生项继续按 Human Acceptance 验收，未执行时记录 `NOT TESTED`。阅读成果和知识库当前覆盖空数据入口，复杂数据场景保留为后续定向扩展。
+
+出现以下任一情况视为阻断问题：
+
+- 白屏或主 React Tree 崩溃；
+- 页面无法进入或核心导航失效；
+- 应用明显卡死、持续不可操作；
+- 未捕获异常导致当前页面或全局壳层失效；
+- 用户数据访问出现明显越界、丢失或错误写入风险。
+
+自动化 Smoke 应优先复用仓库现有测试设施和 mock；不得读取真实用户文件、真实 SQLite 数据库、真实 API Key 或联网服务。新增自动化命令只有在仓库中实际实现并验证通过后，才能写入 `Verification Commands` 作为真实 Machine Gate。
 
 ## Risk Signals（高风险信号，按需触发检查）
 
@@ -75,6 +172,10 @@ MEDIUM / HIGH 任务应提供以下简短提示词：
 | useEffect、mount / unmount、cleanup | Blast Radius + Review 检查生命周期 |
 | 缓存失效、Worker、Promise / async 生命周期、race condition、stale state / closure | Blast Radius + Review 检查并发与缓存 |
 | 文件快速切换、文档全文模型、虚拟化渲染核心逻辑 | Blast Radius + Review 检查文档模型 Invariants |
+| 共享组件、共享 Hook、公共 Service / 工具函数 | Blast Radius + Regression Surface；枚举主要消费者并选择最小定向 Smoke |
+| Router、App Shell、页面容器、lazy import / Suspense | Blast Radius + Regression Surface + 相关页面首次进入 Smoke |
+| 全局 CSS、主题变量、Portal / Overlay | Regression Surface + 跨页面渲染 / 挂载 Smoke |
+| 启动、初始化、恢复流程、Error Boundary 边界 | Regression Surface + 启动 / 首次进入 / 异常隔离检查 |
 | Tauri command 边界、SQLite schema / migration、用户数据文件系统写操作 | Blast Radius + 对应安全、兼容与数据风险检查；作为 HIGH 候选，结合实际改动性质判断 |
 
 分级基线：普通局部 UI 修改 → LOW；独立 Feature 行为修改 → MEDIUM 候选；核心文档模型 / DB schema / 文件系统核心逻辑 → HIGH 候选。LOW 保持轻量；MEDIUM 只执行与实际命中信号相关的检查；HIGH 才执行完整架构 / Invariants / 高风险 Review。
@@ -88,7 +189,7 @@ MEDIUM / HIGH 任务应提供以下简短提示词：
 | TypeScript typecheck | `npm run typecheck` | 任何 `src/`、`tests/`、Vite 或 TypeScript 配置修改 |
 | Lint | `npm run lint` | 任何前端、测试或构建配置修改 |
 | Frontend unit/component tests | `npx vitest run <相关测试文件> --maxWorkers=1`；`npm test` | 有具体交互或逻辑回归风险时选定向测试；全量命令留给 CI、发布或用户明确要求 |
-| Core Smoke | `npm run test:smoke` | HIGH 的明确 Regression Surface、多任务 Integration Review；MEDIUM 或共享依赖变更按实际影响范围选择入口，低成本时可运行整套 Core Smoke |
+| Core Smoke | `npm run test:smoke` | HIGH 的明确 Regression Surface、多任务 Integration Review；MEDIUM 或共享依赖变更按上方 Smoke Regression Gate 选择入口，低成本时可运行整套 Core Smoke |
 | Smoke typecheck | `npx tsc -p tests/smoke/tsconfig.json --pretty false` | Smoke 测试 / 守卫修改；覆盖测试代码及其实际引用的源码类型，不替代既有应用 typecheck |
 | Web build | `npm run build` | Web 入口、部署、构建配置或产物边界需要构建结果验收时；普通共享前端修改或 Review 不自动执行 |
 | Desktop frontend build | `npm run build:desktop` | 桌面产物、加载边界或体积变化需要构建结果验收时；普通桌面 UI 修改或 Review 不自动执行 |
@@ -139,6 +240,56 @@ diff 涉及 HIGH-Risk Areas 或命中 Risk Signals 时，Review 只额外检查�
 
 只有 correctness / regression / safety / architecture contract 相关的真实风险才阻断验收；代码风格、命名偏好、可选重构建议不得阻断。
 
+## Review Output Minimum（最小交接输出）
+
+MEDIUM / HIGH 的模型 Review，以及任何命中 Regression Surface 的 Review，至少包含：
+
+```md
+## Review Summary
+
+### Diff Scope
+- 实际修改：
+
+### Regression Surface
+- 直接影响：
+- 间接影响：
+- 明确不应变化：
+
+### Verification
+
+| 功能 / 入口 | 为什么可能受影响 | 验证方式 | 状态 |
+|---|---|---|---|
+| <当前功能> | <直接修改> | <测试 / Smoke / 人工> | PASS / FAIL / NOT TESTED |
+| <间接影响项> | <共享依赖 / 状态 / 生命周期等> | <测试 / Smoke / 人工> | PASS / FAIL / NOT TESTED |
+
+### Findings
+- 最多 3 个重要 finding；无则写 `none`。
+
+### Residual Risk
+- 仍未验证的影响项：
+```
+
+`Residual Risk` 不得省略。未执行的验证必须写 `NOT TESTED`，不得因为静态分析“看起来没问题”而省略。
+
+## Integration Review（多任务集成检查）
+
+单任务 Review 关注当前任务及其 Regression Surface。满足以下任一条件时，应执行 Integration Review：
+
+- 多个独立任务准备合并；
+- 多个 Agent / 工作区修改最终汇合；
+- 一批相关功能开发结束；
+- 准备进入 release candidate。
+
+Integration Review 不重新逐行审查所有历史 diff，而重点检查：
+
+1. 多个修改之间是否产生交叉影响；
+2. 是否同时修改同一状态域、共享组件、全局样式或生命周期；
+3. 单任务验证成立后，组合状态下是否仍成立；
+4. 是否存在后提交覆盖前提交假设、状态契约或初始化顺序的问题；
+5. 执行 Core Smoke Suite，并记录 `PASS` / `FAIL` / `NOT TESTED`。
+
+Integration Review 的目标是发现“每个任务单独正确，但组合后错误”的问题。
+
 ## Critical Invariants
 
 - 桌面业务主读写存储只能是 SQLite；Web 端不得初始化 SQLite 或 IndexedDB。
@@ -183,4 +334,5 @@ diff 涉及 HIGH-Risk Areas 或命中 Risk Signals 时，Review 只额外检查�
 - 使用匿名临时数据验证 SQLite 备份导入、旧库迁移候选库、冲突报告和失败恢复；自动测试不替代真实桌面流程判断。
 - 实际验证自定义 API/本地模型授权、流式对话、联网搜索、更新提示和系统浏览器打开链接。
 - 实际验证 Markdown 预览、预览内编辑、目录/滚动同步、大文档交互、主题和 Web/Desktop 能力边界。
+- 对本次 Regression Surface 命中的用户可见页面执行最小人工 Smoke：至少确认能进入、能首屏渲染、不会白屏 / 卡死、返回后主应用仍可操作。
 - 人工检查安装包启动、文件关联、升级后数据可读性和发布产物；自动构建通过不等于安装器验收完成。
