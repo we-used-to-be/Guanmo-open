@@ -52,7 +52,6 @@ const BUILTIN_ORIGINS: &[&str] = &[
     "https://api.tavily.com:443",
     "https://google.serper.dev:443",
     "https://api.search.brave.com:443",
-    "https://lite.duckduckgo.com:443",
     "https://api.github.com:443",
 ];
 

@@ -15,7 +15,7 @@ export interface SearchResponse {
   totalResults: number
 }
 
-export type SearchProvider = 'tavily' | 'serper' | 'brave' | 'duckduckgo' | 'custom'
+export type SearchProvider = 'tavily' | 'serper' | 'brave' | 'custom'
 
 export interface WebSearchConfig {
   provider: SearchProvider
@@ -26,7 +26,7 @@ export interface WebSearchConfig {
 }
 
 const DEFAULT_CONFIG: WebSearchConfig = {
-  provider: 'duckduckgo',
+  provider: 'tavily',
   apiKey: '',
   maxResults: 5,
   timeout: DEFAULT_REQUEST_TIMEOUT_MS,
@@ -285,71 +285,6 @@ async function searchCustom(query: string, maxResults: number, signal?: AbortSig
 }
 
 /**
- * DuckDuckGo Lite search.
- * Uses the desktop HTTP transport so the provider's browser CORS policy does not apply.
- */
-async function searchDuckDuckGo(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResponse> {
-  const url = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`
-  const abort = createCombinedAbortSignal(signal)
-
-  let res: Response
-  try {
-    res = await externalFetch(url, {
-      signal: abort.signal,
-      timeoutMs: searchConfig.timeout,
-    })
-  } catch (err) {
-    if ((err as Error).name === 'UnsupportedCapabilityError') throw err
-    if ((err as Error).name === 'TimeoutError') {
-      throw new Error('DuckDuckGo 搜索超时，请检查网络连接')
-    }
-    if ((err as Error).name === 'AbortError') {
-      throw new Error(signal?.aborted ? 'DuckDuckGo 搜索已取消' : 'DuckDuckGo 搜索超时，请检查网络连接')
-    }
-    throw new Error(`DuckDuckGo 搜索失败：${(err as Error).message || String(err)}`)
-  } finally {
-    abort.cleanup()
-  }
-
-  if (!res.ok) {
-    throw new Error(`DuckDuckGo 搜索失败 (${res.status})`)
-  }
-
-  const html = await res.text()
-  const results: SearchResult[] = []
-
-  const linkRegex = /<a[^>]+href="(https?:\/\/[^"]+)"[^>]*class="result-link"[^>]*>([^<]+)<\/a>/g
-  const snippetRegex = /<td class="result-snippet">([^<]+)<\/td>/g
-
-  const snippets: string[] = []
-  let match
-  while ((match = snippetRegex.exec(html)) !== null) {
-    snippets.push(match[1].trim())
-  }
-
-  let i = 0
-  while ((match = linkRegex.exec(html)) !== null && results.length < maxResults) {
-    results.push({
-      title: match[2].trim(),
-      url: match[1],
-      snippet: snippets[i] || '',
-      siteName: siteNameFromUrl(match[1]),
-    })
-    i++
-  }
-
-  if (results.length === 0) {
-    console.warn('DuckDuckGo: 未解析到搜索结果，页面结构可能已变更')
-  }
-
-  return {
-    results,
-    query,
-    totalResults: results.length,
-  }
-}
-
-/**
  * Perform a web search using the configured provider.
  */
 export async function webSearch(query: string, signal?: AbortSignal): Promise<SearchResponse> {
@@ -371,9 +306,8 @@ export async function webSearch(query: string, signal?: AbortSignal): Promise<Se
       return searchBrave(query, maxResults, signal)
     case 'custom':
       return searchCustom(query, maxResults, signal)
-    case 'duckduckgo':
     default:
-      return searchDuckDuckGo(query, maxResults, signal)
+      throw new Error(`未知的搜索引擎: ${(searchConfig as WebSearchConfig).provider}`)
   }
 }
 
@@ -388,17 +322,6 @@ export interface WebSearchTestResult {
  */
 export async function testWebSearchConnection(config: WebSearchConfig): Promise<WebSearchTestResult> {
   try {
-    if (config.provider === 'duckduckgo') {
-      const res = await externalFetch(
-        `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent('test')}`,
-        { timeoutMs: normalizeRequestTimeoutMs(config.timeout) },
-      )
-      if (!res.ok) {
-        return { ok: false, message: `DuckDuckGo 连接失败 (${res.status})` }
-      }
-      return { ok: true }
-    }
-
     if (config.provider === 'custom') {
       if (!config.customUrl) {
         return { ok: false, message: '自定义搜索引擎 URL 未配置' }

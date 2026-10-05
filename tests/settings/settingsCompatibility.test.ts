@@ -36,7 +36,7 @@ describe('设置兼容', () => {
       fullscreenOptionAnimationEnabled: true,
       motionPreference: 'system',
     })
-    expect(state.webSearch).toMatchObject({ provider: 'duckduckgo', maxResults: 5, timeout: 60000 })
+    expect(state.webSearch).toMatchObject({ provider: 'tavily', maxResults: 5, timeout: 60000 })
     expect(state.ai.timeout).toBe(60000)
     expect(state.ai.maxContextLength).toBe(8192)
     expect(state.ai.embedding.timeout).toBe(60000)

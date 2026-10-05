@@ -183,7 +183,7 @@ describe('模式资源泄漏回归', () => {
         aiMascotAvatarEnabled: false,
       },
       webSearch: {
-        provider: 'duckduckgo',
+        provider: 'tavily',
         apiKey: '',
         maxResults: 5,
         customUrl: '',

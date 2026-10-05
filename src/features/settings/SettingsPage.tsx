@@ -1032,7 +1032,6 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
       <SettingField label="搜索引擎" description="Agent 联网搜索时使用的引擎">
         <Select
           options={[
-            { key: 'duckduckgo', label: 'DuckDuckGo（免费）' },
             { key: 'tavily', label: 'Tavily' },
             { key: 'serper', label: 'Serper（Google）' },
             { key: 'brave', label: 'Brave Search' },
@@ -1051,17 +1050,15 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
           />
         </SettingField>
       )}
-      {webSearch.provider !== 'duckduckgo' && (
-        <SettingField label="搜索 API Key" description={isTauri() ? '同样通过系统安全存储保存' : '填写后在顶部选择保存方式'}>
-          <ApiKeyInput
-            ariaLabel="联网搜索 API Key"
-            value={webSearch.apiKey}
-            onChange={(e) => updateWebSearchConfig({ apiKey: e.target.value })}
-            placeholder={webSearch.provider === 'tavily' ? 'tvly-...' : webSearch.provider === 'custom' ? '可选，用于 Authorization 头' : '...'}
-            disabled={!isTauri() && !webRuntimeSecrets.unlocked}
-          />
-        </SettingField>
-      )}
+      <SettingField label="搜索 API Key" description={isTauri() ? '同样通过系统安全存储保存' : '填写后在顶部选择保存方式'}>
+        <ApiKeyInput
+          ariaLabel="联网搜索 API Key"
+          value={webSearch.apiKey}
+          onChange={(e) => updateWebSearchConfig({ apiKey: e.target.value })}
+          placeholder={webSearch.provider === 'tavily' ? 'tvly-...' : webSearch.provider === 'custom' ? '可选，用于 Authorization 头' : '...'}
+          disabled={!isTauri() && !webRuntimeSecrets.unlocked}
+        />
+      </SettingField>
 
       {/* 测试连接 */}
       <div className="py-1 flex items-center gap-2">
@@ -1535,7 +1532,7 @@ function GeneralSettings() {
       defaultOpenMode: 'preview',
     })
     updateAppearanceSettings({ customCursorEnabled: true, aiAvatarStyle: 'sprite', aiAssistantFontSize: 14, fullscreenTransitionEnabled: true, sendMessageAnimationEnabled: true, fullscreenOptionAnimationEnabled: true, themeId: 'warm' })
-    updateWebSearchConfig({ provider: 'duckduckgo', apiKey: '', maxResults: 5, customUrl: '', timeout: DEFAULT_REQUEST_TIMEOUT_MS })
+    updateWebSearchConfig({ provider: 'tavily', apiKey: '', maxResults: 5, customUrl: '', timeout: DEFAULT_REQUEST_TIMEOUT_MS })
     updateUsageTrackingSettings({ enabled: true })
     resetAiShortcutActions()
     toast.success('已恢复默认设置')

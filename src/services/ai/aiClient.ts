@@ -222,7 +222,7 @@ export async function validateAiStatus(): Promise<AiServiceStatus> {
   if (!chatReady && !embReady) return 'not_configured'
 
   const searchCfg = getSearchConfig()
-  const searchNeedsCheck = searchCfg.provider !== 'duckduckgo' && searchCfg.provider !== 'custom'
+  const searchNeedsCheck = searchCfg.provider !== 'custom'
 
   const [chatResult, embResult, searchOk] = await Promise.all([
     chatReady ? currentProvider!.validateConfig().then(r => r.ok).catch(() => false) : false,
