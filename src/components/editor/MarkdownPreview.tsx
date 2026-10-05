@@ -1707,10 +1707,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
         )
       : null
     const anchorIndex = before?.startIndex ?? visible.startIndex
-    const anchorElement = blockRefs.current.get(anchorIndex)
-    const anchorTopBefore = anchorElement && container
-      ? anchorElement.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
-      : before?.blockTops[anchorIndex] ?? 0
+    // Compare model coordinates on both sides; DOM coordinates include pane padding and headers.
+    const anchorTopBefore = before?.blockTops[anchorIndex] ?? 0
     const previousHeights = measuredHeightsRef.current
     const nextHeights = new Map(previousHeights)
     const candidateIndices = new Set<number>()

@@ -286,6 +286,41 @@ describe('MarkdownPreview Front Matter 布局', () => {
     expect(host.scrollTop).toBe(150)
   })
 
+  it.each([0, 24])('布局补偿保持屏幕锚点且不计入容器的 %ipx 顶部内边距', async (paddingTop) => {
+    const content = Array.from({ length: 80 }, (_, index) => `匿名段落 ${index}`).join('\n\n')
+    const host = createPreviewHost(() => 600)
+    host.style.paddingTop = `${paddingTop}px`
+    let firstBlockHeight = 100
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this === host) return rect(600, 800, 100)
+      const blockIndex = this.dataset.mdBlockIndex
+      if (blockIndex !== undefined) {
+        const top = 100 + paddingTop + Number.parseFloat(this.style.top || '0') - host.scrollTop
+        return rect(600, Number(blockIndex) === 0 ? firstBlockHeight : 100, top)
+      }
+      return rect(600, 0, 100 + paddingTop)
+    })
+    render(<MarkdownPreview content={content} />, { container: host })
+    await act(async () => {
+      host.scrollTop = 150
+      host.dispatchEvent(new Event('scroll'))
+    })
+    const anchor = host.querySelector<HTMLElement>('[data-md-block-index="1"]')!
+    const anchorTop = anchor.getBoundingClientRect().top
+    const target = host.querySelector<HTMLElement>('[data-md-block-index="0"]')!
+    const observer = TestResizeObserver.instances.find((instance) => instance.targets.has(target))!
+    firstBlockHeight = 120
+    await act(async () => {
+      observer.trigger([{
+        target,
+        borderBoxSize: [{ blockSize: firstBlockHeight }],
+      } as unknown as ResizeObserverEntry])
+      await Promise.resolve()
+    })
+    expect(host.scrollTop).toBe(170)
+    expect(anchor.getBoundingClientRect().top).toBe(anchorTop)
+  })
+
   it('向下滚动时 ResizeObserver 高度变化不回写滚动位置', async () => {
     const content = Array.from({ length: 80 }, (_, index) => `第 ${index} 段内容`).join('\n\n')
     const actualHeights = new Map<number, number>()

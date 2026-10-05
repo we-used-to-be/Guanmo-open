@@ -117,6 +117,8 @@ export function useReadingPositionBridge({
 
   const saveEditorPositionForTab = useCallback((tabId: string | null | undefined, view = editorViewRef.current) => {
     if (!tabId || !view || !readingPositionsRef.current) return
+    const mode = useEditorStore.getState().viewMode
+    if ((mode !== 'edit' && mode !== 'edit-preview') || editorRestoreFrameRef.current !== null) return
     const topLine = getEditorTopLine(view)
     const mainIndex = view.state.selection.ranges.indexOf(view.state.selection.main)
     const ranges = view.state.selection.ranges.map((range) => ({
@@ -352,9 +354,26 @@ export function useReadingPositionBridge({
       previewRestoreTimersRef.current[pane] = null
     }
     restoringPreviewTabsRef.current[pane] = null
-    restoredPreviewKeysRef.current[pane] = tabId
+    restoredPreviewKeysRef.current[pane] = `${tabId}:${useEditorStore.getState().viewMode}`
     schedulePreviewReveal(tabId)
   }, [restoredPreviewKeysRef, schedulePreviewReveal])
+
+  useLayoutEffect(() => () => {
+    // A mode change needs its own restore, even when the tab and container are reused.
+    for (const pane of ['left', 'right'] as const) {
+      if (previewRestoreFramesRef.current[pane] !== null) {
+        window.cancelAnimationFrame(previewRestoreFramesRef.current[pane]!)
+        previewRestoreFramesRef.current[pane] = null
+      }
+      if (previewRestoreTimersRef.current[pane] !== null) {
+        window.clearTimeout(previewRestoreTimersRef.current[pane]!)
+        previewRestoreTimersRef.current[pane] = null
+      }
+      restoringPreviewTabsRef.current[pane] = null
+      restoredPreviewKeysRef.current[pane] = null
+    }
+    setPreviewRestoreTick((tick) => tick + 1)
+  }, [restoredPreviewKeysRef, setPreviewRestoreTick, viewMode])
 
   useLayoutEffect(() => {
     const previousViewMode = previousViewModeRef.current
@@ -379,17 +398,18 @@ export function useReadingPositionBridge({
     }
     editorRestoreFrameRef.current = window.requestAnimationFrame(() => {
       editorRestoreFrameRef.current = null
+      const currentView = editorViewRef.current
       const currentMode = useEditorStore.getState().viewMode
       if (
-        editorViewRef.current !== view
+        !currentView
         || useEditorStore.getState().activeTabId !== tabId
         || (currentMode !== 'edit' && currentMode !== 'edit-preview')
       ) return
       if (typeof position.editorScrollTop === 'number') {
-        view.scrollDOM.scrollTop = position.editorScrollTop
-      } else if (typeof position.topLine === 'number' && position.topLine <= view.state.doc.lines) {
-        const pos = view.state.doc.line(position.topLine).from
-        view.dispatch({ effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: SCROLL_SYNC_TOP_OFFSET }) })
+        currentView.scrollDOM.scrollTop = position.editorScrollTop
+      } else if (typeof position.topLine === 'number' && position.topLine <= currentView.state.doc.lines) {
+        const pos = currentView.state.doc.line(position.topLine).from
+        currentView.dispatch({ effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: SCROLL_SYNC_TOP_OFFSET }) })
       }
     })
   }, [editorViewRef])
@@ -462,7 +482,7 @@ export function useReadingPositionBridge({
       })
     }
     const reveal = () => {
-      restoredPreviewKeysRef.current[pane] = tabId
+      restoredPreviewKeysRef.current[pane] = `${tabId}:${viewMode}`
       schedulePreviewReveal(tabId)
     }
     if (position?.topLine == null || container.clientHeight <= 0) {
@@ -500,7 +520,7 @@ export function useReadingPositionBridge({
       if (handle) {
         const targetTop = targetTopFor(handle)
         if (typeof targetTop === 'number' && (handle.getLineForTop(container.scrollTop + SCROLL_SYNC_TOP_OFFSET) !== position.topLine
-          || (typeof position.previewLineOffset === 'number' && Math.abs(container.scrollTop - targetTop) > 2))) {
+          || Math.abs(container.scrollTop - targetTop) > 2)) {
           container.scrollTop = targetTop
         }
       }
@@ -521,19 +541,21 @@ export function useReadingPositionBridge({
         return
       }
       const handle = pane === 'left' ? leftMarkdownPreviewRef.current : rightMarkdownPreviewRef.current
+      let layoutReady = false
       if (handle) {
         const currentLine = handle.getLineForTop(container.scrollTop + SCROLL_SYNC_TOP_OFFSET)
         const targetTop = targetTopFor(handle)
-        if (currentLine === position.topLine && (typeof position.previewLineOffset !== 'number'
-          || typeof targetTop !== 'number' || Math.abs(container.scrollTop - targetTop) <= 2)) {
+        layoutReady = typeof currentLine === 'number' && typeof targetTop === 'number'
+        if (currentLine === position.topLine && typeof targetTop === 'number'
+          && Math.abs(container.scrollTop - targetTop) <= 2) {
           stableFrames += 1
         } else {
           if (typeof targetTop === 'number') container.scrollTop = targetTop
           stableFrames = 0
         }
       }
-      attempts += 1
-      if (stableFrames >= 2 || attempts >= 12) {
+      attempts = layoutReady ? attempts + 1 : 0
+      if (stableFrames >= 2 || (attempts >= 12 && layoutReady)) {
         reveal()
         previewRestoreTimersRef.current[pane] = window.setTimeout(checkLateLayout, 250)
       } else {
@@ -541,7 +563,7 @@ export function useReadingPositionBridge({
       }
     }
     previewRestoreFramesRef.current[pane] = window.requestAnimationFrame(alignToLine)
-  }, [leftMarkdownPreviewRef, leftPreviewContainerRef, restoredPreviewKeysRef, rightMarkdownPreviewRef, rightPreviewContainerRef, schedulePreviewReveal, withRestoreLock])
+  }, [leftMarkdownPreviewRef, leftPreviewContainerRef, restoredPreviewKeysRef, rightMarkdownPreviewRef, rightPreviewContainerRef, schedulePreviewReveal, viewMode, withRestoreLock])
 
   useEffect(() => {
     if (!activeTabId || (viewMode !== 'edit' && viewMode !== 'edit-preview')) return

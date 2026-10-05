@@ -664,6 +664,45 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
   })
 
   describe('mode switch on same tab with saved scroll position', () => {
+    it.each([
+      ['preview', 'edit-preview'],
+      ['preview', 'dual-preview'],
+      ['edit-preview', 'preview'],
+      ['dual-preview', 'preview'],
+    ] as const)('masks %s→%s until the new layout is aligned', async (from, to) => {
+      const content = Array.from({ length: 80 }, (_, index) => `## Section ${index + 1}\n\nParagraph ${index + 1}`).join('\n\n')
+      setupEditor([anonymousTab('tab-a', content)], 'tab-a', from)
+      useEditorStore.setState({ readingPositions: {
+        'tab-a': { previewScrollTop: 400, topLine: 25 },
+        'tab-a:left': { previewScrollTop: 400, topLine: 25 },
+        'tab-a:right': { previewScrollTop: 400, topLine: 25 },
+      } })
+      const clientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+      Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 600 })
+      try {
+        const { container } = render(<EditorArea />)
+        await settleLazyEditorModules()
+        act(() => vi.advanceTimersByTime(50))
+        const preview = getLeftPreviewContainer(container)!
+        expect(preview.style.visibility).not.toBe('hidden')
+        act(() => useEditorStore.getState().setViewMode(to))
+        expect(preview.style.visibility).toBe('hidden')
+        if (to === 'dual-preview') {
+          const panes = container.querySelectorAll('.select-text.bg-gm-surface')
+          expect((panes[1] as HTMLElement).style.visibility).toBe('hidden')
+        }
+        act(() => vi.advanceTimersByTime(50))
+        expect(preview.style.visibility).not.toBe('hidden')
+        act(() => useEditorStore.getState().setViewMode(from))
+        expect(preview.style.visibility).toBe('hidden')
+        act(() => vi.advanceTimersByTime(50))
+        expect(preview.style.visibility).not.toBe('hidden')
+      } finally {
+        if (clientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', clientHeight)
+        else Reflect.deleteProperty(HTMLElement.prototype, 'clientHeight')
+      }
+    })
+
     it('preview→edit→preview cycle does not permanently hide preview', async () => {
       // The "Document switch" useEffect has viewMode in its dependency array.
       // When viewMode changes (even without tab change), the effect body runs.
@@ -738,16 +777,51 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
   })
 
   describe('tab switch in preview mode', () => {
-    it('corrects a late virtual measurement and stops correcting after user input', () => {
+    it('restores a remounted editor but ignores a later document switch', () => {
+      setupEditor([anonymousTab('tab-a', '# A'), anonymousTab('tab-b', '# B')], 'tab-a', 'edit-preview')
+      useEditorStore.setState({ readingPositions: { 'tab-a': { editorScrollTop: 680 } } })
+      const oldView = new EditorView({ doc: '# A', parent: document.createElement('div') })
+      const newView = new EditorView({ doc: '# A', parent: document.createElement('div') })
+      const editorRef = { current: oldView as EditorView | null }
+      const { result } = renderHook(() => useReadingPositionBridge({
+        activeTabId: 'tab-a', viewMode: 'edit-preview', viewModeRef: { current: 'edit-preview' },
+        editorViewRef: editorRef,
+        leftPreviewContainerRef: { current: null }, rightPreviewContainerRef: { current: null },
+        leftMarkdownPreviewRef: { current: null }, rightMarkdownPreviewRef: { current: null },
+        restoredPreviewKeysRef: { current: { left: null, right: null } },
+        scrollSyncSessionRef: { current: new ScrollSyncSession() },
+        clearPreviewSwitching: vi.fn(), setPreviewRestoreTick: vi.fn(), flushReadingPositions: vi.fn(),
+        updateEditorHeading: vi.fn(), setTocFocus: vi.fn(),
+      }))
+      act(() => {
+        result.current.restoreEditorReadingPosition('tab-a')
+        editorRef.current = newView
+        vi.advanceTimersByTime(1)
+      })
+      expect(oldView.scrollDOM.scrollTop).toBe(0)
+      expect(newView.scrollDOM.scrollTop).toBe(680)
+      act(() => {
+        newView.scrollDOM.scrollTop = 0
+        result.current.restoreEditorReadingPosition('tab-a')
+        useEditorStore.getState().setActiveTab('tab-b')
+        vi.advanceTimersByTime(1)
+      })
+      expect(newView.scrollDOM.scrollTop).toBe(0)
+      oldView.destroy()
+      newView.destroy()
+    })
+
+    it.each([undefined, 100])('waits for layout, aligns offset %s and stops correcting after user input', (previewLineOffset) => {
       setupEditor([anonymousTab('tab-a', '# A')], 'tab-a', 'preview')
-      useEditorStore.setState({ readingPositions: { 'tab-a': { previewScrollTop: 400, topLine: 25, previewLineOffset: 100 } } })
+      useEditorStore.setState({ readingPositions: { 'tab-a': { previewScrollTop: 400, topLine: 25, previewLineOffset } } })
       const container = document.createElement('div')
       Object.defineProperty(container, 'clientHeight', { value: 600 })
       let measuredLine = 25
       let measuredTop = 600
+      let layoutReady = false
       const handle = {
-        getLineForTop: () => measuredLine,
-        getTopForLine: () => measuredTop,
+        getLineForTop: () => layoutReady ? measuredLine : undefined,
+        getTopForLine: () => layoutReady ? measuredTop : undefined,
       } as unknown as MarkdownPreviewHandle
       const restoredKeys = { current: { left: null as string | null, right: null as string | null } }
       const { result } = renderHook(() => useReadingPositionBridge({
@@ -773,14 +847,17 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
         result.current.readingPositionsRef.current.save('tab-a', { previewScrollTop: 0, topLine: 1 })
         result.current.restorePreviewReadingPosition('tab-a', container, 'left')
         expect(container.scrollTop).toBe(400)
-        vi.advanceTimersByTime(50)
+        vi.advanceTimersByTime(200)
       })
-      expect(restoredKeys.current.left).toBe('tab-a')
-      expect(container.scrollTop).toBe(668)
+      expect(restoredKeys.current.left).toBeNull()
+      layoutReady = true
+      act(() => vi.advanceTimersByTime(50))
+      expect(restoredKeys.current.left).toBe('tab-a:preview')
+      expect(container.scrollTop).toBe(568 + (previewLineOffset ?? 0))
       measuredLine = 10
       measuredTop = 650
       act(() => vi.advanceTimersByTime(250))
-      expect(container.scrollTop).toBe(718)
+      expect(container.scrollTop).toBe(618 + (previewLineOffset ?? 0))
 
       act(() => result.current.allowPreviewPositionUpdates('tab-a', 'left'))
       container.scrollTop = 700

@@ -128,6 +128,10 @@ const SCROLL_SYNC_EXTERNAL_DRIFT_PX = 1
 const PREVIEW_SWITCH_MARK_PREFIX = 'guanmo:preview-switch'
 const EMPTY_READING_MARKS: ReadingMark[] = []
 
+function getPreviewRestoreKey(tabId: string, mode: ViewMode): string {
+  return `${tabId}:${mode}`
+}
+
 interface EditorAreaProps {
   /** Standalone editor tests mount this component without the application bootstrap. */
   databaseReady?: boolean
@@ -543,7 +547,6 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
   const {
     readingPositionsRef,
     isRestoringScrollRef,
-    getStoredPreviewTop,
     getStoredPreviewPosition,
     getStoredEditorTop,
     saveEditorPositionForTab,
@@ -584,23 +587,13 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
     activeTab?.id
     && (
       previewSwitchingTabId === activeTab.id
-      || (
-        restoredPreviewKeysRef.current.left !== activeTab.id
-        && (
-          getStoredPreviewTop(activeTab.id) > 0
-          || (leftInitialPreviewPosition?.topLine ?? 1) > 1
-        )
-      )
+      || restoredPreviewKeysRef.current.left !== getPreviewRestoreKey(activeTab.id, viewMode)
     )
   )
 
   const rightPreviewMasked = Boolean(
     rightTab?.id
-    && restoredPreviewKeysRef.current.right !== rightTab.id
-    && (
-      getStoredPreviewTop(rightTab.id, 'right') > 0
-      || (rightInitialPreviewPosition?.topLine ?? 1) > 1
-    )
+    && restoredPreviewKeysRef.current.right !== getPreviewRestoreKey(rightTab.id, viewMode)
   )
 
   // 预览内容更新（版本变化）只恢复预览自身位置，保证右侧渲染稳定；
@@ -1050,10 +1043,12 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
 
     const handleEditorScroll = () => {
       if (fontZoomRestoringRef.current) return
+      if (restoredPreviewKeysRef.current.left !== getPreviewRestoreKey(activeTab?.id ?? '', viewMode)) return
       if (scrollSyncSessionRef.current.source === 'preview') return
       if (editorScrollFrameRef.current !== null) return
       editorScrollFrameRef.current = window.requestAnimationFrame(() => {
         editorScrollFrameRef.current = null
+        if (restoredPreviewKeysRef.current.left !== getPreviewRestoreKey(activeTab?.id ?? '', viewMode)) return
         const line = getEditorTopLine(view)
         if (typeof line === 'number') {
           syncPreviewToEditorLine(line)
