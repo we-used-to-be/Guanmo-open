@@ -567,6 +567,45 @@ fn collect_snapshot(
 }
 
 #[tauri::command]
+pub fn get_system_memory_snapshot() -> Result<SystemMemorySnapshot, String> {
+    read_system_memory_snapshot()
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemMemorySnapshot {
+    pub available_physical_mb: u64,
+    pub total_physical_mb: u64,
+    pub available_commit_mb: u64,
+    pub commit_limit_mb: u64,
+}
+
+#[cfg(windows)]
+fn read_system_memory_snapshot() -> Result<SystemMemorySnapshot, String> {
+    use windows_sys::Win32::System::ProcessStatus::{
+        K32GetPerformanceInfo, PERFORMANCE_INFORMATION,
+    };
+    let size = std::mem::size_of::<PERFORMANCE_INFORMATION>() as u32;
+    // SAFETY: the zeroed output struct is writable for the size passed to Win32.
+    let mut info: PERFORMANCE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { K32GetPerformanceInfo(&mut info, size) } == 0 {
+        return Err("System memory snapshot unavailable".into());
+    }
+    let to_mb = |pages: usize| (pages as u64).saturating_mul(info.PageSize as u64) / (1024 * 1024);
+    Ok(SystemMemorySnapshot {
+        available_physical_mb: to_mb(info.PhysicalAvailable),
+        total_physical_mb: to_mb(info.PhysicalTotal),
+        available_commit_mb: to_mb(info.CommitLimit.saturating_sub(info.CommitTotal)),
+        commit_limit_mb: to_mb(info.CommitLimit),
+    })
+}
+
+#[cfg(not(windows))]
+fn read_system_memory_snapshot() -> Result<SystemMemorySnapshot, String> {
+    Err("System memory snapshot unavailable".into())
+}
+
+#[tauri::command]
 pub fn get_perf_snapshot(state: State<'_, PerfMonitorState>) -> Result<PerfSnapshot, String> {
     let mut system = state.system.lock().map_err(|error| error.to_string())?;
     let mut cache = state

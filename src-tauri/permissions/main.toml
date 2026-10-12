@@ -58,6 +58,7 @@ commands.allow = [
   "refresh_rag_index_document",
   "remove_rag_index_document",
   "get_perf_snapshot",
+  "get_system_memory_snapshot",
   "record_diagnostic_event",
   "get_diagnostics_mode",
   "set_diagnostics_mode",

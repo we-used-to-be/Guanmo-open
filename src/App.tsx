@@ -36,6 +36,7 @@ import { hasShownProductTourInvite, markProductTourInviteShown } from './feature
 import { markStartupPoint, waitForStartupPoint } from './services/startupPerformance'
 import { hasBootSnapshotContent } from './services/bootSnapshot'
 import { scheduleRagWarmupAfterFirstSurface } from './services/rag/startupWarmup'
+import { scheduleMemoryAwareTask, subscribeMemoryPressure } from './services/systemMemory'
 
 syncDocumentTheme(useSettingsStore.getState().appearance.themeId)
 
@@ -240,35 +241,54 @@ function scheduleIdleWarmup(): void {
 function scheduleAiPanelPreload(): () => void {
   let cancelled = false
   let delayId: number | undefined
-  let idleId: number | undefined
+  let started = false
+  let cancelQueued: (() => void) | undefined
+  let unsubscribeSettings: (() => void) | undefined
+  let unsubscribeMemory: (() => void) | undefined
   const hasActiveTab = Boolean(useEditorStore.getState().activeTabId)
   const surfaceReady = hasActiveTab
     ? Promise.race([
         waitForStartupPoint('editor-first-visible'),
         waitForStartupPoint('preview-first-visible'),
       ])
-    : Promise.resolve()
+    : waitForStartupPoint('app-shell-first-visible')
 
   void surfaceReady.then(() => {
-    if (cancelled || typeof window.requestIdleCallback !== 'function') return
-    const policy = useSettingsStore.getState().editor.modePerformancePolicy
-    if (policy === 'memory') return
-
-    const scheduleIdle = () => {
-      if (cancelled) return
-      idleId = window.requestIdleCallback(() => {
-        if (cancelled || useSettingsStore.getState().editor.modePerformancePolicy === 'memory') return
-        void preloadAiPanel().catch((error) => console.warn('[App] AI panel preload failed:', error))
-      })
+    if (cancelled) return
+    const eligible = () => !cancelled && !started && useSettingsStore.getState().editor.modePerformancePolicy !== 'memory'
+    const schedule = () => {
+      if (started || cancelled) return
+      cancelQueued?.()
+      if (delayId !== undefined) window.clearTimeout(delayId)
+      if (!eligible()) return
+      const enqueue = () => {
+        delayId = undefined
+        cancelQueued = scheduleMemoryAwareTask(async () => {
+          started = true
+          await preloadAiPanel()
+        }, 128, eligible, 3, 'AI 面板预加载')
+      }
+      if (useSettingsStore.getState().editor.modePerformancePolicy === 'speed') enqueue()
+      else delayId = window.setTimeout(enqueue, 1000)
     }
-    if (policy === 'speed') scheduleIdle()
-    else delayId = window.setTimeout(scheduleIdle, 1000)
+    unsubscribeSettings = useSettingsStore.subscribe((next, previous) => {
+      if (next.editor.modePerformancePolicy !== previous.editor.modePerformancePolicy) schedule()
+    })
+    unsubscribeMemory = subscribeMemoryPressure((value) => {
+      if (value !== 'normal') {
+        cancelQueued?.()
+        if (delayId !== undefined) window.clearTimeout(delayId)
+      } else if (value === 'normal') schedule()
+    })
+    schedule()
   })
 
   return () => {
     cancelled = true
     if (delayId !== undefined) window.clearTimeout(delayId)
-    if (idleId !== undefined) window.cancelIdleCallback(idleId)
+    cancelQueued?.()
+    unsubscribeSettings?.()
+    unsubscribeMemory?.()
   }
 }
 

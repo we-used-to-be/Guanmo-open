@@ -30,6 +30,7 @@ function invokeMock(command: string, args?: Record<string, unknown>) {
       case 'plugin:window|is_fullscreen': return native.fullscreen
       case 'plugin:window|set_fullscreen': native.fullscreen = Boolean(args?.value); return undefined
       case 'plugin:app|version': return '0.0.0-smoke'
+      case 'get_system_memory_snapshot': return { availablePhysicalMb: 4096, totalPhysicalMb: 8192, availableCommitMb: 4096, commitLimitMb: 12288 }
       case 'plugin:path|join': return (args?.paths as string[]).join('\\')
       case 'plugin:dialog|open': return (args?.options as { directory?: boolean })?.directory ? 'C:\\smoke' : native.selectedPath
       case 'wait_for_file_access_restore': return { restoreSucceeded: true, legacyMigrationCompleted: true, workspaceCount: 0, selectedFileCount: 0, pendingCount: 0 }

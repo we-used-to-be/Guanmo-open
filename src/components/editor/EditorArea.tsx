@@ -469,6 +469,11 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
     ? `${activeTab.id}:${activeContentSignature}:${activeOriginalSignature}`
     : null
 
+  const prepareModePrewarm = useCallback(async (mode: PrewarmTargetMode) => {
+    if (mode === 'diff-preview') await import('./MarkdownDiffView')
+    else await import('./MarkdownPreview')
+  }, [])
+
   useEditorResourceLifecycle({
     activeTab,
     activeTabId: activeTabId ?? null,
@@ -487,6 +492,7 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
     modeResourcePolicy,
     viewModeUsage,
     getModeRenderKey,
+    prepareModePrewarm,
     warmScope,
     leftPreviewMounted,
     rightPreviewMounted,

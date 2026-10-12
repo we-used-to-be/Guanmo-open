@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import type { Tab, ViewMode, ViewModeUsageStat } from '@/stores/editorStore'
 import { eventMarker } from '@/services/eventMarker'
+import { isTauri } from '@/hooks/useTauri'
+import { canAffordWarmup, readSystemMemory, scheduleMemoryAwareTask, subscribeMemoryPressure } from '@/services/systemMemory'
 import {
   MODE_PREWARM_ACTIVITY_PAUSE,
   MODE_PREWARM_IDLE_DELAY,
@@ -36,6 +38,7 @@ interface UseEditorResourceLifecycleOptions {
   modeResourcePolicy: ResourcePolicy
   viewModeUsage: Partial<Record<PrewarmTargetMode, ViewModeUsageStat>>
   getModeRenderKey: (mode: PrewarmTargetMode) => string | null
+  prepareModePrewarm: (mode: PrewarmTargetMode) => Promise<void>
   warmScope: string | null
   leftPreviewMounted: boolean
   rightPreviewMounted: boolean
@@ -75,6 +78,7 @@ export function useEditorResourceLifecycle({
   modeResourcePolicy,
   viewModeUsage,
   getModeRenderKey,
+  prepareModePrewarm,
   warmScope,
   leftPreviewMounted,
   rightPreviewMounted,
@@ -92,6 +96,7 @@ export function useEditorResourceLifecycle({
   restoredPreviewKeysRef,
 }: UseEditorResourceLifecycleOptions) {
   const [prewarmedModeKeys, setPrewarmedModeKeys] = useState<PrewarmedModeKeys>({})
+  const [memoryPressure, setMemoryPressure] = useState(false)
   const prewarmedModeKeysRef = useRef<PrewarmedModeKeys>({})
   prewarmedModeKeysRef.current = prewarmedModeKeys
   const warmedModeKeysRef = useRef<Set<string>>(new Set())
@@ -100,6 +105,7 @@ export function useEditorResourceLifecycle({
   const idlePrewarmCancelRef = useRef<(() => void) | null>(null)
   const pendingPrewarmRef = useRef<{ scheduleId: string; target: PrewarmTargetMode } | null>(null)
   const prewarmScheduleSequenceRef = useRef(0)
+  const prewarmCommitRef = useRef<{ target: PrewarmTargetMode; resolve: () => void } | null>(null)
   const requestedPrewarmScheduleIdsRef = useRef<Partial<Record<PrewarmTargetMode, string>>>({})
   const lastUserActivityAtRef = useRef(Date.now())
 
@@ -120,7 +126,7 @@ export function useEditorResourceLifecycle({
   const instanceDocumentRef = useRef<Record<string, string | null>>({})
   const forceDraftReleaseRef = useRef({ left: false, right: false })
   const resourcePolicyRef = useRef(modeResourcePolicy)
-  resourcePolicyRef.current = modeResourcePolicy
+  resourcePolicyRef.current = memoryPressure ? 'memory' : modeResourcePolicy
   const viewModeRef = useRef(viewMode)
   viewModeRef.current = viewMode
   const previousVisibilityRef = useRef({
@@ -263,10 +269,17 @@ export function useEditorResourceLifecycle({
     prewarmCancelRef.current += 1
     lastUserActivityAtRef.current = Date.now()
     cancelPendingPrewarm(reason)
+    prewarmCommitRef.current?.resolve()
+    prewarmCommitRef.current = null
   }, [cancelPendingPrewarm])
 
   const previousModePrewarmRef = useRef(modePrewarm)
   const previousPerformancePolicyRef = useRef(modePerformancePolicy)
+
+  useEffect(() => {
+    if (!activeDocumentFirstScreenReady) return
+    return subscribeMemoryPressure((value) => setMemoryPressure(value !== 'normal'))
+  }, [activeDocumentFirstScreenReady])
 
   useEffect(() => {
     const prev = previousPerformancePolicyRef.current
@@ -279,7 +292,7 @@ export function useEditorResourceLifecycle({
   useEffect(() => {
     const previous = previousModePrewarmRef.current
     previousModePrewarmRef.current = modePrewarm
-    if (previous !== 'off' && modePrewarm === 'off') {
+    if ((previous !== 'off' && modePrewarm === 'off') || memoryPressure) {
       cancelModePrewarm('policy-change')
       clearAllTtls()
       if (!editorVisible) setResourceMounted('editor', false)
@@ -304,7 +317,7 @@ export function useEditorResourceLifecycle({
       if (viewMode !== 'diff-preview') setResourceMounted('diff', false)
       setPrewarmedModeKeys({})
     }
-  }, [cancelModePrewarm, clearAllTtls, editorVisible, leftPreviewVisible, modePrewarm, retainedRightTabRef, rightPreviewDraftRef, leftPreviewDraftRef, leftPreviewRenderRef, setResourceMounted, viewMode])
+  }, [cancelModePrewarm, clearAllTtls, editorVisible, leftPreviewVisible, memoryPressure, modePrewarm, retainedRightTabRef, rightPreviewDraftRef, leftPreviewDraftRef, leftPreviewRenderRef, setResourceMounted, viewMode])
 
   useEffect(() => {
     const now = Date.now()
@@ -373,7 +386,7 @@ export function useEditorResourceLifecycle({
     } else if (diffMountedRef.current) {
       setResourceMounted('diff', false)
     }
-  }, [activeTab?.content.length, activeTab?.id, clearTtl, draftDecisionVersion, editorMounted, editorVisible, leftPreviewDraftRef, leftPreviewMounted, leftPreviewRenderRef, leftPreviewVisible, retainedRightTabRef, rightPreviewDraftRef, rightPreviewMounted, scheduleRelease, setResourceMounted, viewMode, rightTab?.id])
+  }, [activeTab?.content.length, activeTab?.id, clearTtl, draftDecisionVersion, editorMounted, editorVisible, leftPreviewDraftRef, leftPreviewMounted, leftPreviewRenderRef, leftPreviewVisible, memoryPressure, retainedRightTabRef, rightPreviewDraftRef, rightPreviewMounted, scheduleRelease, setResourceMounted, viewMode, rightTab?.id])
 
   useEffect(() => {
     const prev = previousActiveTabIdRef.current
@@ -437,7 +450,7 @@ export function useEditorResourceLifecycle({
   }, [activeTab?.content, activeTab?.id, activeTab?.originalContent, cancelModePrewarm, viewMode])
 
   useEffect(() => {
-    const canPrewarm = modePrewarm !== 'off' && modeResourcePolicy !== 'memory'
+    const canPrewarm = !memoryPressure && modePrewarm !== 'off' && modeResourcePolicy !== 'memory'
     if (!activeTab?.id || !canPrewarm) return
     if (!activeDocumentFirstScreenReadyRef.current || !activeDocumentFirstScreenReady) return
     if (activePreviewPending || rightPreviewPending) return
@@ -467,7 +480,7 @@ export function useEditorResourceLifecycle({
         idlePrewarmCancelRef.current()
         idlePrewarmCancelRef.current = null
       }
-      idlePrewarmCancelRef.current = scheduleIdlePrewarm(() => {
+      const request = () => {
         idlePrewarmCancelRef.current = null
         if (prewarmCancelRef.current !== token) return
         const key = getModeRenderKey(target)
@@ -475,7 +488,21 @@ export function useEditorResourceLifecycle({
         if (pendingPrewarmRef.current?.scheduleId === scheduleId) pendingPrewarmRef.current = null
         requestedPrewarmScheduleIdsRef.current[target] = scheduleId
         setPrewarmedModeKeys((current) => current[target] === key ? current : { ...current, [target]: key })
-      })
+      }
+      if (isTauri()) {
+        const budgetMb = Math.max(128, Math.ceil(activeTab.content.length * 64 / 1024 / 1024))
+        idlePrewarmCancelRef.current = scheduleMemoryAwareTask(async () => {
+          await prepareModePrewarm(target)
+          if (!canAffordWarmup(await readSystemMemory(), budgetMb) || prewarmCancelRef.current !== token) return
+          const committed = new Promise<void>((resolve) => { prewarmCommitRef.current = { target, resolve } })
+          request()
+          // Keep the queue occupied until the requested hidden instances commit.
+          await committed
+        }, budgetMb,
+        () => prewarmCancelRef.current === token && activeDocumentFirstScreenReadyRef.current, 4, '隐藏模式预加载')
+      } else {
+        idlePrewarmCancelRef.current = scheduleIdlePrewarm(request)
+      }
     }, Math.max(MODE_PREWARM_IDLE_DELAY, MODE_PREWARM_ACTIVITY_PAUSE))
 
     if (import.meta.env.DEV) {
@@ -486,11 +513,14 @@ export function useEditorResourceLifecycle({
       })
     }
 
-    return () => window.clearTimeout(timer)
-  }, [activeDiffLineCount, activeDocumentFirstScreenReady, activeDocumentFirstScreenReadyRef, activePreviewPending, activeTab?.content.length, activeTab?.id, cancelPendingPrewarm, getModeRenderKey, modePrewarm, modeResourcePolicy, prewarmedModeKeys, rightPreviewPending, viewMode, viewModeUsage])
+    return () => {
+      window.clearTimeout(timer)
+      cancelPendingPrewarm('schedule-replaced')
+    }
+  }, [activeDiffLineCount, activeDocumentFirstScreenReady, activeDocumentFirstScreenReadyRef, activePreviewPending, activeTab?.content.length, activeTab?.id, cancelPendingPrewarm, getModeRenderKey, memoryPressure, modePrewarm, modeResourcePolicy, prepareModePrewarm, prewarmedModeKeys, rightPreviewPending, viewMode, viewModeUsage])
 
   useEffect(() => {
-    const canPrewarm = modePrewarm !== 'off' && modeResourcePolicy !== 'memory'
+    const canPrewarm = !memoryPressure && modePrewarm !== 'off' && modeResourcePolicy !== 'memory'
     if (!activeTab?.id || !canPrewarm) return
     if (!activeDocumentFirstScreenReadyRef.current || !activeDocumentFirstScreenReady) return
     const requestedModes = Object.keys(prewarmedModeKeys) as PrewarmTargetMode[]
@@ -563,9 +593,25 @@ export function useEditorResourceLifecycle({
         setResourceMounted('diff', false)
       })
     }
-  }, [activeDocumentFirstScreenReady, activeDocumentFirstScreenReadyRef, activeTab?.id, decideHiddenResource, editorVisible, leftPreviewVisible, modePrewarm, modeResourcePolicy, prewarmedModeKeys, retainedRightTabRef, setResourceMounted, viewMode]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeDocumentFirstScreenReady, activeDocumentFirstScreenReadyRef, activeTab?.id, decideHiddenResource, editorVisible, leftPreviewVisible, memoryPressure, modePrewarm, modeResourcePolicy, prewarmedModeKeys, retainedRightTabRef, setResourceMounted, viewMode]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const pending = prewarmCommitRef.current
+    if (!pending) return
+    const target = pending.target
+    const committed = target === 'diff-preview' ? diffMounted
+      : leftPreviewMounted && (target !== 'edit-preview' || editorMounted)
+        && (target !== 'dual-preview' || rightPreviewMounted)
+    if (committed) {
+      prewarmCommitRef.current = null
+      pending.resolve()
+    }
+  }, [diffMounted, editorMounted, leftPreviewMounted, prewarmedModeKeys, rightPreviewMounted])
 
   useEffect(() => () => {
+    prewarmCancelRef.current += 1
+    prewarmCommitRef.current?.resolve()
+    prewarmCommitRef.current = null
     clearAllTtls()
     if (idlePrewarmCancelRef.current) {
       idlePrewarmCancelRef.current()

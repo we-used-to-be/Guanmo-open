@@ -1,8 +1,9 @@
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useEditorStore } from '@/stores/editorStore'
-import { loadRagStatsAggregate } from '@/services/database/persistence'
+import { estimateRagWarmupMb, loadRagStatsAggregate } from '@/services/database/persistence'
 import { getNativeRagIndexState, initializeNativeRagIndex } from './nativeIndex'
 import { decideRagWarmup } from './warmupPolicy'
+import { getSystemMemorySnapshot, scheduleMemoryAwareTask, subscribeMemoryPressure, type MemoryPressure } from '@/services/systemMemory'
 
 const RECENT_RAG_USE_MS = 7 * 24 * 60 * 60 * 1000
 const BALANCED_QUIET_MS = 2000
@@ -16,12 +17,6 @@ function wasRagRecentlyUsed(): boolean {
   }
 }
 
-function availableMemoryMb(): number | undefined {
-  const memory = performance as Performance & { memory?: { jsHeapSizeLimit: number; usedJSHeapSize: number } }
-  if (!memory.memory) return undefined
-  return Math.max(0, (memory.memory.jsHeapSizeLimit - memory.memory.usedJSHeapSize) / 1024 / 1024)
-}
-
 /** Called only after the database and the first real surface are ready. */
 export function scheduleNativeRagWarmup(): () => void {
   let disposed = false
@@ -29,6 +24,8 @@ export function scheduleNativeRagWarmup(): () => void {
   let documentCount = 0
   let quietTimer: number | undefined
   let idleId: number | undefined
+  let cancelQueued: (() => void) | undefined
+  let memoryPressure: MemoryPressure = 'unknown'
   let activeTabId = useEditorStore.getState().activeTabId
 
   const clearPending = () => {
@@ -36,32 +33,37 @@ export function scheduleNativeRagWarmup(): () => void {
     if (idleId !== undefined) window.cancelIdleCallback(idleId)
     quietTimer = undefined
     idleId = undefined
+    cancelQueued?.()
+    cancelQueued = undefined
   }
-  const decision = () => decideRagWarmup({
+  const decision = () => {
+    const snapshot = getSystemMemorySnapshot()
+    return decideRagWarmup({
     policy: useSettingsStore.getState().editor.modePerformancePolicy,
     documentCount,
-    availableMemoryMb: availableMemoryMb(),
+    availableMemoryMb: snapshot ? Math.min(snapshot.availablePhysicalMb, snapshot.availableCommitMb) : undefined,
     recentlyUsed: wasRagRecentlyUsed(),
     userActive: false,
-    memoryPressure: false,
+    memoryPressure: memoryPressure === 'pressure',
   })
-  const start = async () => {
+  }
+  const start = () => {
     if (disposed || started || decision() !== 'idle-warmup') return
-    started = true
-    clearPending()
-    window.removeEventListener('pointerdown', onActivity, true)
-    window.removeEventListener('keydown', onActivity, true)
-    unsubscribeEditor()
-    unsubscribeSettings()
-    const state = await getNativeRagIndexState()
-    if (state.status !== 'ready') await initializeNativeRagIndex()
+    cancelQueued = scheduleMemoryAwareTask(async () => {
+      const state = await getNativeRagIndexState()
+      if (disposed || started || decision() !== 'idle-warmup') return
+      started = true
+      stop()
+      // Shared initialization is not cancelled by ordinary interaction or disposal.
+      if (state.status !== 'ready') await initializeNativeRagIndex()
+    }, estimateRagWarmupMb, () => !disposed && !started && decision() === 'idle-warmup', 6, '知识库索引预热')
   }
   const schedule = () => {
     if (disposed || started) return
     clearPending()
     if (decision() !== 'idle-warmup') return
     if (useSettingsStore.getState().editor.modePerformancePolicy === 'speed') {
-      void start().catch((error) => console.warn('[RAG] Index warmup failed:', error))
+      start()
       return
     }
     quietTimer = window.setTimeout(() => {
@@ -69,10 +71,10 @@ export function scheduleNativeRagWarmup(): () => void {
       if (typeof window.requestIdleCallback === 'function') {
         idleId = window.requestIdleCallback(() => {
           idleId = undefined
-          void start().catch((error) => console.warn('[RAG] Index warmup failed:', error))
+          start()
         })
       } else {
-        void start().catch((error) => console.warn('[RAG] Index warmup failed:', error))
+        start()
       }
     }, BALANCED_QUIET_MS)
   }
@@ -98,7 +100,14 @@ export function scheduleNativeRagWarmup(): () => void {
     window.removeEventListener('keydown', onActivity, true)
     unsubscribeEditor()
     unsubscribeSettings()
+    unsubscribeMemory()
   }
+
+  const unsubscribeMemory = subscribeMemoryPressure((value) => {
+    memoryPressure = value
+    if (value !== 'normal') clearPending()
+    else if (value === 'normal' && documentCount > 0) schedule()
+  })
 
   void loadRagStatsAggregate().then((stats) => {
     if (disposed) return

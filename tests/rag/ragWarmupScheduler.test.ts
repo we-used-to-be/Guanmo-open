@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   loadStats: vi.fn(),
   getIndexState: vi.fn(),
   initializeIndex: vi.fn(),
+  estimate: vi.fn(),
+  memoryListener: undefined as ((value: 'unknown' | 'normal' | 'pressure') => void) | undefined,
   settingsListeners: new Set<(next: unknown, previous: unknown) => void>(),
   editorListeners: new Set<(next: unknown) => void>(),
 }))
@@ -28,7 +30,16 @@ vi.mock('@/stores/editorStore', () => ({
     },
   },
 }))
-vi.mock('@/services/database/persistence', () => ({ loadRagStatsAggregate: mocks.loadStats }))
+vi.mock('@/services/database/persistence', () => ({ loadRagStatsAggregate: mocks.loadStats, estimateRagWarmupMb: mocks.estimate }))
+vi.mock('@/services/systemMemory', () => ({
+  getSystemMemorySnapshot: () => ({ availablePhysicalMb: 4096, availableCommitMb: 4096 }),
+  subscribeMemoryPressure: (listener: typeof mocks.memoryListener) => { mocks.memoryListener = listener; return vi.fn() },
+  scheduleMemoryAwareTask: (run: () => Promise<void>, _budget: unknown, eligible: () => boolean) => {
+    let cancelled = false
+    void Promise.resolve().then(async () => { if (!cancelled && eligible()) await run() })
+    return () => { cancelled = true }
+  },
+}))
 vi.mock('@/services/rag/nativeIndex', () => ({
   getNativeRagIndexState: mocks.getIndexState,
   initializeNativeRagIndex: mocks.initializeIndex,
@@ -37,6 +48,8 @@ vi.mock('@/services/rag/nativeIndex', () => ({
 import { scheduleNativeRagWarmup } from '@/services/rag/warmupScheduler'
 
 async function flushPromises() {
+  await Promise.resolve()
+  await Promise.resolve()
   await Promise.resolve()
   await Promise.resolve()
   await Promise.resolve()
@@ -55,6 +68,9 @@ describe('RAG warmup scheduling', () => {
     mocks.loadStats.mockReset().mockResolvedValue({ documents: 20 })
     mocks.getIndexState.mockReset().mockResolvedValue({ status: 'idle' })
     mocks.initializeIndex.mockReset().mockResolvedValue({ status: 'ready' })
+    mocks.estimate.mockReset().mockResolvedValue(128)
+    mocks.memoryListener = undefined
+    localStorage.setItem('guanmo-rag-last-used-at', String(Date.now()))
     vi.stubGlobal('requestIdleCallback', vi.fn((callback: () => void) => { idleCallback = callback; return 1 }))
     vi.stubGlobal('cancelIdleCallback', vi.fn())
   })
@@ -65,6 +81,7 @@ describe('RAG warmup scheduling', () => {
     idleCallback = undefined
     vi.unstubAllGlobals()
     vi.useRealTimers()
+    localStorage.removeItem('guanmo-rag-last-used-at')
   })
 
   it('starts speed immediately and ordinary interaction cannot cancel it', async () => {
@@ -132,5 +149,36 @@ describe('RAG warmup scheduling', () => {
     mocks.settingsListeners.forEach((listener) => listener({ editor: { modePerformancePolicy: 'speed' } }, previous))
     await flushPromises()
     expect(mocks.initializeIndex).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps an unused small knowledge base on demand in balanced mode', async () => {
+    mocks.policy = 'balanced'
+    localStorage.removeItem('guanmo-rag-last-used-at')
+    stop = scheduleNativeRagWarmup()
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(mocks.initializeIndex).not.toHaveBeenCalled()
+  })
+
+  it('cancels unstarted warmup when system pressure rises', async () => {
+    mocks.policy = 'balanced'
+    stop = scheduleNativeRagWarmup()
+    await flushPromises()
+    mocks.memoryListener?.('pressure')
+    await vi.advanceTimersByTimeAsync(5000)
+    idleCallback?.()
+    await flushPromises()
+    expect(mocks.initializeIndex).not.toHaveBeenCalled()
+  })
+
+  it('does not initialize from a late state response after disposal', async () => {
+    let finish!: (state: { status: string }) => void
+    mocks.getIndexState.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    stop = scheduleNativeRagWarmup()
+    await flushPromises()
+    stop()
+    finish({ status: 'idle' })
+    await flushPromises()
+    expect(mocks.initializeIndex).not.toHaveBeenCalled()
   })
 })

@@ -20,6 +20,7 @@ interface ScheduledTask {
   startedAt?: number
   completedAt?: number
   error?: unknown
+  transient?: boolean
 }
 
 class IdleScheduler {
@@ -27,6 +28,27 @@ class IdleScheduler {
   private isRunning = false
   private startedAt = 0
   private completionCallbacks = new Map<string, () => void>()
+  private nextTransientId = 0
+
+  /** Optional work shares this queue, but does not retain completed closures. */
+  enqueueOptional(fn: TaskFn, priority: number, label: string): () => void {
+    let cancelled = false
+    const task: ScheduledTask = {
+      id: `optional-${++this.nextTransientId}`,
+      fn: async () => { if (!cancelled) await fn() },
+      priority,
+      label,
+      status: 'pending',
+      transient: true,
+    }
+    this.queue.push(task)
+    this.queue.sort((a, b) => a.priority - b.priority)
+    if (!this.isRunning) void this.start()
+    return () => {
+      cancelled = true
+      if (task.status === 'pending') this.queue = this.queue.filter((entry) => entry !== task)
+    }
+  }
 
   /**
    * 添加任务到队列
@@ -150,6 +172,8 @@ class IdleScheduler {
         callback()
         this.completionCallbacks.delete(task.id)
       }
+
+      if (task.transient) this.queue = this.queue.filter((entry) => entry !== task)
 
       // 任务完成后让出主线程，避免连续任务堆积
       await this.yieldToMain()

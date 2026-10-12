@@ -438,19 +438,19 @@ const MODE_PERFORMANCE_OPTIONS = [
   {
     key: 'memory',
     label: '节省内存',
-    description: '关闭闲时预热，隐藏的编辑器和预览将尽快释放，减少资源占用。',
+    description: '按需加载功能，不提前初始化知识库索引；隐藏的编辑器和预览尽快释放。系统内存紧张时建议选择。',
     cssClass: 'off',
   },
   {
     key: 'balanced',
     label: '平衡',
-    description: '智能预热常用模式。小文档隐藏后保留 45 秒，大文档（≥10 万字符）保留 5 秒后释放。',
+    description: '适度预加载功能，短时保留隐藏的编辑器和预览；符合条件时，在操作暂歇后提前初始化知识库索引，兼顾响应速度与内存占用。',
     cssClass: 'smart',
   },
   {
     key: 'speed',
-    label: '极速切换',
-    description: '积极预热多个模式，尽量保留当前文档已创建的编辑器和预览。切换文档时仍会释放旧文档资源，Diff 离开后始终释放。',
+    label: '响应优先',
+    description: '积极预加载功能，尽量保留当前文档的编辑器和预览；已有知识库时提前初始化索引，减少首次使用等待，但会增加启动阶段及常驻内存占用。',
     cssClass: 'turbo',
   },
 ] as const
@@ -550,7 +550,7 @@ function ModePerformanceSlider({
           max={2}
           step={1}
           value={draftIndex}
-          aria-label="模式性能策略"
+          aria-label="性能策略"
           aria-valuetext={activeOption.label}
           className="gm-mode-prewarm__input"
           onChange={handleRangeChange}
@@ -1311,7 +1311,6 @@ function StatItem({ label, value }: { label: string; value: number }) {
 
 function EditorSettings() {
   const { editor, updateEditorSettings } = useSettingsStore()
-  const modePerformanceDescription = MODE_PERFORMANCE_OPTIONS[getModePerformanceIndex(editor.modePerformancePolicy)].description
 
   return (
     <div className="w-full pb-6">
@@ -1359,14 +1358,6 @@ function EditorSettings() {
       </SettingField>
       <SettingField label="自动保存" description={!isTauri() ? "浏览器模式下自动保存不可用" : "编辑后自动保存"}>
         <Switch checked={isTauri() && editor.autoSave} onChange={(v) => updateEditorSettings({ autoSave: v })} disabled={!isTauri()} />
-      </SettingField>
-      <Sep />
-      <SectionTitle>性能</SectionTitle>
-      <SettingField label="模式性能策略" description={modePerformanceDescription} descriptionClassName="min-h-[54px]">
-        <ModePerformanceSlider
-          value={editor.modePerformancePolicy}
-          onChange={(modePerformancePolicy) => updateEditorSettings({ modePerformancePolicy })}
-        />
       </SettingField>
     </div>
   )
@@ -1422,6 +1413,7 @@ function ShortcutSettings() {
 function GeneralSettings() {
   const {
     appearance,
+    editor,
     updateAiConfig,
     updateEmbeddingConfig,
     updateEditorSettings,
@@ -1430,6 +1422,7 @@ function GeneralSettings() {
     updateUsageTrackingSettings,
     resetAiShortcutActions,
   } = useSettingsStore()
+  const modePerformanceDescription = MODE_PERFORMANCE_OPTIONS[getModePerformanceIndex(editor.modePerformancePolicy)].description
   const [busy, setBusy] = useState(false)
   const [currentVersion, setCurrentVersion] = useState('—')
   const [loadingReleaseNotes, setLoadingReleaseNotes] = useState(false)
@@ -1719,6 +1712,17 @@ function GeneralSettings() {
         <Switch checked={appearance.sendMessageAnimationEnabled} onChange={(v) => updateAppearanceSettings({ sendMessageAnimationEnabled: v })} />
       </SettingField>
       </div>
+      <Sep />
+      <SectionTitle>性能与资源</SectionTitle>
+      <SettingField label="性能策略" description={modePerformanceDescription} descriptionClassName="min-h-[54px]">
+        <ModePerformanceSlider
+          value={editor.modePerformancePolicy}
+          onChange={(modePerformancePolicy) => updateEditorSettings({ modePerformancePolicy })}
+        />
+      </SettingField>
+      <p className="mb-4 text-caption text-gm-text-tertiary">
+        平衡为推荐默认策略。知识库索引按需初始化时，首次检索可能需要等待；策略不影响已保存的知识库数据。
+      </p>
       <Sep />
       <Button type="default" block onClick={handleRestoreDefaults}>恢复默认设置</Button>
       <Sep />

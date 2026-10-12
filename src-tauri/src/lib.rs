@@ -1924,6 +1924,7 @@ pub fn run() {
             rag_index::refresh_rag_index_document,
             rag_index::remove_rag_index_document,
             perf_monitor::get_perf_snapshot,
+            perf_monitor::get_system_memory_snapshot,
             diagnostics::record_diagnostic_event,
             diagnostics::get_diagnostics_mode,
             diagnostics::set_diagnostics_mode,
