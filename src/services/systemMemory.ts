@@ -87,13 +87,13 @@ export function scheduleMemoryAwareTask(
   let cancelled = false
   const valid = () => !cancelled && eligible()
   const stop = idleScheduler.enqueueOptional(async () => {
-    if (!valid()) return
+    if (!valid()) return 'skipped'
     if (isTauri()) {
       // Avoid even the metadata query when the system is already under pressure.
-      if (!canAffordWarmup(await readSystemMemory(), typeof budget === 'number' ? budget : 128) || !valid()) return
+      if (!canAffordWarmup(await readSystemMemory(), typeof budget === 'number' ? budget : 128) || !valid()) return 'skipped'
       const budgetMb = typeof budget === 'number' ? budget : await budget()
       if (!Number.isFinite(budgetMb) || budgetMb < 0
-        || !canAffordWarmup(await readSystemMemory(), budgetMb) || !valid()) return
+        || !canAffordWarmup(await readSystemMemory(), budgetMb) || !valid()) return 'skipped'
     }
     await run()
   }, priority, label)

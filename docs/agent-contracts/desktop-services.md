@@ -19,6 +19,7 @@
 ## 开发模式性能监测
 
 - 生产资源保护使用只读 `get_system_memory_snapshot()`：返回 `availablePhysicalMb/totalPhysicalMb/availableCommitMb/commitLimitMb` 四个数值。Windows 通过 `K32GetPerformanceInfo` 获取系统提交额度与物理内存，不调用全进程性能扫描；真实首屏后才开始采样，5 秒周期由最后一个订阅者退出时清理。采样失败时可选预加载转为按需，不影响用户主动打开功能。
+- `estimate_rag_index_memory()` 只读应用内部 SQLite，返回与 Rust 初始化准入共用的 MiB 预算；无前端路径参数，不读取到 WebView 的用户正文或向量，不替代开始前及构建期间的系统余量检查。
 - 可选 AI 面板、隐藏模式及知识库预热共用现有闲时队列。任务开始前须满足系统余量、保留额度与任务预算；最低保留 512 MiB，压力状态在余量恢复到 768 MiB 后解除。预算是保守准入估计，不保证峰值上界。压力或采样未知时只释放无草稿的隐藏视图，不改变配置、可见视图、文档内容和阅读位置。
 
 - 性能监测仅在 Vite 开发模式启用；生产构建不得安装 Timer、RAF、事件监听、Observer 或 Object URL 追踪包装。

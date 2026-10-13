@@ -35,4 +35,16 @@ describe('shared idle queue', () => {
     expect(cancelled).not.toHaveBeenCalled()
     expect(next).toHaveBeenCalledTimes(1)
   })
+
+  it('does not log skipped admission as successful initialization', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    try {
+      scheduler.enqueueOptional(async () => 'skipped', 1, 'anonymous index')
+      await vi.runAllTimersAsync()
+      expect(log.mock.calls.flat().some((value) => String(value).includes('跳过 anonymous index'))).toBe(true)
+      expect(log.mock.calls.flat().some((value) => String(value).includes('✓ anonymous index'))).toBe(false)
+    } finally {
+      log.mockRestore()
+    }
+  })
 })

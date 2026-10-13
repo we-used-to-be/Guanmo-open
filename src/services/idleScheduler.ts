@@ -9,7 +9,7 @@
  * - 支持任务提升优先级
  */
 
-type TaskFn = () => Promise<void>
+type TaskFn = () => Promise<void | 'skipped'>
 
 interface ScheduledTask {
   id: string
@@ -35,7 +35,7 @@ class IdleScheduler {
     let cancelled = false
     const task: ScheduledTask = {
       id: `optional-${++this.nextTransientId}`,
-      fn: async () => { if (!cancelled) await fn() },
+      fn: async () => cancelled ? 'skipped' : fn(),
       priority,
       label,
       status: 'pending',
@@ -155,10 +155,10 @@ class IdleScheduler {
       task.startedAt = performance.now()
 
       try {
-        await this.executeWithYield(task.fn)
+        const result = await this.executeWithYield(task.fn)
         task.status = 'completed'
         task.completedAt = performance.now()
-        console.log(`[IdleScheduler] ✓ ${task.label}: ${Math.round(task.completedAt - task.startedAt!)}ms`)
+        console.log(`[IdleScheduler] ${result === 'skipped' ? '跳过' : '✓'} ${task.label}: ${Math.round(task.completedAt - task.startedAt!)}ms`)
       } catch (error) {
         task.status = 'failed'
         task.error = error
@@ -186,13 +186,14 @@ class IdleScheduler {
   /**
    * 执行任务并主动让出主线程
    */
-  private async executeWithYield(fn: TaskFn): Promise<void> {
+  private async executeWithYield(fn: TaskFn): Promise<void | 'skipped'> {
     // 等待浏览器空闲或超时（缩短超时时间，更频繁地让出主线程）
     await this.waitForIdle(200)
     // 执行任务
-    await fn()
+    const result = await fn()
     // 执行后再次让出主线程
     await this.yieldToMain()
+    return result
   }
 
   /**

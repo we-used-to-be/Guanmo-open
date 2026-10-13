@@ -415,26 +415,44 @@ async fn admit_initialization(pool: &SqlitePool) -> Result<(), String> {
     if !memory_allows_index(&snapshot, 128) {
         return Err("RAG index memory budget unavailable".into());
     }
-    let row = sqlx::query(
-        "SELECT (SELECT COALESCE(SUM(length(CAST(content AS BLOB))), 0) FROM chunks) \
-         + (SELECT COALESCE(SUM(length(CAST(embedding AS BLOB))), 0) FROM embeddings) AS bytes, \
-         (SELECT COUNT(*) FROM chunks) AS chunks, (SELECT COUNT(*) FROM documents) AS documents",
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(|error| error.to_string())?;
-    let bytes = row.get::<i64, _>("bytes").max(0) as u64;
-    let budget = bytes
-        .saturating_mul(6)
-        .saturating_add((row.get::<i64, _>("chunks").max(0) as u64).saturating_mul(2048))
-        .saturating_add((row.get::<i64, _>("documents").max(0) as u64).saturating_mul(1024))
-        .div_ceil(1024 * 1024)
-        .max(128);
+    let budget = estimate_index_memory_mb(pool).await?;
     if memory_allows_index(&crate::perf_monitor::get_system_memory_snapshot()?, budget) {
         Ok(())
     } else {
         Err("RAG index memory budget unavailable".into())
     }
+}
+
+async fn estimate_index_memory_mb(pool: &SqlitePool) -> Result<u64, String> {
+    let row = sqlx::query(include_str!("../../src/services/rag/indexMemoryBudget.sql"))
+        .fetch_one(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+    let value = |name| -> Result<u64, String> {
+        u64::try_from(
+            row.try_get::<i64, _>(name)
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|_| "RAG index memory budget unavailable".into())
+    };
+    // JSON is temporary, Float32 is resident. Frontend warmup calls this same estimate.
+    let bytes = value("vector_elements")?
+        .saturating_mul(8)
+        .saturating_add(
+            value("text_bytes")?
+                .saturating_add(value("document_bytes")?)
+                .saturating_mul(2),
+        )
+        .saturating_add(value("chunks")?.saturating_mul(2048))
+        .saturating_add(value("documents")?.saturating_mul(1024))
+        .saturating_add(value("batch_bytes")?.saturating_mul(4));
+    Ok(128_u64.saturating_add(bytes.div_ceil(1024 * 1024)))
+}
+
+#[tauri::command]
+pub async fn estimate_rag_index_memory(app: AppHandle) -> Result<u64, String> {
+    let pool = open_readonly_pool(database_path(&app)?).await?;
+    estimate_index_memory_mb(&pool).await
 }
 
 async fn load_raw_document(
@@ -1686,6 +1704,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn index_budget_counts_decoded_vectors_and_bounds_temporary_json() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        pool.execute("CREATE TABLE documents (id TEXT, file_path TEXT, title TEXT)")
+            .await
+            .unwrap();
+        pool.execute("CREATE TABLE chunks (id TEXT, content TEXT, title_path TEXT, heading TEXT)")
+            .await
+            .unwrap();
+        pool.execute("CREATE TABLE embeddings (chunk_id TEXT, embedding TEXT)")
+            .await
+            .unwrap();
+        assert_eq!(estimate_index_memory_mb(&pool).await.unwrap(), 128);
+        pool.execute("INSERT INTO documents VALUES ('d', 'C:/anonymous.md', 'anonymous')")
+            .await
+            .unwrap();
+        for (id, vector) in [
+            ("a", "[0.123456789012345678,1,2]"),
+            ("b", "invalid"),
+            ("c", "{\"value\":1}"),
+        ] {
+            sqlx::query("INSERT INTO chunks VALUES (?, 'anonymous', '[\"section\"]', '')")
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO embeddings VALUES (?, ?)")
+                .bind(id)
+                .bind(vector)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let row = sqlx::query(include_str!("../../src/services/rag/indexMemoryBudget.sql"))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row.get::<i64, _>("vector_elements"), 3);
+        assert_eq!(row.get::<i64, _>("chunks"), 3);
+        assert_eq!(estimate_index_memory_mb(&pool).await.unwrap(), 129);
+        // The JSON representation affects only the bounded raw batch, not all resident vectors.
+        pool.execute("UPDATE embeddings SET embedding = '[0,1,2]' WHERE chunk_id = 'a'")
+            .await
+            .unwrap();
+        assert_eq!(estimate_index_memory_mb(&pool).await.unwrap(), 129);
+    }
+
+    #[tokio::test]
     async fn bounded_fallback_keeps_scope_short_terms_fts_failure_and_neighbors() {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -2264,6 +2333,120 @@ mod tests {
             started.elapsed().as_millis(),
         );
         assert!(!index.documents.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "manual anonymous batched-index memory baseline; writes a temporary fixture"]
+    fn anonymous_batched_initialization_memory_profile() {
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+        use windows_sys::Win32::System::{
+            ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX},
+            Threading::GetCurrentProcess,
+        };
+        fn private_bytes() -> u64 {
+            // SAFETY: the current-process pseudo handle and writable counters have the supplied size.
+            let mut counters: PROCESS_MEMORY_COUNTERS_EX = unsafe { std::mem::zeroed() };
+            let size = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32;
+            counters.cb = size;
+            assert_ne!(
+                unsafe {
+                    K32GetProcessMemoryInfo(
+                        GetCurrentProcess(),
+                        &mut counters as *mut _ as *mut _,
+                        size,
+                    )
+                },
+                0
+            );
+            counters.PrivateUsage as u64
+        }
+        let chunks = 37_729_usize;
+        let dimension = 1024_usize;
+        let path = std::env::temp_dir().join(format!(
+            "guanmo-anonymous-rag-profile-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        let vector = format!(
+            "[{}]",
+            (0..dimension)
+                .map(|i| format!("{:.18}", (i as f64 % 197.0 - 98.0) / 100.0))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let content = "anonymous paragraph ".repeat(8);
+        let pool = tauri::async_runtime::block_on(async {
+            let pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(
+                    SqliteConnectOptions::new()
+                        .filename(path.join("fixture.db"))
+                        .create_if_missing(true),
+                )
+                .await
+                .unwrap();
+            pool.execute("CREATE TABLE documents (id TEXT PRIMARY KEY, file_path TEXT, title TEXT, last_modified INTEGER)").await.unwrap();
+            pool.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, document_id TEXT, content TEXT, content_hash TEXT, chunk_index INTEGER, start_line INTEGER, end_line INTEGER, title_path TEXT, heading TEXT, source_type TEXT)").await.unwrap();
+            pool.execute("CREATE TABLE embeddings (chunk_id TEXT PRIMARY KEY, embedding TEXT)")
+                .await
+                .unwrap();
+            let mut transaction = pool.begin().await.unwrap();
+            for i in 0..170 {
+                sqlx::query("INSERT INTO documents VALUES (?, ?, 'anonymous', 0)")
+                    .bind(format!("d{i}"))
+                    .bind(format!("C:/anonymous-{i}.md"))
+                    .execute(&mut *transaction)
+                    .await
+                    .unwrap();
+            }
+            for i in 0..chunks {
+                sqlx::query("INSERT INTO chunks VALUES (?, ?, ?, ?, ?, 1, 2, '[\"section\"]', '', 'markdown')")
+                    .bind(format!("c{i}")).bind(format!("d{}", i % 170)).bind(&content)
+                    .bind(format!("h{i}")).bind(i as i64).execute(&mut *transaction).await.unwrap();
+                if i < chunks - 250 {
+                    sqlx::query("INSERT INTO embeddings VALUES (?, ?)")
+                        .bind(format!("c{i}"))
+                        .bind(&vector)
+                        .execute(&mut *transaction)
+                        .await
+                        .unwrap();
+                }
+            }
+            transaction.commit().await.unwrap();
+            pool
+        });
+        let baseline = private_bytes();
+        let peak = Arc::new(AtomicU64::new(baseline));
+        let running = Arc::new(AtomicBool::new(true));
+        let worker_peak = peak.clone();
+        let worker_running = running.clone();
+        let sampler = std::thread::spawn(move || {
+            while worker_running.load(Ordering::Relaxed) {
+                worker_peak.fetch_max(private_bytes(), Ordering::Relaxed);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        });
+        let started = Instant::now();
+        let budget = tauri::async_runtime::block_on(estimate_index_memory_mb(&pool)).unwrap();
+        let budget_elapsed_ms = started.elapsed().as_millis();
+        tauri::async_runtime::block_on(admit_initialization(&pool)).unwrap();
+        let result = tauri::async_runtime::block_on(load_batched_index(&pool, None, || {
+            check_initialization_resources(&CancellationToken::new())
+        }));
+        let resident = private_bytes();
+        peak.fetch_max(resident, Ordering::Relaxed);
+        running.store(false, Ordering::Relaxed);
+        sampler.join().unwrap();
+        let (index, skipped) = result.unwrap();
+        println!("anonymous RAG profile: chunks={chunks}, dimension={dimension}, json_bytes={}, baseline_mb={}, peak_delta_mb={}, resident_delta_mb={}, budget_mb={budget}, budget_elapsed_ms={budget_elapsed_ms}, elapsed_ms={}",
+            vector.len() * (chunks - 250), baseline / (1024 * 1024),
+            peak.load(Ordering::Relaxed).saturating_sub(baseline).div_ceil(1024 * 1024),
+            resident.saturating_sub(baseline).div_ceil(1024 * 1024), started.elapsed().as_millis());
+        assert_eq!(index.chunks.len(), chunks);
+        assert_eq!(index.vector_dimension, Some(dimension));
+        assert_eq!(skipped, 0);
+        assert!(budget * 1024 * 1024 >= peak.load(Ordering::Relaxed).saturating_sub(baseline));
     }
 
     #[test]

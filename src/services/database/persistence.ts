@@ -402,19 +402,10 @@ export async function loadRagStatsAggregate(): Promise<{
 /** Scalar-only estimate for optional native index initialization; never loads content. */
 export async function estimateRagWarmupMb(): Promise<number> {
   if (!isDatabaseReady()) return Number.POSITIVE_INFINITY
-  const [row] = await getDatabase().select<{ bytes: number; chunks: number; documents: number }>(
-    `SELECT
-       (SELECT COALESCE(SUM(length(CAST(content AS BLOB))), 0) FROM chunks)
-         + (SELECT COALESCE(SUM(length(CAST(embedding AS BLOB))), 0) FROM embeddings) AS bytes,
-       (SELECT COUNT(*) FROM chunks) AS chunks,
-       (SELECT COUNT(*) FROM documents) AS documents`
-  )
-  if (!row || ![row.bytes, row.chunks, row.documents].every((value) => Number.isFinite(value) && value >= 0)) {
-    return Number.POSITIVE_INFINITY
-  }
-  // Raw rows, decoded vectors and search structures coexist during construction.
-  // Conservative admission estimate, not a measured peak guarantee.
-  return Math.max(128, Math.ceil((row.bytes * 6 + row.chunks * 2048 + row.documents * 1024) / 1024 / 1024))
+  // Rust owns the estimate used by both optional warmup and foreground admission.
+  const budget = await invoke<unknown>('estimate_rag_index_memory')
+  return typeof budget === 'number' && Number.isSafeInteger(budget) && budget >= 128
+    ? budget : Number.POSITIVE_INFINITY
 }
 
 export async function loadDocumentFilePaths(): Promise<string[]> {

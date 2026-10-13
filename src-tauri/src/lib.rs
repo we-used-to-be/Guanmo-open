@@ -1918,6 +1918,7 @@ pub fn run() {
             database_transactions::save_reading_artifact_category,
             database_transactions::delete_reading_artifact_category,
             rag_index::get_rag_index_state,
+            rag_index::estimate_rag_index_memory,
             rag_index::initialize_rag_index,
             rag_index::cancel_rag_index_initialization,
             rag_index::search_rag_index,

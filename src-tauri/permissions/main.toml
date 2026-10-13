@@ -52,6 +52,7 @@ commands.allow = [
   "save_reading_artifact_category",
   "delete_reading_artifact_category",
   "get_rag_index_state",
+  "estimate_rag_index_memory",
   "initialize_rag_index",
   "cancel_rag_index_initialization",
   "search_rag_index",
