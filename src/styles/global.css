@@ -1697,6 +1697,11 @@ html[data-gm-runtime='web'] .gm-settings-tabs--web > div:nth-child(2) {
   color: var(--gm-text);
 }
 
+/* 正文容器接管复制焦点时不绘制整篇外框，内部控件仍保留焦点提示。 */
+.gm-markdown-preview:focus-visible {
+  outline: none;
+}
+
 .gm-fullscreen-spacing-card {
   color: var(--gm-text);
   background: var(--gm-fullscreen-control-bg);
