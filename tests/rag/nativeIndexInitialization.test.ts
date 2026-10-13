@@ -44,4 +44,22 @@ describe('shared native RAG initialization', () => {
     await expect(prepareNativeRagIndex()).resolves.toBe('fallback')
     expect(mocks.invoke.mock.calls.filter(([command]) => command === 'initialize_rag_index')).toHaveLength(2)
   })
+
+  it('uses fallback for memory admission failure and non-ready initialization replies', async () => {
+    mocks.invoke.mockImplementation((command: string) => command === 'get_rag_index_state'
+      ? Promise.resolve({ ...ready, status: 'idle' })
+      : Promise.reject(new Error('RAG index memory budget unavailable')))
+    const progress = vi.fn()
+    await expect(prepareNativeRagIndex(progress)).resolves.toBe('fallback')
+    expect(progress).toHaveBeenLastCalledWith('fallback')
+    mocks.invoke.mockResolvedValue({ ...ready, status: 'idle' })
+    await expect(prepareNativeRagIndex()).resolves.toBe('fallback')
+  })
+
+  it('keeps an already ready index without starting another initialization', async () => {
+    mocks.invoke.mockResolvedValue(ready)
+    await expect(prepareNativeRagIndex()).resolves.toBe('already_ready')
+    expect(mocks.invoke).toHaveBeenCalledTimes(1)
+    expect(mocks.invoke).toHaveBeenCalledWith('get_rag_index_state')
+  })
 })

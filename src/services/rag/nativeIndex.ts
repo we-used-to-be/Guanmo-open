@@ -158,7 +158,11 @@ export async function prepareNativeRagIndex(
   if (state.status !== 'ready') {
     onProgress?.('initializing')
     try {
-      await initializeNativeRagIndex(signal)
+      const initialized = await initializeNativeRagIndex(signal)
+      if (initialized.status !== 'ready') {
+        onProgress?.('fallback')
+        return 'fallback'
+      }
       onProgress?.('ready')
       return 'ready'
     } catch (error) {

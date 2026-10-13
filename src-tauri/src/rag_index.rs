@@ -1,3 +1,4 @@
+use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
@@ -212,6 +213,7 @@ async fn open_readonly_pool(path: PathBuf) -> Result<SqlitePool, String> {
         .map_err(|error| error.to_string())
 }
 
+#[cfg(test)]
 async fn load_raw_index(
     pool: &SqlitePool,
     include_embeddings: bool,
@@ -259,6 +261,180 @@ async fn load_raw_index(
         })
         .collect();
     Ok((documents, chunks))
+}
+
+fn memory_allows_index(
+    snapshot: &crate::perf_monitor::SystemMemorySnapshot,
+    budget_mb: u64,
+) -> bool {
+    snapshot
+        .available_physical_mb
+        .min(snapshot.available_commit_mb)
+        >= 512_u64.saturating_add(budget_mb)
+}
+
+fn check_initialization_resources(cancellation: &CancellationToken) -> Result<(), String> {
+    if cancellation.is_cancelled() {
+        return Err("RAG index initialization cancelled".into());
+    }
+    if !memory_allows_index(&crate::perf_monitor::get_system_memory_snapshot()?, 0) {
+        return Err("RAG index memory pressure".into());
+    }
+    Ok(())
+}
+
+const INDEX_BATCH_SIZE: i64 = 64;
+
+// One JSON batch coexists with the final index. Always join the blocking worker
+// before returning, including pressure/cancellation, so no detached build survives.
+async fn load_batched_index<F>(
+    pool: &SqlitePool,
+    path: Option<&str>,
+    check: F,
+) -> Result<(RagIndex, usize), String>
+where
+    F: Fn() -> Result<(), String> + Send + Sync + Clone + 'static,
+{
+    check()?;
+    let mut index = RagIndex::default();
+    let mut rows =
+        sqlx::query("SELECT id, file_path, title, last_modified FROM documents").fetch(pool);
+    while let Some(row) = rows.try_next().await.map_err(|error| error.to_string())? {
+        check()?;
+        let file_path: String = row.get("file_path");
+        if path.is_some_and(|path| normalize_path(path) != normalize_path(&file_path)) {
+            continue;
+        }
+        let id: String = row.get("id");
+        index.documents.insert(
+            id.clone(),
+            DocumentRecord {
+                id,
+                file_path,
+                title: row.get("title"),
+                last_modified: row.get("last_modified"),
+            },
+        );
+    }
+    drop(rows);
+    let document_id = if path.is_some() {
+        index.documents.keys().next().cloned()
+    } else {
+        None
+    };
+    if path.is_some() && document_id.is_none() {
+        return Ok((index, 0));
+    }
+    let mut cursor = None;
+    let mut skipped = 0;
+    let mut dimensions = HashMap::<usize, usize>::new();
+    loop {
+        check()?;
+        let mut sql = QueryBuilder::<Sqlite>::new(
+            "SELECT c.rowid AS cursor, c.id, c.document_id, c.content, c.content_hash, c.chunk_index, \
+             c.start_line, c.end_line, c.title_path, c.heading, c.source_type, CAST(e.embedding AS TEXT) AS embedding \
+             FROM chunks c LEFT JOIN embeddings e ON e.chunk_id = c.id WHERE 1=1"
+        );
+        if let Some(cursor) = cursor {
+            sql.push(" AND c.rowid > ").push_bind(cursor);
+        }
+        if let Some(id) = &document_id {
+            sql.push(" AND c.document_id = ").push_bind(id);
+        }
+        sql.push(" ORDER BY c.rowid LIMIT ")
+            .push_bind(INDEX_BATCH_SIZE);
+        let rows = sql
+            .build()
+            .fetch_all(pool)
+            .await
+            .map_err(|error| error.to_string())?;
+        if rows.is_empty() {
+            break;
+        }
+        cursor = rows.last().map(|row| row.get::<i64, _>("cursor"));
+        check()?;
+        let chunks: Vec<_> = rows.iter().map(|row| raw_chunk_row(row, true)).collect();
+        drop(rows);
+        let worker_check = check.clone();
+        (index, skipped, dimensions) = tauri::async_runtime::spawn_blocking(move || {
+            for raw in chunks {
+                worker_check()?;
+                let has_embedding = raw.embedding.is_some();
+                let embedding = parse_embedding(raw.embedding);
+                if let Some(vector) = &embedding {
+                    *dimensions.entry(vector.len()).or_default() += 1;
+                } else if has_embedding {
+                    skipped += 1;
+                }
+                index.chunks.push(ChunkRecord {
+                    id: raw.id,
+                    document_id: raw.document_id,
+                    content: raw.content,
+                    content_hash: raw.content_hash,
+                    index: raw.index,
+                    start_line: raw.start_line,
+                    end_line: raw.end_line,
+                    title_path: parse_title_path(raw.title_path),
+                    heading: raw.heading,
+                    source_type: raw.source_type,
+                    embedding,
+                });
+            }
+            Ok::<_, String>((index, skipped, dimensions))
+        })
+        .await
+        .map_err(|error| error.to_string())??;
+    }
+    let worker_check = check.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let dimension = dimensions
+            .into_iter()
+            .max_by_key(|(_, count)| *count)
+            .map(|(dimension, _)| dimension);
+        for chunk in &mut index.chunks {
+            worker_check()?;
+            if chunk
+                .embedding
+                .as_ref()
+                .is_some_and(|vector| Some(vector.len()) != dimension)
+            {
+                chunk.embedding = None;
+                skipped += 1;
+            }
+        }
+        index.vector_dimension = dimension;
+        worker_check()?;
+        Ok((index, skipped))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+async fn admit_initialization(pool: &SqlitePool) -> Result<(), String> {
+    let snapshot = crate::perf_monitor::get_system_memory_snapshot()?;
+    if !memory_allows_index(&snapshot, 128) {
+        return Err("RAG index memory budget unavailable".into());
+    }
+    let row = sqlx::query(
+        "SELECT (SELECT COALESCE(SUM(length(CAST(content AS BLOB))), 0) FROM chunks) \
+         + (SELECT COALESCE(SUM(length(CAST(embedding AS BLOB))), 0) FROM embeddings) AS bytes, \
+         (SELECT COUNT(*) FROM chunks) AS chunks, (SELECT COUNT(*) FROM documents) AS documents",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    let bytes = row.get::<i64, _>("bytes").max(0) as u64;
+    let budget = bytes
+        .saturating_mul(6)
+        .saturating_add((row.get::<i64, _>("chunks").max(0) as u64).saturating_mul(2048))
+        .saturating_add((row.get::<i64, _>("documents").max(0) as u64).saturating_mul(1024))
+        .div_ceil(1024 * 1024)
+        .max(128);
+    if memory_allows_index(&crate::perf_monitor::get_system_memory_snapshot()?, budget) {
+        Ok(())
+    } else {
+        Err("RAG index memory budget unavailable".into())
+    }
 }
 
 async fn load_raw_document(
@@ -415,72 +591,117 @@ fn state_response(control: &IndexControl) -> RagIndexStateResponse {
     }
 }
 
-async fn apply_pending_changes(
-    app: &AppHandle,
+async fn apply_pending_changes<F>(
     service: &RagIndexService,
     pool: &SqlitePool,
-) -> Result<(), String> {
+    check: F,
+) -> Result<(), String>
+where
+    F: Fn() -> Result<(), String> + Send + Sync + Clone + 'static,
+{
     loop {
+        check()?;
         let changes = {
             let mut control = service
                 .control
                 .lock()
                 .map_err(|_| "RAG index state poisoned".to_string())?;
             if control.pending_changes.is_empty() {
+                control.status = IndexStatus::Ready;
                 return Ok(());
             }
             std::mem::take(&mut control.pending_changes)
         };
         for (path, change) in changes {
             match change {
-                PendingChange::Refresh => refresh_ready_index(pool, service, &path).await?,
+                PendingChange::Refresh => {
+                    let (fresh, _) = load_batched_index(pool, Some(&path), check.clone()).await?;
+                    check()?;
+                    remove_ready_index(service, &path)?;
+                    let index = service
+                        .control
+                        .lock()
+                        .map_err(|_| "RAG index state poisoned".to_string())?
+                        .index
+                        .clone()
+                        .ok_or_else(|| "RAG index unavailable".to_string())?;
+                    let mut index = index
+                        .write()
+                        .map_err(|_| "RAG index poisoned".to_string())?;
+                    let dimension = index.vector_dimension;
+                    index.documents.extend(fresh.documents);
+                    index
+                        .chunks
+                        .extend(fresh.chunks.into_iter().map(|mut chunk| {
+                            if chunk
+                                .embedding
+                                .as_ref()
+                                .is_some_and(|vector| Some(vector.len()) != dimension)
+                            {
+                                chunk.embedding = None;
+                            }
+                            chunk
+                        }));
+                }
                 PendingChange::Remove => remove_ready_index(service, &path)?,
             }
         }
-        let _ = app;
     }
 }
 
 async fn initialize_internal(
     app: &AppHandle,
     service: &RagIndexService,
-    cancellation: &CancellationToken,
 ) -> Result<RagIndexStateResponse, String> {
+    let mut waited = false;
     loop {
-        let should_initialize = {
+        let cancellation = {
             let mut control = service
                 .control
                 .lock()
                 .map_err(|_| "RAG index state poisoned".to_string())?;
             match control.status {
                 IndexStatus::Ready => return Ok(state_response(&control)),
-                IndexStatus::Initializing => false,
+                IndexStatus::Initializing => None,
                 IndexStatus::Idle | IndexStatus::Failed => {
+                    if waited {
+                        return Err(control
+                            .error
+                            .clone()
+                            .unwrap_or_else(|| "RAG index initialization stopped".into()));
+                    }
+                    let token = CancellationToken::new();
+                    *service
+                        .initialization_cancellation
+                        .lock()
+                        .map_err(|_| "RAG index initialization state poisoned".to_string())? =
+                        Some(token.clone());
                     control.status = IndexStatus::Initializing;
                     control.error = None;
-                    true
+                    Some(token)
                 }
             }
         };
-        if !should_initialize {
+        let Some(cancellation) = cancellation else {
+            waited = true;
             tokio::select! {
                 _ = service.notify.notified() => {},
                 _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {},
             }
             continue;
-        }
+        };
 
         let result: Result<RagIndexStateResponse, String> = async {
             if cancellation.is_cancelled() {
                 return Err("RAG index initialization cancelled".to_string());
             }
             let pool = open_readonly_pool(database_path(app)?).await?;
-            let (documents, chunks) = load_raw_index(&pool, true).await?;
-            let build = tauri::async_runtime::spawn_blocking(move || build_index(documents, chunks));
-            let (index, skipped) = tokio::select! {
-                _ = cancellation.cancelled() => return Err("RAG index initialization cancelled".to_string()),
-                result = build => result.map_err(|error| error.to_string())?,
-            };
+            admit_initialization(&pool).await?;
+            let token = cancellation.clone();
+            let (index, skipped) =
+                load_batched_index(&pool, None, move || check_initialization_resources(&token))
+                    .await?;
+            check_initialization_resources(&cancellation)?;
             {
                 let mut control = service
                     .control
@@ -489,25 +710,33 @@ async fn initialize_internal(
                 control.index = Some(Arc::new(RwLock::new(index)));
                 control.skipped_vectors = skipped;
             }
-            apply_pending_changes(app, service, &pool).await?;
-            let mut control = service
+            let token = cancellation.clone();
+            apply_pending_changes(service, &pool, move || {
+                check_initialization_resources(&token)
+            })
+            .await?;
+            let control = service
                 .control
                 .lock()
                 .map_err(|_| "RAG index state poisoned".to_string())?;
-            control.status = IndexStatus::Ready;
             Ok(state_response(&control))
         }
         .await;
 
-        if let Err(error) = &result {
-            if let Ok(mut control) = service.control.lock() {
+        if let Ok(mut control) = service.control.lock() {
+            if let Err(error) = &result {
                 control.status = if cancellation.is_cancelled() {
                     IndexStatus::Idle
                 } else {
                     IndexStatus::Failed
                 };
                 control.index = None;
+                // The next initialization reloads authoritative SQLite data.
+                control.pending_changes.clear();
                 control.error = (!cancellation.is_cancelled()).then(|| error.clone());
+            }
+            if let Ok(mut active) = service.initialization_cancellation.lock() {
+                *active = None;
             }
         }
         service.notify.notify_waiters();
@@ -531,18 +760,7 @@ pub async fn initialize_rag_index(
     app: AppHandle,
     state: State<'_, RagIndexService>,
 ) -> Result<RagIndexStateResponse, String> {
-    let cancellation = {
-        let mut active = state
-            .initialization_cancellation
-            .lock()
-            .map_err(|_| "RAG index initialization state poisoned".to_string())?;
-        active.get_or_insert_with(CancellationToken::new).clone()
-    };
-    let result = initialize_internal(&app, state.inner(), &cancellation).await;
-    if let Ok(mut active) = state.initialization_cancellation.lock() {
-        *active = None;
-    }
-    result
+    initialize_internal(&app, state.inner()).await
 }
 
 #[tauri::command]
@@ -1171,42 +1389,245 @@ fn search_index_with_fts(
         .collect()
 }
 
+// Only this bounded candidate set survives between SQLite rows. Diversification
+// happens before truncation so one long document cannot crowd out another.
+fn retain_keyword_candidates(hits: &mut Vec<RagSearchHit>, limit: usize) {
+    hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
+    let mut seen = HashSet::new();
+    hits.retain(|hit| {
+        seen.insert(
+            hit.chunk
+                .content_hash
+                .clone()
+                .unwrap_or_else(|| hit.chunk.content.to_lowercase()),
+        )
+    });
+    let mut groups = Vec::<Vec<RagSearchHit>>::new();
+    let mut paths = HashMap::new();
+    for hit in std::mem::take(hits) {
+        let group = *paths
+            .entry(normalize_path(&hit.document.file_path))
+            .or_insert_with(|| {
+                groups.push(Vec::new());
+                groups.len() - 1
+            });
+        groups[group].push(hit);
+    }
+    while hits.len() < limit {
+        let mut added = false;
+        for group in &mut groups {
+            if !group.is_empty() {
+                hits.push(group.remove(0));
+                added = true;
+            }
+            if hits.len() == limit {
+                break;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+}
+
+const KEYWORD_ROW_COLUMNS: &str = "c.id, c.document_id, c.content, c.content_hash, c.chunk_index, \
+    c.start_line, c.end_line, c.title_path, c.heading, c.source_type, \
+    d.file_path, d.title, d.last_modified";
+
+fn keyword_row_index(row: &sqlx::sqlite::SqliteRow) -> RagIndex {
+    build_index(
+        vec![RawDocument {
+            id: row.get("document_id"),
+            file_path: row.get("file_path"),
+            title: row.get("title"),
+            last_modified: row.get("last_modified"),
+        }],
+        vec![raw_chunk_row(row, false)],
+    )
+    .0
+}
+
+fn raw_chunk_row(row: &sqlx::sqlite::SqliteRow, embedding: bool) -> RawChunk {
+    RawChunk {
+        id: row.get("id"),
+        document_id: row.get("document_id"),
+        content: row.get("content"),
+        content_hash: row.get("content_hash"),
+        index: row.get("chunk_index"),
+        start_line: row.get("start_line"),
+        end_line: row.get("end_line"),
+        title_path: row.get("title_path"),
+        heading: row.get("heading"),
+        source_type: row.get("source_type"),
+        embedding: if embedding {
+            row.get("embedding")
+        } else {
+            None
+        },
+    }
+}
+
+async fn bounded_keyword_search(
+    pool: &SqlitePool,
+    request: &RagSearchRequest,
+) -> Result<Vec<RagSearchHit>, String> {
+    if !request.keyword_search_enabled || request.top_k == 0 {
+        return Ok(Vec::new());
+    }
+    let mut request = request.clone();
+    request.query_vector = None;
+    let limit = request.top_k.saturating_mul(3);
+    let mut hits = Vec::new();
+    let mut fts_available = false;
+    if let Some(query) = fts_query(&request.query_text) {
+        let sql = format!(
+            "SELECT {KEYWORD_ROW_COLUMNS}, bm25(chunks_fts, 1.0, 2.0, 1.5) AS rank \
+            FROM chunks_fts JOIN chunks c ON c.rowid = chunks_fts.rowid \
+            JOIN documents d ON d.id = c.document_id WHERE chunks_fts MATCH ? ORDER BY rank"
+        );
+        let bound_query = sqlx::query(&sql).bind(query);
+        let mut rows = bound_query.fetch(pool);
+        let mut best = None;
+        loop {
+            match rows.try_next().await {
+                Ok(Some(row)) => {
+                    let index = keyword_row_index(&row);
+                    if scoped_document_ids(&index, &request).is_some_and(|ids| ids.is_empty()) {
+                        continue;
+                    }
+                    let rank = -row.get::<f64, _>("rank");
+                    let best = *best.get_or_insert(rank);
+                    let score = if best > 0.0 {
+                        0.2 + 0.6 * (rank / best).clamp(0.0, 1.0)
+                    } else {
+                        0.5
+                    };
+                    let scores = HashMap::from([(row.get::<String, _>("id"), score as f32)]);
+                    hits.extend(search_index_with_fts(&index, &request, Some(&scores)));
+                    retain_keyword_candidates(&mut hits, limit);
+                }
+                Ok(None) => {
+                    fts_available = true;
+                    break;
+                }
+                Err(_) => {
+                    hits.clear();
+                    break;
+                } // Preserve the legacy scan on FTS failure.
+            }
+        }
+    }
+    let terms = tokenize(&request.query_text);
+    let short_chinese = terms.iter().any(|term| {
+        term.chars().count() == 2
+            && term
+                .chars()
+                .all(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch))
+    });
+    // Scan a row at a time on short queries/FTS failure. With FTS available,
+    // only title/name matches and the legacy two-character alternative are scored.
+    let mut sql = QueryBuilder::<Sqlite>::new(format!(
+        "SELECT {KEYWORD_ROW_COLUMNS} FROM chunks c JOIN documents d ON d.id = c.document_id"
+    ));
+    if fts_available && !short_chinese && !terms.is_empty() {
+        sql.push(" WHERE (");
+        for (i, term) in terms.iter().enumerate() {
+            if i > 0 {
+                sql.push(" OR ");
+            }
+            sql.push("instr(lower(d.title), ")
+                .push_bind(term)
+                .push(") > 0 OR instr(lower(d.file_path), ")
+                .push_bind(term)
+                .push(") > 0");
+        }
+        sql.push(")");
+    }
+    sql.push(" ORDER BY c.rowid");
+    let bound_query = sql.build();
+    let mut rows = bound_query.fetch(pool);
+    let empty_scores = HashMap::new();
+    while let Some(row) = rows.try_next().await.map_err(|error| error.to_string())? {
+        if fts_available && !short_chinese {
+            let title = row.get::<String, _>("title").to_lowercase();
+            let path = row.get::<String, _>("file_path");
+            let name = path
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or_default()
+                .to_lowercase();
+            if !terms
+                .iter()
+                .any(|term| title.contains(term) || name.contains(term))
+            {
+                continue;
+            }
+        }
+        let index = keyword_row_index(&row);
+        hits.extend(search_index_with_fts(
+            &index,
+            &request,
+            fts_available.then_some(&empty_scores),
+        ));
+        retain_keyword_candidates(&mut hits, limit);
+    }
+    drop(rows);
+    retain_keyword_candidates(&mut hits, request.top_k);
+    for hit in &mut hits {
+        let sql = format!(
+            "SELECT {KEYWORD_ROW_COLUMNS} FROM chunks c JOIN documents d ON d.id = c.document_id \
+            WHERE c.document_id = ? AND c.chunk_index IN (?, ?) AND c.id != ?"
+        );
+        let neighbors = sqlx::query(&sql)
+            .bind(&hit.chunk.document_id)
+            .bind(hit.chunk.index - 1)
+            .bind(hit.chunk.index + 1)
+            .bind(&hit.chunk.id)
+            .fetch_all(pool)
+            .await
+            .map_err(|error| error.to_string())?;
+        hit.neighbor_chunks = neighbors
+            .iter()
+            .map(keyword_row_index)
+            .flat_map(|index| index.chunks)
+            .filter(|chunk| chunk.title_path == hit.chunk.title_path)
+            .map(|chunk| RagSearchChunk {
+                id: chunk.id,
+                document_id: chunk.document_id,
+                content: chunk.content,
+                content_hash: chunk.content_hash,
+                index: chunk.index,
+                start_line: chunk.start_line,
+                end_line: chunk.end_line,
+                title_path: chunk.title_path,
+                heading: chunk.heading,
+                source_type: chunk.source_type,
+                context_role: Some("neighbor-context"),
+            })
+            .collect();
+    }
+    Ok(hits)
+}
+
 #[tauri::command]
 pub async fn search_rag_index(
     app: AppHandle,
-    mut request: RagSearchRequest,
+    request: RagSearchRequest,
     state: State<'_, RagIndexService>,
 ) -> Result<Vec<RagSearchHit>, String> {
-    if request.keyword_only_fallback {
-        let pool = open_readonly_pool(database_path(&app)?).await?;
-        let (documents, chunks) = load_raw_index(&pool, false).await?;
-        request.query_vector = None;
-        let (fallback, _) = build_index(documents, chunks);
-        let document_ids = scoped_document_ids(&fallback, &request);
-        let fts_scores = fts_keyword_scores(&pool, document_ids, &request).await;
-        return tauri::async_runtime::spawn_blocking(move || {
-            search_index_with_fts(&fallback, &request, fts_scores.as_ref())
-        })
-        .await
-        .map_err(|error| error.to_string());
-    }
-    if initialize_internal(&app, state.inner(), &CancellationToken::new())
-        .await
-        .is_err()
+    if request.keyword_only_fallback
+        || crate::perf_monitor::get_system_memory_snapshot()
+            .map(|snapshot| !memory_allows_index(&snapshot, 0))
+            .unwrap_or(true)
     {
+        let pool = open_readonly_pool(database_path(&app)?).await?;
+        return bounded_keyword_search(&pool, &request).await;
+    }
+    if initialize_internal(&app, state.inner()).await.is_err() {
         // Initialization failure must not block an answer. Retry a lightweight
         // keyword-only load; the failed state is retained so a later call can retry.
         let pool = open_readonly_pool(database_path(&app)?).await?;
-        let (documents, chunks) = load_raw_index(&pool, false).await?;
-        request.query_vector = None;
-        let (fallback, _) = build_index(documents, chunks);
-        let document_ids = scoped_document_ids(&fallback, &request);
-        let fts_scores = fts_keyword_scores(&pool, document_ids, &request).await;
-        return tauri::async_runtime::spawn_blocking(move || {
-            search_index_with_fts(&fallback, &request, fts_scores.as_ref())
-        })
-        .await
-        .map_err(|error| error.to_string());
+        return bounded_keyword_search(&pool, &request).await;
     }
     let index = {
         let control = state
@@ -1248,6 +1669,156 @@ mod tests {
     use super::*;
     use sqlx::Executor;
     use std::time::Instant;
+
+    #[test]
+    fn index_admission_requires_physical_and_commit_reserve_plus_budget() {
+        let mut snapshot = crate::perf_monitor::SystemMemorySnapshot {
+            available_physical_mb: 1024,
+            total_physical_mb: 8192,
+            available_commit_mb: 640,
+            commit_limit_mb: 16384,
+        };
+        assert!(memory_allows_index(&snapshot, 128));
+        assert!(!memory_allows_index(&snapshot, 129));
+        snapshot.available_commit_mb = 1024;
+        snapshot.available_physical_mb = 256;
+        assert!(!memory_allows_index(&snapshot, 128));
+    }
+
+    #[tokio::test]
+    async fn bounded_fallback_keeps_scope_short_terms_fts_failure_and_neighbors() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        pool.execute("CREATE TABLE documents (id TEXT PRIMARY KEY, file_path TEXT, title TEXT, last_modified INTEGER)").await.unwrap();
+        pool.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, document_id TEXT, content TEXT, content_hash TEXT, chunk_index INTEGER, start_line INTEGER, end_line INTEGER, title_path TEXT, heading TEXT, source_type TEXT)").await.unwrap();
+        pool.execute("INSERT INTO documents VALUES ('a', 'C:/anonymous-a.md', 'anonymous', 0), ('b', 'C:/anonymous-b.md', 'anonymous', 0)").await.unwrap();
+        for i in 0..401 {
+            sqlx::query(
+                "INSERT INTO chunks VALUES (?, ?, ?, ?, ?, 1, 2, '[\"section\"]', '', 'markdown')",
+            )
+            .bind(format!("c{i}"))
+            .bind(if i < 400 { "a" } else { "b" })
+            .bind(format!("target 检索 paragraph {i}"))
+            .bind(format!("hash{i}"))
+            .bind(i)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let mut request = RagSearchRequest {
+            query_text: "target".into(),
+            query_vector: Some(vec![1.0]),
+            top_k: 2,
+            threshold: 0.9,
+            file_paths: vec![],
+            keyword_search_enabled: true,
+            current_file_path: None,
+            prefer_current_file: false,
+            prefer_recent_documents: false,
+            keyword_only_fallback: true,
+        };
+        // No embeddings table: the fallback must never read vectors, even on FTS failure.
+        let hits = bounded_keyword_search(&pool, &request).await.unwrap();
+        assert_eq!(hits.len(), 2);
+        assert!(hits.iter().any(|hit| hit.document.id == "b"));
+        assert!(hits.iter().any(|hit| !hit.neighbor_chunks.is_empty()));
+        pool.execute("CREATE VIRTUAL TABLE chunks_fts USING fts5(content, heading, title_path, content='chunks', content_rowid='rowid', tokenize='trigram')").await.unwrap();
+        pool.execute("INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild')")
+            .await
+            .unwrap();
+        let hits = bounded_keyword_search(&pool, &request).await.unwrap();
+        assert_eq!(hits.len(), 2);
+        assert!(hits.iter().any(|hit| hit.document.id == "b"));
+        request.top_k = 150;
+        assert_eq!(
+            bounded_keyword_search(&pool, &request).await.unwrap().len(),
+            150
+        );
+        request.top_k = 2;
+        request.file_paths = vec!["c:\\ANONYMOUS-B.md".into()];
+        for query in ["target", "检索"] {
+            request.query_text = query.into();
+            let hits = bounded_keyword_search(&pool, &request).await.unwrap();
+            assert_eq!(hits.len(), 1);
+            assert_eq!(hits[0].document.id, "b");
+            assert_eq!(hits[0].retrieval_mode, "keyword");
+        }
+
+        pool.execute("CREATE TABLE embeddings (chunk_id TEXT PRIMARY KEY, embedding TEXT)")
+            .await
+            .unwrap();
+        pool.execute("INSERT INTO embeddings SELECT id, CASE WHEN chunk_index < 64 THEN '[1,0]' ELSE '[1,0,0]' END FROM chunks").await.unwrap();
+        let checks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let worker_checks = checks.clone();
+        let stopped = load_batched_index(&pool, None, move || {
+            if worker_checks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 80 {
+                Err("injected memory pressure".into())
+            } else {
+                Ok(())
+            }
+        })
+        .await;
+        assert!(matches!(stopped, Err(error) if error == "injected memory pressure"));
+        // All closure/worker references have been released when the await returns.
+        assert_eq!(Arc::strong_count(&checks), 1);
+
+        let token = CancellationToken::new();
+        let worker_token = token.clone();
+        let worker_checks = checks.clone();
+        checks.store(0, std::sync::atomic::Ordering::SeqCst);
+        let stopped = load_batched_index(&pool, None, move || {
+            if worker_checks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 80 {
+                worker_token.cancel();
+            }
+            if worker_token.is_cancelled() {
+                Err("cancelled".into())
+            } else {
+                Ok(())
+            }
+        })
+        .await;
+        assert!(matches!(stopped, Err(error) if error == "cancelled"));
+        assert_eq!(Arc::strong_count(&checks), 1);
+        // Recovery reloads from SQLite, selecting the global majority across batches.
+        let (index, skipped) = load_batched_index(&pool, None, || Ok(())).await.unwrap();
+        assert_eq!(index.chunks.len(), 401);
+        assert_eq!(index.vector_dimension, Some(3));
+        assert_eq!(skipped, 64);
+        let (single, _) = load_batched_index(&pool, Some("c:\\ANONYMOUS-B.md"), || Ok(()))
+            .await
+            .unwrap();
+        assert_eq!(single.documents.len(), 1);
+        assert_eq!(single.chunks.len(), 1);
+        let service = RagIndexService::default();
+        {
+            let mut control = service.control.lock().unwrap();
+            control.status = IndexStatus::Initializing;
+            control.index = Some(Arc::new(RwLock::new(index)));
+            control
+                .pending_changes
+                .insert("C:/anonymous-a.md".into(), PendingChange::Remove);
+            control
+                .pending_changes
+                .insert("C:/anonymous-b.md".into(), PendingChange::Refresh);
+        }
+        pool.execute(
+            "UPDATE chunks SET content = 'updated anonymous content' WHERE document_id = 'b'",
+        )
+        .await
+        .unwrap();
+        apply_pending_changes(&service, &pool, || Ok(()))
+            .await
+            .unwrap();
+        let control = service.control.lock().unwrap();
+        assert_eq!(control.status, IndexStatus::Ready);
+        assert!(control.pending_changes.is_empty());
+        let index = control.index.as_ref().unwrap().read().unwrap();
+        assert_eq!(index.chunks.len(), 1);
+        assert_eq!(index.chunks[0].content, "updated anonymous content");
+    }
 
     #[tokio::test]
     async fn fts_candidates_preserve_cross_document_recall_and_short_english_terms() {
