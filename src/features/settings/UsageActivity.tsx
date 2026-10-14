@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Switch } from 'animal-island-ui'
+import { Settings2 } from 'lucide-react'
 import { isTauri } from '@/hooks/useTauri'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { toast } from '@/services/toast'
@@ -19,6 +20,8 @@ import {
   subscribeUsageSnapshot,
 } from '@/services/usageTracking'
 import type { UsageTrackingError } from '@/services/usageTracking'
+import { UsageReceiptDialog } from './UsageReceiptDialog'
+import { buildUsageReceipt, chooseReceiptQuote, type UsageReceipt } from './usageReceipt'
 
 // ---------------------------------------------------------------------------
 // 热力图数据生成
@@ -207,6 +210,10 @@ export function UsageActivity() {
   const [clearBusy, setClearBusy] = useState(false)
   const [refreshBusy, setRefreshBusy] = useState(false)
   const [showClearDialog, setShowClearDialog] = useState(false)
+  const [receipt, setReceipt] = useState<UsageReceipt | null>(null)
+  const [receiptBusy, setReceiptBusy] = useState(false)
+  const previousQuoteRef = useRef<string | null>(null)
+  const receiptRequestRef = useRef(false)
   const [trackingActive, setTrackingActive] = useState(initialSnapshot.isActive)
   const [trackingError, setTrackingError] = useState<UsageTrackingError | null>(initialSnapshot.error)
   const mountedRef = useRef(true)
@@ -333,6 +340,34 @@ export function UsageActivity() {
     }
   }, [refreshStats])
 
+  const handlePrint = useCallback(async () => {
+    if (receiptRequestRef.current) return
+    receiptRequestRef.current = true
+    setReceiptBusy(true)
+    try {
+      await checkpointUsageTracking()
+      const [today, total, activity] = await Promise.all([
+        queryUsageToday(), queryUsageTotal(), loadUsageActivity(range.start, range.end),
+      ])
+      if (!mountedRef.current) return
+      const pending = getPendingSnapshot()
+      const date = getLocalDateKey()
+      const quote = chooseReceiptQuote(previousQuoteRef.current)
+      setReceipt(buildUsageReceipt(
+        total + [...pending.values()].reduce((sum, seconds) => sum + seconds, 0),
+        today + (pending.get(date) ?? 0), activity, range, date, quote,
+      ))
+      previousQuoteRef.current = quote
+    } catch {
+      if (mountedRef.current) toast.error('生成时光回顾失败，请重试')
+    } finally {
+      receiptRequestRef.current = false
+      if (mountedRef.current) setReceiptBusy(false)
+    }
+  }, [range])
+
+  const closeReceipt = useCallback(() => setReceipt(null), [])
+
   // 清空
   const handleClear = useCallback(async () => {
     setClearBusy(true)
@@ -358,27 +393,37 @@ export function UsageActivity() {
   return (
     <div className="gm-usage">
       <div className="gm-usage-header">
-        <span className="gm-usage-header-title">使用统计</span>
-        <div className="gm-usage-header-actions">
-          <div className="gm-usage-header-buttons">
-            <Button type="text" size="small" loading={refreshBusy} onClick={handleRefresh}>
-              刷新
-            </Button>
-            <Button type="text" size="small" onClick={() => setShowClearDialog(true)}>
-              清空使用数据
-            </Button>
-          </div>
-          <div className="gm-usage-toggle">
-            <span className="gm-usage-toggle-label">记录</span>
-            <Switch checked={enabled} onChange={handleToggle} />
-          </div>
+        <div className="gm-usage-heading">
+          <span className="gm-usage-header-title">使用统计</span>
         </div>
-      </div>
-
-      <div className="gm-usage-status-row" role="status" aria-live="polite">
-        <span className={`gm-usage-status gm-usage-status--${status.tone}`}>
-          {status.label}
-        </span>
+        <div className="gm-usage-header-actions">
+          <span className={`gm-usage-status gm-usage-status--${status.tone}`} role="status" aria-live="polite">
+            <span className="gm-usage-status-dot" aria-hidden="true" />{status.label}
+          </span>
+          <Button type="text" size="small" loading={receiptBusy} disabled={clearBusy || refreshBusy} onClick={handlePrint}>
+            生成回顾
+          </Button>
+          <details className="gm-usage-more"
+            onClick={(event) => {
+              if ((event.target as HTMLElement).closest('.gm-usage-menu-action')) event.currentTarget.open = false
+            }}
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) event.currentTarget.open = false
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') event.currentTarget.open = false
+            }}>
+            <summary aria-label="统计设置" title="统计设置"><Settings2 size={15} /></summary>
+            <div className="gm-usage-more-panel">
+              <label className="gm-usage-record-setting">
+                <span>记录使用时长</span>
+                <Switch size="small" checked={enabled} onChange={handleToggle} />
+              </label>
+              <div className="gm-usage-menu-action"><Button type="text" size="small" loading={refreshBusy} disabled={receiptBusy || clearBusy} onClick={handleRefresh}>刷新统计</Button></div>
+              <div className="gm-usage-menu-action"><Button type="text" size="small" disabled={receiptBusy || refreshBusy} onClick={() => setShowClearDialog(true)}>清空使用数据</Button></div>
+            </div>
+          </details>
+        </div>
       </div>
 
       {/* 统计卡 */}
@@ -460,6 +505,7 @@ export function UsageActivity() {
         onConfirm={handleClear}
         busy={clearBusy}
       />
+      {receipt && <UsageReceiptDialog receipt={receipt} onClose={closeReceipt} />}
     </div>
   )
 }

@@ -148,11 +148,38 @@ describe('UsageActivity', () => {
     await waitFor(() => expect(mockState.loadUsageActivity).toHaveBeenCalled())
 
     mockState.order.length = 0
-    fireEvent.click(screen.getByRole('button', { name: '刷新' }))
+    fireEvent.click(screen.getByLabelText('统计设置'))
+    fireEvent.click(screen.getByRole('button', { name: '刷新统计' }))
 
     await waitFor(() => {
       expect(mockState.order).toEqual(['checkpoint', 'today', 'total', 'activity'])
     })
+  })
+
+  it('打印前结算并固定统计快照，后续计时不改变已生成的小票', async () => {
+    mockState.loadUsageActivity.mockResolvedValue(new Map([['2026-09-28', 11880]]))
+    mockState.queryUsageTotal.mockResolvedValue(244920)
+    render(<UsageActivity />)
+    await waitFor(() => expect(screen.getByText('68 小时 2 分钟')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: '生成回顾' }))
+    await waitFor(() => expect(screen.getByRole('dialog', { name: '时光回顾' })).toBeInTheDocument())
+    const paper = screen.getByRole('img', { name: '时光回顾统计卡片' })
+    expect(paper).toHaveTextContent('68 小时 2 分钟')
+    expect(paper).toHaveTextContent('3 小时 18 分钟')
+    expect(paper).toHaveTextContent('2026.09.28')
+    act(() => emitSnapshot(activeSnapshot({ capturedMsByDate: new Map([['2026-09-28', 60000]]) })))
+    expect(paper).toHaveTextContent('68 小时 2 分钟')
+    expect(mockState.checkpointUsageTracking).toHaveBeenCalledOnce()
+  })
+
+  it('读取统计失败时不打开含有错误数据的小票', async () => {
+    render(<UsageActivity />)
+    await waitFor(() => expect(mockState.loadUsageActivity).toHaveBeenCalled())
+    mockState.queryUsageTotal.mockRejectedValueOnce(new Error('database unavailable'))
+    fireEvent.click(screen.getByRole('button', { name: '生成回顾' }))
+    await waitFor(() => expect(mockState.checkpointUsageTracking).toHaveBeenCalledOnce())
+    await act(async () => {})
+    expect(screen.queryByRole('dialog', { name: '时光回顾' })).not.toBeInTheDocument()
   })
 
   it('卸载时取消快照订阅，并忽略未完成刷新结果', async () => {
