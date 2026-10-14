@@ -202,6 +202,7 @@ function getUsageStatus(
 
 export function UsageActivity() {
   const enabled = useSettingsStore((s) => s.usageTracking.enabled)
+  const themeId = useSettingsStore((s) => s.appearance.themeId)
   const initialSnapshot = useMemo(() => getUsageSnapshot(), [])
 
   const [todaySeconds, setTodaySeconds] = useState(0)
@@ -355,7 +356,7 @@ export function UsageActivity() {
       const quote = chooseReceiptQuote(previousQuoteRef.current)
       setReceipt(buildUsageReceipt(
         total + [...pending.values()].reduce((sum, seconds) => sum + seconds, 0),
-        today + (pending.get(date) ?? 0), activity, range, date, quote,
+        today + (pending.get(date) ?? 0), activity, range, date, quote, themeId,
       ))
       previousQuoteRef.current = quote
     } catch {
@@ -364,7 +365,7 @@ export function UsageActivity() {
       receiptRequestRef.current = false
       if (mountedRef.current) setReceiptBusy(false)
     }
-  }, [range])
+  }, [range, themeId])
 
   const closeReceipt = useCallback(() => setReceipt(null), [])
 

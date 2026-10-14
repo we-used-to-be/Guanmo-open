@@ -12,6 +12,7 @@ export const USAGE_RECEIPT_QUOTES = [
 ]
 
 export interface UsageReceipt {
+  theme: 'light' | 'dark'
   total: string
   today: string
   activeDays: number
@@ -34,6 +35,7 @@ export function buildUsageReceipt(
   range: { start: string; end: string },
   generatedDate: string,
   quote: string,
+  themeId = 'light',
 ): UsageReceipt {
   const days = [...activity].filter(([date, seconds]) =>
     date >= range.start && date <= range.end && seconds > 0,
@@ -42,6 +44,7 @@ export function buildUsageReceipt(
     !best || day[1] > best[1] ? day : best, null,
   )
   return {
+    theme: themeId === 'dark' ? 'dark' : 'light',
     total: formatDuration(totalSeconds),
     today: formatDuration(todaySeconds),
     activeDays: days.length,

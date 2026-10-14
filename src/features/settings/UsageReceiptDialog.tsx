@@ -7,6 +7,11 @@ import { toast } from '@/services/toast'
 import type { UsageReceipt } from './usageReceipt'
 import './usageReceipt.css'
 
+const RECEIPT_PALETTES = {
+  light: { paper: '#fcfaf4', ink: '#39352f', secondary: '#82796d', muted: '#938a7d', quote: '#655d52', rule: '#c7bdae' },
+  dark: { paper: '#1d1a15', ink: '#eee4d2', secondary: '#b9af9e', muted: '#9f9585', quote: '#d0c5b3', rule: '#625849' },
+}
+
 function getCutEdge(progress: number): Array<{ x: number; y: number }> {
   const end = progress * 360
   const points = Array.from({ length: Math.floor(end / 6) + 1 }, (_, i) => ({ x: i * 6, y: (i % 2) * 3 }))
@@ -23,6 +28,7 @@ function ReceiptPaper({ receipt, paperRef, cutEdge }: {
   paperRef: React.RefObject<SVGSVGElement>
   cutEdge: Array<{ x: number; y: number }>
 }) {
+  const palette = RECEIPT_PALETTES[receipt.theme]
   const quoteLines = receipt.quote.match(/.{1,22}/gu) ?? []
   const durationParts = receipt.total.match(/^(\d+) 小时 (\d+) 分钟$/)
   const minuteParts = receipt.total.match(/^(\d+) 分钟$/)
@@ -30,12 +36,12 @@ function ReceiptPaper({ receipt, paperRef, cutEdge }: {
     <svg ref={paperRef} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 500"
       width="360" height="500" className="gm-receipt-paper" role="img" aria-label="时光回顾统计卡片">
       <path d={`${cutEdge.map((point, i) => `${i === 0 ? 'M' : 'L'}${point.x} ${point.y}`).join(' ')} L${cutEdge[cutEdge.length - 1].x} 0 H360 V488 ${Array.from({ length: 30 }, (_, i) => `L${354 - i * 12} 494 L${348 - i * 12} 488`).join(' ')} Z`}
-        fill="#fcfaf4" />
-      <g fontFamily="'Microsoft YaHei', 'PingFang SC', sans-serif" fill="#39352f">
+        fill={palette.paper} />
+      <g fontFamily="'Microsoft YaHei', 'PingFang SC', sans-serif" fill={palette.ink}>
         <text id="usage-receipt-title" x="180" y="43" textAnchor="middle" fontSize="18" fontWeight="600" letterSpacing="2">时光回顾</text>
-        <text x="180" y="64" textAnchor="middle" fontSize="9" fill="#938a7d">生成于 {receipt.generatedDate.replace(/-/g, '.')}</text>
-        <path d="M32 84 H328 M32 206 H328 M32 346 H328" stroke="#c7bdae" strokeDasharray="3 5" />
-        <text x="180" y="113" textAnchor="middle" fontSize="11" fill="#82796d">累计使用时长</text>
+        <text x="180" y="64" textAnchor="middle" fontSize="9" fill={palette.muted}>生成于 {receipt.generatedDate.replace(/-/g, '.')}</text>
+        <path d="M32 84 H328 M32 206 H328 M32 346 H328" stroke={palette.rule} strokeDasharray="3 5" />
+        <text x="180" y="113" textAnchor="middle" fontSize="11" fill={palette.secondary}>累计使用时长</text>
         <text x="180" y="156" textAnchor="middle" fontSize="34" fontWeight="600" aria-label={receipt.total}>
           {durationParts ? <>
             <tspan>{durationParts[1]}</tspan><tspan fontSize="12" fontWeight="400"> 小时 </tspan>
@@ -44,19 +50,19 @@ function ReceiptPaper({ receipt, paperRef, cutEdge }: {
             <tspan>{minuteParts[1]}</tspan><tspan fontSize="12" fontWeight="400"> 分钟</tspan>
           </> : <tspan fontSize="25">{receipt.total}</tspan>}
         </text>
-        <text x="32" y="185" fontSize="12" fill="#82796d">今日使用</text>
+        <text x="32" y="185" fontSize="12" fill={palette.secondary}>今日使用</text>
         <text x="328" y="185" textAnchor="end" fontSize="13">{receipt.today}</text>
-        <text x="32" y="233" fontSize="10" fill="#82796d">近十二个月</text>
-        <text x="328" y="233" textAnchor="end" fontSize="8" fill="#938a7d">{receipt.range}</text>
-        <text x="32" y="270" fontSize="12" fill="#82796d">使用天数</text>
+        <text x="32" y="233" fontSize="10" fill={palette.secondary}>近十二个月</text>
+        <text x="328" y="233" textAnchor="end" fontSize="8" fill={palette.muted}>{receipt.range}</text>
+        <text x="32" y="270" fontSize="12" fill={palette.secondary}>使用天数</text>
         <text x="328" y="270" textAnchor="end" fontSize="13">{receipt.activeDays} 天</text>
-        <text x="32" y="305" fontSize="12" fill="#82796d">单日最长</text>
+        <text x="32" y="305" fontSize="12" fill={palette.secondary}>单日最长</text>
         <text x="328" y="305" textAnchor="end" fontSize="13">{receipt.longest}</text>
-        <text x="328" y="324" textAnchor="end" fontSize="9" fill="#938a7d">{receipt.longestDate}</text>
+        <text x="328" y="324" textAnchor="end" fontSize="9" fill={palette.muted}>{receipt.longestDate}</text>
         {quoteLines.map((line, i) => (
-          <text key={i} x="180" y={391 - (quoteLines.length - 1) * 11 + i * 22} textAnchor="middle" fontSize="12" fill="#655d52">{line}</text>
+          <text key={i} x="180" y={391 - (quoteLines.length - 1) * 11 + i * 22} textAnchor="middle" fontSize="12" fill={palette.quote}>{line}</text>
         ))}
-        <text x="180" y="456" textAnchor="middle" fontSize="9" fill="#938a7d">
+        <text x="180" y="456" textAnchor="middle" fontSize="9" fill={palette.muted}>
           <tspan fontWeight="600">观墨</tspan><tspan> · 开源 / Markdown / AI</tspan>
         </text>
       </g>
@@ -101,6 +107,7 @@ export function UsageReceiptDialog({ receipt, onClose }: { receipt: UsageReceipt
   const [progress, setProgress] = useState(0)
   const [phase, setPhase] = useState<'attached' | 'falling' | 'detached'>('attached')
   const cutEdge = getCutEdge(progress)
+  const palette = RECEIPT_PALETTES[receipt.theme]
 
   useEffect(() => {
     aliveRef.current = true
@@ -171,11 +178,12 @@ export function UsageReceiptDialog({ receipt, onClose }: { receipt: UsageReceipt
               event.preventDefault(); first?.focus()
             }
           }}>
-          <div className="gm-receipt-sheet" data-phase={phase} data-tearing={progress > 0} style={{ '--tear-progress': progress } as CSSProperties}>
+          <div className="gm-receipt-sheet" data-phase={phase} data-tearing={progress > 0} data-receipt-theme={receipt.theme}
+            style={{ '--tear-progress': progress, '--receipt-paper': palette.paper, '--receipt-secondary': palette.secondary, '--receipt-rule': palette.rule } as CSSProperties}>
             <div className="gm-receipt-printer" aria-hidden="true"><span /></div>
             <div className="gm-receipt-stub">
               <svg className="gm-receipt-stub-edge" viewBox="0 0 360 4" width="360" height="4" aria-hidden="true">
-                <path d={`M0 0 H${progress * 360} ${[...cutEdge].reverse().map((point) => `L${point.x} ${Math.max(0, point.y - 0.7)}`).join(' ')} Z`} fill="#fcfaf4" />
+                <path d={`M0 0 H${progress * 360} ${[...cutEdge].reverse().map((point) => `L${point.x} ${Math.max(0, point.y - 0.7)}`).join(' ')} Z`} fill={palette.paper} />
               </svg>
               <button type="button" className="gm-receipt-tear" disabled={saving || phase === 'detached'}
                 aria-label="从左向右撕下并保存回顾，或按 Enter 保存"

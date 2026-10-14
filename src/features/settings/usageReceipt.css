@@ -103,7 +103,7 @@
   position: relative;
   z-index: 2;
   height: 42px;
-  background: #fcfaf4;
+  background: var(--receipt-paper);
 }
 .gm-receipt-stub-edge {
   position: absolute;
@@ -133,7 +133,7 @@
   top: 12px;
   right: 0;
   width: calc((1 - var(--tear-progress)) * 100%);
-  border-top: 1px dashed #b8ae9e;
+  border-top: 1px dashed var(--receipt-rule);
 }
 .gm-receipt-tear-cut {
   position: absolute;
@@ -150,7 +150,7 @@
   place-items: center;
   width: 24px;
   height: 18px;
-  color: #82796d;
+  color: var(--receipt-secondary);
   background: transparent;
   animation: gmReceiptTool 1400ms ease-in-out infinite;
 }

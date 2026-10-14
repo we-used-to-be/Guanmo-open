@@ -4,6 +4,7 @@ import { UsageActivity } from '@/features/settings/UsageActivity'
 
 const mockState = vi.hoisted(() => ({
   enabled: true,
+  themeId: 'warm',
   snapshot: null as any,
   listeners: new Set<(snapshot: any) => void>(),
   order: [] as string[],
@@ -20,8 +21,8 @@ vi.mock('@/hooks/useTauri', () => ({
 }))
 
 vi.mock('@/stores/settingsStore', () => ({
-  useSettingsStore: (selector: (state: { usageTracking: { enabled: boolean } }) => unknown) =>
-    selector({ usageTracking: { enabled: mockState.enabled } }),
+  useSettingsStore: (selector: (state: { usageTracking: { enabled: boolean }; appearance: { themeId: string } }) => unknown) =>
+    selector({ usageTracking: { enabled: mockState.enabled }, appearance: { themeId: mockState.themeId } }),
 }))
 
 vi.mock('@/services/toast', () => ({
@@ -102,6 +103,7 @@ describe('UsageActivity', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockState.enabled = true
+    mockState.themeId = 'warm'
     mockState.snapshot = activeSnapshot()
     mockState.listeners.clear()
     mockState.order.length = 0
@@ -180,6 +182,21 @@ describe('UsageActivity', () => {
     await waitFor(() => expect(mockState.checkpointUsageTracking).toHaveBeenCalledOnce())
     await act(async () => {})
     expect(screen.queryByRole('dialog', { name: '时光回顾' })).not.toBeInTheDocument()
+  })
+
+  it('深色卡片配色固定在生成时，预览切换主题不改变导出 SVG', async () => {
+    mockState.themeId = 'dark'
+    const view = render(<UsageActivity />)
+    await waitFor(() => expect(mockState.loadUsageActivity).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: '生成回顾' }))
+    await waitFor(() => expect(screen.getByRole('dialog', { name: '时光回顾' })).toBeInTheDocument())
+    const paper = screen.getByRole('img', { name: '时光回顾统计卡片' })
+    const originalSvg = new XMLSerializer().serializeToString(paper)
+    expect(originalSvg).toContain('fill="#1d1a15"')
+    expect(originalSvg).toContain('fill="#eee4d2"')
+    mockState.themeId = 'light'
+    view.rerender(<UsageActivity />)
+    expect(new XMLSerializer().serializeToString(paper)).toBe(originalSvg)
   })
 
   it('卸载时取消快照订阅，并忽略未完成刷新结果', async () => {

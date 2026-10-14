@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { buildUsageReceipt, chooseReceiptQuote, USAGE_RECEIPT_QUOTES } from '@/features/settings/usageReceipt'
 
 describe('时间小票统计口径', () => {
+  it.each([['dark', 'dark'], ['warm', 'light'], ['light', 'light'], ['custom-dark', 'light']])(
+    '主题 %s 对应卡片配色 %s，仅绑定内置深色预设', (themeId, expected) => {
+      const receipt = buildUsageReceipt(0, 0, new Map(), { start: '2025-10-15', end: '2026-10-14' }, '2026-10-14', USAGE_RECEIPT_QUOTES[0], themeId)
+      expect(receipt.theme).toBe(expected)
+    },
+  )
   it('近十二个月指标排除区间外和零时长，单日最长并列时取最早日期', () => {
     const receipt = buildUsageReceipt(7200, 30, new Map([
       ['2025-01-01', 99999], ['2026-09-29', 3600], ['2026-09-28', 3600], ['2026-09-30', 0],
