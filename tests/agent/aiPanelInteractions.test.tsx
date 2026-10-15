@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AiPanel } from '@/components/ai/AiPanel'
 import { StatusBar } from '@/components/layout/StatusBar'
 import { useSidebarContent } from '@/components/layout/useSidebarContent'
-import { consumePendingPanelNavigation, requestOpenReadingArtifacts } from '@/services/aiPanelNavigation'
+import { consumePendingPanelNavigation, OPEN_AI_CHAT_EVENT, OPEN_READING_ARTIFACTS_EVENT, OPEN_READING_REMINDERS_EVENT, requestOpenReadingArtifacts } from '@/services/aiPanelNavigation'
 import type { TimelineItem } from '@/stores/chatStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useAppStore } from '@/stores/appStore'
@@ -137,17 +137,20 @@ describe('AI 面板视图返回', () => {
     delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo
   })
 
-  it('从阅读成果顶部返回聊天时滚动到对话底部', () => {
+  it('普通模式移除顶部导航，切回聊天保留滚动位置', () => {
     render(<AiPanel />)
     const container = document.querySelector<HTMLElement>('.overflow-y-auto')!
     Object.defineProperty(container, 'scrollHeight', { configurable: true, value: 960 })
 
-    fireEvent.click(screen.getByTitle('阅读成果'))
+    fireEvent(window, new Event(OPEN_READING_ARTIFACTS_EVENT))
     expect(screen.getByRole('region', { name: '阅读成果内容' }).closest('.overflow-hidden')).toBeInTheDocument()
     scrollTo.mockClear()
-    fireEvent.click(screen.getByTitle('返回'))
+    fireEvent(window, new Event(OPEN_AI_CHAT_EVENT))
 
-    expect(scrollTo).toHaveBeenCalledWith({ top: 960 })
+    expect(scrollTo).not.toHaveBeenCalled()
+    expect(screen.queryByTitle('返回')).toBeNull()
+    expect(screen.queryByTitle('阅读成果')).toBeNull()
+    expect(screen.queryByTitle('阅读提醒（功能开发中）')).toBeNull()
   })
 
   it('阅读成果视图不显示聊天的 Agent 状态链路', () => {
@@ -155,22 +158,22 @@ describe('AI 面板视图返回', () => {
     render(<AiPanel />)
 
     expect(screen.getByText('Agent 状态链路：')).toBeInTheDocument()
-    fireEvent.click(screen.getByTitle('阅读成果'))
+    fireEvent(window, new Event(OPEN_READING_ARTIFACTS_EVENT))
     expect(screen.queryByText('Agent 状态链路：')).not.toBeInTheDocument()
   })
 
   it('阅读成果首次访问后切换聊天和提醒仍保留页面与滚动位置', () => {
     render(<AiPanel />)
     expect(screen.queryByRole('region', { name: '阅读成果内容', hidden: true })).toBeNull()
-    fireEvent.click(screen.getByTitle('阅读成果'))
+    fireEvent(window, new Event(OPEN_READING_ARTIFACTS_EVENT))
     const region = screen.getByRole('region', { name: '阅读成果内容' })
     region.scrollTop = 420
-    fireEvent.click(screen.getByTitle('返回'))
+    fireEvent(window, new Event(OPEN_AI_CHAT_EVENT))
     expect(region).toBeInTheDocument()
     expect(region).not.toBeVisible()
-    fireEvent.click(screen.getByTitle('阅读提醒（功能开发中）'))
+    fireEvent(window, new Event(OPEN_READING_REMINDERS_EVENT))
     expect(region).toBeInTheDocument()
-    fireEvent.click(screen.getByTitle('阅读成果'))
+    fireEvent(window, new Event(OPEN_READING_ARTIFACTS_EVENT))
     expect(screen.getByRole('region', { name: '阅读成果内容' })).toBe(region)
     expect(region.scrollTop).toBe(420)
     expect(region).toBeVisible()
@@ -178,7 +181,7 @@ describe('AI 面板视图返回', () => {
 
   it('快捷提问发送前先渲染聊天界面，并保留阅读成果', () => {
     render(<AiPanel />)
-    fireEvent.click(screen.getByTitle('阅读成果'))
+    fireEvent(window, new Event(OPEN_READING_ARTIFACTS_EVENT))
     const region = screen.getByRole('region', { name: '阅读成果内容' })
     useChatStore.getState().setDraftInput('解释选中文本')
     aiChat.sendMessage.mockImplementationOnce(() => {
@@ -196,7 +199,7 @@ describe('AI 面板视图返回', () => {
     vi.useFakeTimers()
     useSettingsStore.getState().updateEditorSettings({ autoSendAiShortcut: false })
     render(<AiPanel />)
-    fireEvent.click(screen.getByTitle('阅读成果'))
+    fireEvent(window, new Event(OPEN_READING_ARTIFACTS_EVENT))
     act(() => setAiShortcutPrompt('解释选中文本'))
     act(() => vi.runOnlyPendingTimers())
     expect(screen.getByText('AI 助手')).toBeVisible()
@@ -228,7 +231,7 @@ describe('AI 面板视图返回', () => {
     vi.useFakeTimers()
     useSettingsStore.getState().updateEditorSettings({ autoSendAiShortcut: true })
     render(<AiPanel />)
-    fireEvent.click(screen.getByTitle('阅读成果'))
+    fireEvent(window, new Event(OPEN_READING_ARTIFACTS_EVENT))
     act(() => setAiShortcutPrompt('解释选中文本'))
     act(() => vi.runOnlyPendingTimers())
     expect(screen.getByText('AI 助手')).toBeVisible()
@@ -238,13 +241,15 @@ describe('AI 面板视图返回', () => {
     expect(useChatStore.getState().draftInput).toBe('')
   })
 
-  it('底部 AI 与阅读成果入口按当前页面切换或收起侧边栏', () => {
+  it('底部提醒、阅读成果和 AI 入口按当前页面切换或收起侧边栏', () => {
     vi.useFakeTimers()
     useAppStore.getState().closeAiPanel()
     render(<><StatusBar /><AiPanel /></>)
 
     const aiButton = screen.getByRole('button', { name: /打开 AI 助手/ })
     const artifactsButton = screen.getByRole('button', { name: '打开阅读成果' })
+    const remindersButton = screen.getByRole('button', { name: '打开阅读提醒' })
+    expect(remindersButton.compareDocumentPosition(artifactsButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     const flushNavigation = () => act(() => { vi.runOnlyPendingTimers() })
 
     fireEvent.click(aiButton)
@@ -271,6 +276,50 @@ describe('AI 面板视图返回', () => {
     expect(screen.getByText('阅读成果')).toBeInTheDocument()
     fireEvent.click(artifactsButton)
     flushNavigation()
+    expect(useAppStore.getState().aiPanelOpen).toBe(false)
+
+    fireEvent.click(remindersButton)
+    flushNavigation()
+    expect(useAppStore.getState().aiPanelOpen).toBe(true)
+    expect(screen.getByText('阅读提醒')).toBeInTheDocument()
+    fireEvent.click(artifactsButton)
+    flushNavigation()
+    expect(screen.getByText('阅读成果')).toBeInTheDocument()
+    fireEvent.click(remindersButton)
+    flushNavigation()
+    expect(screen.getByText('阅读提醒')).toBeInTheDocument()
+    fireEvent.click(remindersButton)
+    flushNavigation()
+    expect(useAppStore.getState().aiPanelOpen).toBe(false)
+  })
+
+  it('全屏固定三个导航入口，切换选中态且不触发拖动', () => {
+    if (!useAppStore.getState().aiPanelOpen) useAppStore.getState().toggleAiPanel()
+    const onPointerDown = vi.fn()
+    render(<AiPanel fullscreenDragHandleProps={{
+      onPointerDown, onPointerMove: vi.fn(), onPointerUp: vi.fn(), onPointerCancel: vi.fn(),
+    }} />)
+    expect(screen.queryByRole('navigation', { name: '侧栏页面' })).toBeNull()
+    expect(screen.queryByTitle('清空对话')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '切换页面' }), { detail: 1 })
+    const nav = screen.getByRole('navigation', { name: '侧栏页面' })
+    const buttons = within(nav).getAllByRole('button')
+    expect(buttons.map((button) => button.textContent)).toEqual(['AI 助手', '阅读成果', '阅读提醒'])
+    expect(buttons[0]).toHaveAttribute('aria-current', 'page')
+    for (const index of [1, 2, 0]) {
+      fireEvent.pointerDown(buttons[index])
+      fireEvent.click(buttons[index])
+      expect(buttons[index]).toHaveAttribute('aria-current', 'page')
+      expect(within(nav).getAllByRole('button')).toEqual(buttons)
+      expect(buttons.filter((button) => button.getAttribute('aria-current') === 'page')).toHaveLength(1)
+    }
+    expect(onPointerDown).not.toHaveBeenCalled()
+    expect(screen.queryByTitle('返回')).toBeNull()
+    expect(screen.queryByTitle('关闭面板')).toBeNull()
+    const dragArea = screen.getByLabelText('拖动 AI 助手')
+    fireEvent.pointerDown(dragArea)
+    expect(onPointerDown).toHaveBeenCalledOnce()
+    act(() => useAppStore.getState().closeAiPanel())
     expect(useAppStore.getState().aiPanelOpen).toBe(false)
   })
 

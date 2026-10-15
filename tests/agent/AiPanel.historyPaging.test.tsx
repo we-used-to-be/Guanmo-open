@@ -4,6 +4,7 @@ import type { ChatMessage } from '@/services/ai/types'
 import { useChatStore } from '@/stores/chatStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { AiPanel } from '@/components/ai/AiPanel'
+import { StatusBar } from '@/components/layout/StatusBar'
 
 const mocks = vi.hoisted(() => ({ load: vi.fn(), database: true }))
 vi.mock('@/hooks/useAiChat', () => ({ useAiChat: () => ({
@@ -25,7 +26,7 @@ function scroll(container: HTMLElement, top: number) {
   fireEvent.scroll(container)
 }
 function mount() {
-  render(<AiPanel />)
+  render(<><StatusBar /><AiPanel /></>)
   return document.querySelector<HTMLElement>('.overflow-y-auto')!
 }
 
@@ -106,11 +107,17 @@ describe('AI 历史记录上滑分页', () => {
   it('切到阅读成果时不触发历史加载，返回聊天后仍可上滑加载', async () => {
     const container = mount()
     await act(async () => fireEvent.click(screen.getByText('加载更早的记录')))
-    fireEvent.click(screen.getByTitle('阅读成果'))
+    await act(async () => {
+      fireEvent.click(screen.getByTitle('阅读成果'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
     scroll(container, 300)
     scroll(container, 100)
     expect(mocks.load).toHaveBeenCalledTimes(1)
-    fireEvent.click(screen.getByTitle('返回'))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /打开 AI 助手/ }))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
     scroll(container, 300)
     await act(async () => scroll(container, 100))
     expect(mocks.load).toHaveBeenCalledTimes(2)
@@ -125,19 +132,10 @@ describe('AI 历史记录上滑分页', () => {
     expect(mocks.load).not.toHaveBeenCalled()
   })
 
-  it('清空导致滚动位置回到顶部时不加载，必须再次手动点击才能启用', async () => {
-    const container = mount()
-    await act(async () => fireEvent.click(screen.getByText('加载更早的记录')))
-    scroll(container, 300)
-    fireEvent.click(screen.getByTitle('清空对话'))
-    await act(async () => scroll(container, 0))
-    expect(mocks.load).toHaveBeenCalledTimes(1)
-    expect(screen.getByText('开始对话')).toBeInTheDocument()
-    expect(screen.getByText('加载历史记录')).toBeInTheDocument()
-    mocks.load.mockImplementationOnce(async () => { useChatStore.setState({ messages }) })
-    await act(async () => fireEvent.click(screen.getByText('加载历史记录')))
-    scroll(container, 300)
-    await act(async () => scroll(container, 100))
-    expect(mocks.load).toHaveBeenCalledTimes(3)
+  it('不再提供清空对话按钮，已有消息保持可见', () => {
+    mount()
+    expect(screen.queryByTitle('清空对话')).toBeNull()
+    expect(screen.getByText('匿名问题')).toBeVisible()
+    expect(screen.getByText('匿名回答')).toBeVisible()
   })
 })

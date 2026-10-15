@@ -32,6 +32,7 @@ vi.mock('@/components/reading-artifacts/ReadingArtifactCenter', () => ({
   </>,
 }))
 import { AiPanel } from '@/components/ai/AiPanel'
+import { OPEN_READING_ARTIFACTS_EVENT } from '@/services/aiPanelNavigation'
 import { useEditorStore } from '@/stores/editorStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 
@@ -45,7 +46,7 @@ describe('AI artifact selected source navigation', () => {
   it.each([false, true])('reveals the selected block with existing tab=%s without overriding it with annotation source', async (opened) => {
     if (opened) useEditorStore.getState().addTab(ref.filePath!, ref.fileName, '第一行\n二\n三\n四\n五\n六')
     render(<AiPanel />)
-    fireEvent.click(screen.getByTitle('阅读成果'))
+    fireEvent(window, new Event(OPEN_READING_ARTIFACTS_EVENT))
     fireEvent.click(screen.getByText('第二区块'))
     await waitFor(() => expect(useEditorStore.getState().pendingReveal).toMatchObject({ startLine: 5, endLine: 6, surface: 'preview' }))
     expect(mocks.readFile).toHaveBeenCalledTimes(opened ? 0 : 1)
@@ -53,14 +54,14 @@ describe('AI artifact selected source navigation', () => {
   })
   it('opens an old file-only source without creating a reveal request', async () => {
     render(<AiPanel />)
-    fireEvent.click(screen.getByTitle('阅读成果'))
+    fireEvent(window, new Event(OPEN_READING_ARTIFACTS_EVENT))
     fireEvent.click(screen.getByText('旧文件来源'))
     await waitFor(() => expect(useEditorStore.getState().tabs).toHaveLength(1))
     expect(useEditorStore.getState().pendingReveal).toBeNull()
   })
   it('locates the original selection of a web-search artifact through its ordinary source entry', async () => {
     render(<AiPanel />)
-    fireEvent.click(screen.getByTitle('阅读成果'))
+    fireEvent(window, new Event(OPEN_READING_ARTIFACTS_EVENT))
     fireEvent.click(screen.getByText('联网回答的原选区'))
     await waitFor(() => expect(useEditorStore.getState().pendingReveal).toMatchObject({ startLine: 5, endLine: 6, surface: 'preview' }))
     expect(mocks.readFile).toHaveBeenCalledWith('C:/anonymous/A.md')

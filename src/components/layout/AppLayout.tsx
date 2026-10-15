@@ -786,7 +786,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
           data-fullscreen-ai-panel="true"
           aria-hidden={!aiPanelOpen}
           ref={fullscreenAiPanelRef}
-          className={`gm-layout-ai-panel gm-layout-ai-panel--fullscreen fixed z-[45] flex flex-col overflow-hidden rounded-2xl border border-gm-border bg-gm-surface/92 shadow-lg backdrop-blur-xl ${aiPanelOpen ? '' : 'gm-layout-ai-panel--closed'}`}
+          className={`gm-layout-ai-panel gm-layout-ai-panel--fullscreen fixed z-[45] flex flex-col overflow-hidden rounded-2xl border border-gm-border bg-gm-surface shadow-lg ${aiPanelOpen ? '' : 'gm-layout-ai-panel--closed'}`}
           style={{
             left: fullscreenAiPosition.x,
             top: fullscreenAiPosition.y,

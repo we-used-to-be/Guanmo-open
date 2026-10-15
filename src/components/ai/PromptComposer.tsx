@@ -6,6 +6,7 @@ import { addFileContextTag, addFolderContextTag } from '@/services/aiContext'
 import { ManualToolToggle } from './ManualToolToggle'
 
 interface PromptComposerProps {
+  subtleBorder?: boolean
   onSend: (source?: HTMLElement) => void
   streaming: boolean
   onCancel: () => void
@@ -13,7 +14,7 @@ interface PromptComposerProps {
   resetManualToggle?: number
 }
 
-export function PromptComposer({ onSend, streaming, onCancel, onReasoningModeChange, resetManualToggle }: PromptComposerProps) {
+export function PromptComposer({ onSend, streaming, onCancel, onReasoningModeChange, resetManualToggle, subtleBorder = false }: PromptComposerProps) {
   const draftInput = useChatStore((s) => s.draftInput)
   const setDraftInput = useChatStore((s) => s.setDraftInput)
   const contextTags = useChatStore((s) => s.contextTags)
@@ -123,7 +124,7 @@ export function PromptComposer({ onSend, streaming, onCancel, onReasoningModeCha
         </div>
       )}
 
-      <div className="gm-instant-color bg-gm-surface-elevated rounded-2xl border-2 border-gm-border focus-within:border-gm-primary">
+      <div className={`gm-instant-color bg-gm-surface-elevated rounded-2xl ${subtleBorder ? 'border border-gm-border-subtle focus-within:border-gm-primary/60' : 'border-2 border-gm-border focus-within:border-gm-primary'}`}>
         {/* Context Tags */}
         {contextTags.length > 0 && (
           <div className="flex flex-wrap items-center gap-1 px-3 pt-2 pb-1 max-h-[80px] overflow-y-auto">

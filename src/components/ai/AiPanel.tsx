@@ -7,13 +7,13 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import type { RagSource, TimelineItem, PendingEdit } from '@/stores/chatStore'
 import { useAiChat } from '@/hooks/useAiChat'
 import { Button } from 'animal-island-ui'
-import { BookOpen } from 'lucide-react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { AssistantVisual } from '@/components/ai/AssistantVisual'
 import type { AssistantReaction } from '@/components/ai/AiSprite'
 import { SmoothStreamingText, StreamingBubbleContent } from '@/components/ai/SmoothStreamingText'
 import { PromptComposer } from '@/components/ai/PromptComposer'
+import { FullscreenPanelNavigation } from './FullscreenPanelNavigation'
 import { ContextMenu, ContextMenuItem } from '@/components/common/ContextMenu'
 import { readRememberedMarkdownFileForOpen } from '@/services/markdownFileOpenPolicy'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
@@ -39,6 +39,7 @@ import {
   OPEN_READING_REMINDERS_EVENT,
   TOGGLE_AI_CHAT_EVENT,
   TOGGLE_READING_ARTIFACTS_EVENT,
+  TOGGLE_READING_REMINDERS_EVENT,
   requestOpenReadingArtifact,
   reportAiPanelView,
   type AiPanelView,
@@ -146,13 +147,13 @@ export function buildUserSelectionMap(messages: ChatMessage[]): Map<string, Orig
 
 export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const toggleAiPanel = useAppStore((s) => s.toggleAiPanel)
+  const aiPanelOpen = useAppStore((s) => s.aiPanelOpen)
   const { messages, streaming, error, timeline, sendMessage, cancelStream } = useAiChat()
   const databaseEnabled = getRuntimeCapabilities().database
   const assistantVisualId = useSettingsStore((s) => s.appearance.assistantVisualId)
   const assistantFontSize = useSettingsStore((s) => s.appearance.aiAssistantFontSize)
   const sendMessageAnimationEnabled = useSettingsStore((s) => s.appearance.sendMessageAnimationEnabled)
   const setDraftInput = useChatStore((s) => s.setDraftInput)
-  const clearMessages = useChatStore((s) => s.clearMessages)
   const hasMoreHistory = useChatStore((s) => s.hasMoreHistory)
   const loadMoreHistory = useChatStore((s) => s.loadMoreHistory)
   const [loadingHistory, setLoadingHistory] = useState(false)
@@ -318,6 +319,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     const handleOpenReadingArtifacts = () => handleNavigation({ mode: 'open', view: 'artifacts' })
     const handleOpenReadingReminders = () => handleNavigation({ mode: 'open', view: 'reminders' })
     const handleToggleReadingArtifacts = () => handleNavigation({ mode: 'toggle', view: 'artifacts' })
+    const handleToggleReadingReminders = () => handleNavigation({ mode: 'toggle', view: 'reminders' })
     const pendingNavigation = consumePendingPanelNavigation()
     if (pendingNavigation) applyNavigation(pendingNavigation)
     window.addEventListener(OPEN_AI_CHAT_EVENT, handleOpenAiChat)
@@ -325,12 +327,14 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
     window.addEventListener(OPEN_READING_ARTIFACTS_EVENT, handleOpenReadingArtifacts)
     window.addEventListener(OPEN_READING_REMINDERS_EVENT, handleOpenReadingReminders)
     window.addEventListener(TOGGLE_READING_ARTIFACTS_EVENT, handleToggleReadingArtifacts)
+    window.addEventListener(TOGGLE_READING_REMINDERS_EVENT, handleToggleReadingReminders)
     return () => {
       window.removeEventListener(OPEN_AI_CHAT_EVENT, handleOpenAiChat)
       window.removeEventListener(TOGGLE_AI_CHAT_EVENT, handleToggleAiChat)
       window.removeEventListener(OPEN_READING_ARTIFACTS_EVENT, handleOpenReadingArtifacts)
       window.removeEventListener(OPEN_READING_REMINDERS_EVENT, handleOpenReadingReminders)
       window.removeEventListener(TOGGLE_READING_ARTIFACTS_EVENT, handleToggleReadingArtifacts)
+      window.removeEventListener(TOGGLE_READING_REMINDERS_EVENT, handleToggleReadingReminders)
     }
   }, [databaseEnabled, panelView])
 
@@ -921,75 +925,51 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
         '--gm-ai-chat-meta-font-size': `calc(${assistantFontSize}px - 2px)`,
       } as CSSProperties}
     >
+      {fullscreenDragHandleProps && aiPanelOpen && panelView === 'chat' && messages.length > 0 && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 top-0 z-20 h-16 backdrop-blur-[6px]"
+          style={{
+            maskImage: 'linear-gradient(to bottom, black, transparent)',
+            WebkitMaskImage: 'linear-gradient(to bottom, black, transparent)',
+          }}
+        />
+      )}
       {/* Header */}
       <div
-        className={`flex items-center border-b border-gm-border-subtle bg-gm-surface relative z-10 ${
-          fullscreenDragHandleProps ? 'h-9 cursor-grab touch-none px-3 active:cursor-grabbing' : 'h-10 px-4'
+        className={`flex items-center ${
+          fullscreenDragHandleProps ? 'absolute inset-x-0 top-0 z-30 h-6 cursor-grab touch-none bg-transparent px-3 active:cursor-grabbing' : 'relative z-10 h-10 border-b border-gm-border-subtle bg-gm-surface px-4'
         }`}
         aria-label={fullscreenDragHandleProps ? '拖动 AI 助手' : undefined}
         {...fullscreenDragHandleProps}
       >
-        <div className="flex items-center gap-2">
-          <span className="text-body font-bold text-gm-text">
-            {panelView === 'artifacts' ? '阅读成果' : panelView === 'reminders' ? '阅读提醒' : 'AI 助手'}
-          </span>
+        <div className={`flex min-w-0 items-center gap-2 ${fullscreenDragHandleProps ? 'flex-1 justify-center' : ''}`}>
+          {fullscreenDragHandleProps ? (
+            <FullscreenPanelNavigation
+              active={aiPanelOpen}
+              view={panelView}
+              databaseEnabled={databaseEnabled}
+              onSelect={(view) => {
+                if (view === panelView) return
+                if (view === 'chat') handleReturnToChat()
+                else setPanelView(view)
+              }}
+            />
+          ) : (
+            <span className="text-body font-bold text-gm-text">
+              {panelView === 'artifacts' ? '阅读成果' : panelView === 'reminders' ? '阅读提醒' : 'AI 助手'}
+            </span>
+          )}
           {streaming && (
-            <span className="text-caption text-gm-primary animate-pulse">生成中...</span>
+            <span className={fullscreenDragHandleProps ? 'pointer-events-none absolute left-3 h-1.5 w-1.5 rounded-full bg-gm-primary motion-safe:animate-pulse' : 'text-caption text-gm-primary animate-pulse'}>
+              <span className={fullscreenDragHandleProps ? 'sr-only' : undefined}>生成中...</span>
+            </span>
           )}
         </div>
-        <div className="flex-1" />
-        <div className="flex items-center" onPointerDown={(e) => e.stopPropagation()}>
-          <Button
-            type={panelView === 'artifacts' ? 'default' : 'text'}
-            size="small"
-            disabled={!databaseEnabled}
-            onClick={() => { if (databaseEnabled) setPanelView('artifacts') }}
-            title={databaseEnabled ? '阅读成果' : '阅读成果仅桌面版可用'}
-            icon={<BookOpen size={15} strokeWidth={1.7} aria-hidden="true" />}
-          />
-          <Button
-            type={panelView === 'reminders' ? 'default' : 'text'}
-            size="small"
-            disabled={!databaseEnabled}
-            onClick={() => { if (databaseEnabled) setPanelView('reminders') }}
-            title={databaseEnabled ? '阅读提醒（功能开发中）' : '阅读提醒仅桌面版可用'}
-            icon={
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M18 8a6 6 0 00-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
-                <path d="M13.73 21a2 2 0 01-3.46 0" />
-              </svg>
-            }
-          />
-          {panelView === 'chat' && messages.length > 0 ? (
-            <Button
-              type="text"
-              size="small"
-              onClick={() => {
-                historyAutoLoadRef.current = false
-                historyAnchorRef.current = null
-                clearMessages()
-              }}
-              title="清空对话"
-              icon={
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-                </svg>
-              }
-            />
-          ) : panelView !== 'chat' ? (
-            <Button
-              type="text"
-              size="small"
-              onClick={handleReturnToChat}
-              title="返回"
-              icon={
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M19 12H5M12 19l-7-7 7-7" />
-                </svg>
-              }
-            />
-          ) : null}
-          <Button
+        {!fullscreenDragHandleProps && <div className="flex-1" />}
+        <div className={`flex items-center ${fullscreenDragHandleProps ? 'pointer-events-none ml-auto [&_button]:pointer-events-auto' : ''}`} onPointerDown={(e) => e.stopPropagation()}>
+
+          {!fullscreenDragHandleProps && <Button
             type="text"
             size="small"
             onClick={toggleAiPanel}
@@ -999,14 +979,14 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
                 <path d="M18 6L6 18M6 6l12 12" />
               </svg>
             }
-          />
+          />}
         </div>
       </div>
 
-      {panelView === 'chat' && <AgentTimeline timeline={timeline} />}
+      {panelView === 'chat' && !fullscreenDragHandleProps && <AgentTimeline timeline={timeline} />}
 
       {(artifactsVisited || panelView === 'artifacts') && (
-        <div hidden={panelView !== 'artifacts'} className={panelView === 'artifacts' ? 'flex-1 min-h-0 overflow-hidden min-w-0 bg-gm-surface' : 'hidden'}>
+        <div hidden={panelView !== 'artifacts'} className={panelView === 'artifacts' ? `flex-1 min-h-0 overflow-hidden min-w-0 bg-gm-canvas ${fullscreenDragHandleProps ? 'pt-3' : ''}` : 'hidden'}>
           <ReadingArtifactCenter onOpenAiSource={handleOpenArtifactSource} focusKey={artifactFocusKey} onCloseFocus={() => setArtifactFocusKey(null)} />
         </div>
       )}
@@ -1183,6 +1163,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
       {/* Prompt Composer */}
       {panelView === 'chat' && (
         <PromptComposer
+          subtleBorder={Boolean(fullscreenDragHandleProps)}
           onSend={handleSend}
           streaming={streaming}
           onCancel={cancelStream}

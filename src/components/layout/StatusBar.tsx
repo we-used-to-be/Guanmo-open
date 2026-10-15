@@ -1,13 +1,15 @@
 import { useMemo } from 'react'
-import { BookOpen } from 'lucide-react'
+import { Bell, BookOpen } from 'lucide-react'
 import { useEditorStore } from '@/stores/editorStore'
 import { useAppStore } from '@/stores/appStore'
 import { getRuntimeCapabilities } from '@/services/runtimeCapabilities'
 import {
   requestOpenAiChat,
   requestOpenReadingArtifacts,
+  requestOpenReadingReminders,
   requestToggleAiChat,
   requestToggleReadingArtifacts,
+  requestToggleReadingReminders,
 } from '@/services/aiPanelNavigation'
 
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
@@ -74,6 +76,22 @@ export function StatusBar() {
       )}
 
       <div className="flex items-center gap-1">
+        <StatusAction
+          aria-label={databaseEnabled ? '打开阅读提醒' : '阅读提醒仅桌面版可用'}
+          title={databaseEnabled ? '阅读提醒（功能开发中）' : '阅读提醒仅桌面版可用'}
+          disabled={!databaseEnabled}
+          onClick={() => {
+            if (!databaseEnabled) return
+            if (!aiPanelOpen) {
+              toggleAiPanel()
+              requestOpenReadingReminders()
+            } else {
+              requestToggleReadingReminders()
+            }
+          }}
+        >
+          <Bell size={15} strokeWidth={1.7} aria-hidden="true" />
+        </StatusAction>
         <StatusAction
           dataTour="reading-artifact-entry"
           aria-label={databaseEnabled ? '打开阅读成果' : '阅读成果仅桌面版可用'}
