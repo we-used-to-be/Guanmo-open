@@ -1,14 +1,16 @@
-import { act, fireEvent, render } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FullscreenControlBar } from '@/components/editor/FullscreenControlBar'
 import { useSettingsStore } from '@/stores/settingsStore'
 
+const exitFullscreen = vi.hoisted(() => vi.fn())
 vi.mock('@/hooks/useFullscreen', () => ({
-  useFullscreen: () => ({ exitFullscreen: vi.fn() }),
+  useFullscreen: () => ({ exitFullscreen }),
 }))
 
 describe('FullscreenControlBar auto hide', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     vi.useFakeTimers()
   })
 
@@ -110,23 +112,24 @@ describe('FullscreenControlBar auto hide', () => {
       />,
     )
     const plus = container.querySelector<HTMLButtonElement>('[data-fullscreen-file-menu] button[title="新建或打开文件"]')!
-    const menu = container.querySelector<HTMLElement>('#fullscreen-file-menu')!
 
     fireEvent.click(plus)
     expect(plus).toHaveAttribute('aria-expanded', 'true')
-    expect(menu).toHaveAttribute('aria-hidden', 'false')
-    fireEvent.click(Array.from(menu.querySelectorAll('button')).find((button) => button.textContent === '新增文件')!)
+    expect(screen.getByRole('menu', { name: '文件操作' }).parentElement).toBe(document.body)
+    fireEvent.click(screen.getByRole('menuitem', { name: '新增文件' }))
     expect(onNewFile).toHaveBeenCalledOnce()
     expect(onCloseFileDrawer).toHaveBeenCalledOnce()
-    expect(menu).toHaveAttribute('aria-hidden', 'true')
+    expect(screen.queryByRole('menu', { name: '文件操作' })).not.toBeInTheDocument()
 
     fireEvent.click(plus)
     fireEvent.keyDown(window, { key: 'Escape' })
-    expect(menu).toHaveAttribute('aria-hidden', 'true')
+    expect(screen.queryByRole('menu', { name: '文件操作' })).not.toBeInTheDocument()
     expect(onOpenFile).not.toHaveBeenCalled()
+    expect(exitFullscreen).not.toHaveBeenCalled()
+    expect(plus).toHaveFocus()
 
     fireEvent.click(plus)
-    fireEvent.click(Array.from(menu.querySelectorAll('button')).find((button) => button.textContent === '打开文件')!)
+    fireEvent.click(screen.getByRole('menuitem', { name: '打开文件' }))
     expect(onOpenFile).toHaveBeenCalledOnce()
   })
 })

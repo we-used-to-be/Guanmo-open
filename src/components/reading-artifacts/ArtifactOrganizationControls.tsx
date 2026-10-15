@@ -1,15 +1,14 @@
 import { ArtifactFilterMenu } from './ArtifactFilterMenu'
-import { ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
+import { ContextMenu, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { MoreHorizontal, Star, Trash2, X } from 'lucide-react'
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { createPortal } from 'react-dom'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   deleteArtifactCategory, loadArtifactOrganization, saveArtifactCategory, setArtifactOrganization,
   type ArtifactCategory, type ArtifactOrganization, type ArtifactOrganizationFilter, type ArtifactOrganizationSnapshot,
 } from '@/services/database/artifactOrganization'
 import { toast } from '@/services/toast'
 
-export function useArtifactOrganization() {
+export function useArtifactOrganization(enabled = true) {
   const [snapshot, setSnapshot] = useState<ArtifactOrganizationSnapshot>({ categories: [], entries: [] })
   const [revision, setRevision] = useState(0)
   const [busy, setBusy] = useState(false)
@@ -17,13 +16,14 @@ export function useArtifactOrganization() {
   const mounted = useRef(false)
   const writing = useRef(false)
   useEffect(() => {
+    if (!enabled) return
     mounted.current = true
     let cancelled = false
     void loadArtifactOrganization().then((data) => {
       if (!cancelled) { setSnapshot(data); setReady(true) }
     }).catch(() => { if (!cancelled) toast.error('读取收藏和分类失败，请重新打开阅读成果') })
     return () => { cancelled = true; mounted.current = false }
-  }, [])
+  }, [enabled])
   const mutate = useCallback(async (write: () => Promise<void>) => {
     if (writing.current) return false
     writing.current = true
@@ -50,41 +50,15 @@ export function useArtifactOrganization() {
 }
 
 type Organization = ReturnType<typeof useArtifactOrganization>
-type PopupAnchor = { x: number; y: number; trigger: HTMLElement }
-function anchorFor(trigger: HTMLElement, width = 260): PopupAnchor {
-  const rect = trigger.getBoundingClientRect()
-  return { x: rect.right - width, y: rect.bottom + 4, trigger }
+type PopupAnchor = { trigger: HTMLElement }
+function anchorFor(trigger: HTMLElement): PopupAnchor {
+  return { trigger }
 }
 const fieldClass = 'min-w-0 rounded-md border border-gm-border bg-gm-surface px-2 py-1.5 text-micro text-gm-text-secondary outline-none focus:border-gm-primary'
 const actionClass = 'rounded-md px-2 py-1.5 text-micro text-gm-text-secondary hover:bg-gm-surface-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gm-primary disabled:opacity-50'
 
 function OrganizationPopup({ anchor, label, onClose, children, compact = false }: { anchor: PopupAnchor; label: string; onClose: () => void; children: ReactNode; compact?: boolean }) {
-  const ref = useRef<HTMLDivElement>(null)
-  const [position, setPosition] = useState({ x: anchor.x, y: anchor.y })
-  useLayoutEffect(() => {
-    const popup = ref.current
-    if (!popup) return
-    const bounds = popup.getBoundingClientRect()
-    setPosition({ x: Math.max(8, Math.min(anchor.x, window.innerWidth - bounds.width - 8)), y: Math.max(8, Math.min(anchor.y, window.innerHeight - bounds.height - 8)) })
-  }, [anchor, children])
-  useEffect(() => {
-    const popup = ref.current
-    popup?.querySelector<HTMLElement>('input, button')?.focus()
-    const pointer = (event: PointerEvent) => { if (!popup?.contains(event.target as Node) && !anchor.trigger.contains(event.target as Node)) onClose() }
-    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); onClose(); anchor.trigger.focus() } }
-    const scroll = (event: Event) => { if (!popup?.contains(event.target as Node)) onClose() }
-    document.addEventListener('pointerdown', pointer)
-    document.addEventListener('keydown', key)
-    window.addEventListener('scroll', scroll, true)
-    window.addEventListener('resize', onClose)
-    return () => {
-      document.removeEventListener('pointerdown', pointer)
-      document.removeEventListener('keydown', key)
-      window.removeEventListener('scroll', scroll, true)
-      window.removeEventListener('resize', onClose)
-    }
-  }, [anchor, onClose])
-  return createPortal(<div ref={ref} role="dialog" aria-label={label} className={`fixed z-[1100] max-h-[70vh] max-w-[calc(100vw-16px)] overflow-y-auto rounded-xl border border-gm-border shadow-lg ${compact ? 'w-44 bg-gm-surface py-1.5 animate-context-menu-in' : 'w-[260px] bg-gm-surface-elevated p-2'}`} style={{ left: position.x, top: position.y }}>{children}</div>, document.body)
+  return <ContextMenu anchor={anchor.trigger} placement="bottom-end" role={compact ? 'menu' : 'dialog'} aria-label={label} minWidth={compact ? 176 : 260} maxWidth={compact ? 176 : 260} onClose={onClose}>{children}</ContextMenu>
 }
 
 function CategoryEditor({ organization, selected, onSave, onClose }: { organization: Organization; selected?: string[]; onSave?: (ids: string[]) => Promise<boolean>; onClose: () => void }) {
@@ -146,12 +120,12 @@ export function ArtifactOrganizationActions({ artifactKey, title, organization, 
   const close = useCallback(() => setPopup(null), [])
   return <div className="flex shrink-0 items-center gap-0.5">
     <button type="button" aria-label={`${entry?.favorite ? '取消收藏' : '收藏'} ${title}`} aria-pressed={entry?.favorite ?? false} disabled={organization.busy} onClick={() => void organization.update(artifactKey, { favorite: !entry?.favorite })} className={`${actionClass} px-1.5 ${entry?.favorite ? 'text-gm-accent' : 'text-gm-text-tertiary'}`}><Star size={14} fill={entry?.favorite ? 'currentColor' : 'none'} strokeWidth={1.7} /></button>
-    <button type="button" aria-label={`成果操作 ${title}`} aria-expanded={!!popup} aria-haspopup="dialog" onClick={(event) => { const anchor = anchorFor(event.currentTarget, 176); setPopup((current) => current ? null : { anchor, mode: 'menu' }) }} className={`${actionClass} px-1.5 text-gm-text-tertiary`}><MoreHorizontal size={15} /></button>
+    <button type="button" aria-label={`成果操作 ${title}`} aria-expanded={!!popup} aria-haspopup="menu" onClick={(event) => { const anchor = anchorFor(event.currentTarget); setPopup((current) => current ? null : { anchor, mode: 'menu' }) }} className={`${actionClass} px-1.5 text-gm-text-tertiary`}><MoreHorizontal size={15} /></button>
     {popup && <OrganizationPopup compact={popup.mode === 'menu'} anchor={popup.anchor} label={popup.mode === 'menu' ? '成果操作' : '设置分类'} onClose={close}>{popup.mode === 'categories' ? <CategoryEditor organization={organization} selected={entry?.categoryIds} onSave={(ids) => organization.update(artifactKey, { categoryIds: ids })} onClose={close} /> : <>
       <ContextMenuItem disabled={organization.busy} onClick={() => setPopup({ anchor: anchorFor(popup.anchor.trigger), mode: 'categories' })}>设置分类</ContextMenuItem>
       {categoryId && <ContextMenuItem disabled={organization.busy} onClick={() => void organization.update(artifactKey, { categoryIds: (entry?.categoryIds ?? []).filter((id) => id !== categoryId) }).then((saved) => { if (saved) close() })}>移出当前分类</ContextMenuItem>}
       <ContextMenuSeparator />
-      <ContextMenuItem onClick={() => { close(); onDelete() }}><span className="text-gm-error">删除成果</span></ContextMenuItem>
+      <ContextMenuItem danger onClick={() => { close(); onDelete() }}>删除成果</ContextMenuItem>
     </>}</OrganizationPopup>}
   </div>
 }

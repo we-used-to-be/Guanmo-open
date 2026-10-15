@@ -1,4 +1,4 @@
-import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type CSSProperties, type PointerEventHandler } from 'react'
+import { memo, useId, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type CSSProperties, type PointerEventHandler } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import { motion } from 'motion/react'
 import { useAppStore } from '@/stores/appStore'
@@ -13,6 +13,7 @@ import remarkGfm from 'remark-gfm'
 import { AssistantVisual } from '@/components/ai/AssistantVisual'
 import { SmoothStreamingText, StreamingBubbleContent } from '@/components/ai/SmoothStreamingText'
 import { PromptComposer } from '@/components/ai/PromptComposer'
+import { ContextMenu, ContextMenuItem } from '@/components/common/ContextMenu'
 import { readRememberedMarkdownFileForOpen } from '@/services/markdownFileOpenPolicy'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { useEditorStore } from '@/stores/editorStore'
@@ -1914,6 +1915,7 @@ export const ChatBubble = memo(function ChatBubble({
   const messageSources = buildReadingArtifactReferences(displayedSources.sources, originalSelections)
   const bubbleRef = useRef<HTMLDivElement>(null)
   const saveMenuRef = useRef<HTMLDivElement>(null)
+  const saveMenuId = useId()
   const saveControlsHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [saveMenuOpen, setSaveMenuOpen] = useState(false)
   const [saveControlsVisible, setSaveControlsVisible] = useState(false)
@@ -1954,28 +1956,6 @@ export const ChatBubble = memo(function ChatBubble({
   }, [clearSaveControlsHideTimer, saveMenuOpen])
 
   useEffect(() => clearSaveControlsHideTimer, [clearSaveControlsHideTimer])
-
-  useEffect(() => {
-    if (!saveMenuOpen) return
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!saveMenuRef.current?.contains(event.target as Node)) {
-        setSaveMenuOpen(false)
-        setSaveControlsVisible(false)
-      }
-    }
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setSaveMenuOpen(false)
-        setSaveControlsVisible(false)
-      }
-    }
-    document.addEventListener('pointerdown', closeOnOutsidePointer)
-    document.addEventListener('keydown', closeOnEscape)
-    return () => {
-      document.removeEventListener('pointerdown', closeOnOutsidePointer)
-      document.removeEventListener('keydown', closeOnEscape)
-    }
-  }, [saveMenuOpen])
 
   const runSaveAction = (action: () => void) => {
     setSaveMenuOpen(false)
@@ -2064,6 +2044,7 @@ export const ChatBubble = memo(function ChatBubble({
               aria-label="保存回复"
               aria-expanded={saveMenuOpen}
               aria-haspopup="menu"
+              aria-controls={saveMenuOpen ? saveMenuId : undefined}
               className="!h-6 !w-6 !min-w-0 !rounded-full !p-0"
             >
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -2073,21 +2054,21 @@ export const ChatBubble = memo(function ChatBubble({
               </svg>
             </Button>
             {saveMenuOpen && (
-              <div role="menu" className="absolute bottom-full right-0 mb-1 min-w-32 rounded-lg border border-gm-border bg-gm-surface-elevated p-1 shadow-lg">
+              <ContextMenu id={saveMenuId} aria-label="保存回复格式" anchor={saveMenuRef.current?.querySelector('button')} placement="top-end" minWidth={144} onClose={() => { setSaveMenuOpen(false); setSaveControlsVisible(false) }}>
                 {onSaveAsMarkdown && (
-                  <Button role="menuitem" type="text" size="small" className="w-full justify-start hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover" onClick={() => runSaveAction(onSaveAsMarkdown)}>Markdown</Button>
+                  <ContextMenuItem onClick={() => runSaveAction(onSaveAsMarkdown)}>Markdown</ContextMenuItem>
                 )}
                 {onSaveAsArtifact && (
                   <>
-                    <Button role="menuitem" type="text" size="small" className="w-full justify-start hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover" onClick={() => runSaveAction(() => onSaveAsArtifact('summary'))}>摘要</Button>
-                    <Button role="menuitem" type="text" size="small" className="w-full justify-start hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover" onClick={() => runSaveAction(() => onSaveAsArtifact('question_set'))}>问题集</Button>
+                    <ContextMenuItem onClick={() => runSaveAction(() => onSaveAsArtifact('summary'))}>摘要</ContextMenuItem>
+                    <ContextMenuItem onClick={() => runSaveAction(() => onSaveAsArtifact('question_set'))}>问题集</ContextMenuItem>
                     {hasLocalSource && (
-                      <Button role="menuitem" type="text" size="small" className="w-full justify-start hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover" onClick={() => runSaveAction(() => onSaveAsArtifact('annotation'))}>AI 解读</Button>
+                      <ContextMenuItem onClick={() => runSaveAction(() => onSaveAsArtifact('annotation'))}>AI 解读</ContextMenuItem>
                     )}
-                    <Button role="menuitem" type="text" size="small" className="w-full justify-start hover:bg-gm-surface-hover focus-visible:bg-gm-surface-hover" onClick={() => runSaveAction(() => onSaveAsArtifact('note'))}>阅读笔记</Button>
+                    <ContextMenuItem onClick={() => runSaveAction(() => onSaveAsArtifact('note'))}>阅读笔记</ContextMenuItem>
                   </>
                 )}
-              </div>
+              </ContextMenu>
             )}
           </div>
         )}

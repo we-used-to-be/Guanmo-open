@@ -54,6 +54,38 @@
 @tailwind components;
 @tailwind utilities;
 
+.gm-menu-option {
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.gm-menu-option[data-selected='true'] {
+  background-color: var(--gm-primary-subtle);
+  color: var(--gm-primary);
+  font-weight: 700;
+}
+
+.gm-menu-option:not(:disabled):hover,
+.gm-menu-option:focus-visible {
+  background-color: var(--gm-surface-hover) !important;
+  color: var(--gm-text) !important;
+}
+
+.gm-menu-option:not(:disabled):active {
+  background-color: var(--gm-primary-subtle) !important;
+}
+
+.gm-menu-option[data-danger='true'],
+.gm-menu-option[data-danger='true']:hover,
+.gm-menu-option[data-danger='true']:focus-visible {
+  color: var(--gm-error) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gm-menu-option {
+    transition: none;
+  }
+}
+
 /* === Global Reset & Base Styles === */
 *,
 *::before,
@@ -816,23 +848,23 @@ html[data-fullscreen-transition-phase='focusing'] #root {
   fill: #1B3B37;
 }
 
-[data-theme='dark'] .gm-manual-tool-toggle {
+[data-theme='dark'] .gm-manual-tool-toggle:not(.gm-manual-tool-toggle--icon) {
   color: #A6C9C4 !important;
   background: rgba(88, 184, 174, 0.12) !important;
   border-color: rgba(132, 190, 184, 0.16) !important;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14) !important;
 }
 
-[data-theme='dark'] .gm-manual-tool-toggle:hover:not(:disabled) {
+[data-theme='dark'] .gm-manual-tool-toggle:not(.gm-manual-tool-toggle--icon):hover:not(:disabled) {
   color: #C2DED9 !important;
   background: rgba(88, 184, 174, 0.18) !important;
   border-color: rgba(132, 190, 184, 0.22) !important;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.16) !important;
 }
 
-[data-theme='dark'] .gm-manual-tool-toggle--active,
-[data-theme='dark'] .gm-manual-tool-toggle--active:hover:not(:disabled),
-[data-theme='dark'] .gm-manual-tool-toggle--active:active:not(:disabled) {
+[data-theme='dark'] .gm-manual-tool-toggle--active:not(.gm-manual-tool-toggle--icon),
+[data-theme='dark'] .gm-manual-tool-toggle--active:not(.gm-manual-tool-toggle--icon):hover:not(:disabled),
+[data-theme='dark'] .gm-manual-tool-toggle--active:not(.gm-manual-tool-toggle--icon):active:not(:disabled) {
   color: #F8FFFF !important;
   background: #3F7771 !important;
   border-color: #3F7771 !important;

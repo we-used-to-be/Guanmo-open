@@ -151,6 +151,7 @@ export function FullscreenControlBar({
   const pointerWithinControlRef = useRef(false)
   const shellRef = useRef<HTMLDivElement>(null)
   const barRef = useRef<HTMLDivElement>(null)
+  const fileMenuButtonRef = useRef<HTMLButtonElement>(null)
   const paddingButtonRef = useRef<HTMLDivElement>(null)
   const themeButtonRef = useRef<HTMLDivElement>(null)
   const backgroundButtonRef = useRef<HTMLDivElement>(null)
@@ -268,19 +269,7 @@ export function FullscreenControlBar({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
-      if (document.querySelector('[data-editor-search-overlay]')) return
-      if (contextMenu) {
-        e.preventDefault()
-        e.stopPropagation()
-        setContextMenu(null)
-        return
-      }
-      if (fileMenuOpen) {
-        e.preventDefault()
-        e.stopPropagation()
-        setFileMenuOpen(false)
-        return
-      }
+      if (document.querySelector('[data-editor-search-overlay], [data-context-menu="true"]')) return
       if (activeOptionPanel) {
         e.preventDefault()
         e.stopPropagation()
@@ -318,20 +307,19 @@ export function FullscreenControlBar({
 
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [activeOptionPanel, contextMenu, exitFullscreen, fileDrawerOpen, fileMenuOpen, onCloseFileDrawer, switchPanel, tabMode])
+  }, [activeOptionPanel, exitFullscreen, fileDrawerOpen, onCloseFileDrawer, switchPanel, tabMode])
 
   useEffect(() => {
-    if (!paddingCardOpen && !themeCardOpen && !backgroundCardOpen && !fileMenuOpen) return
+    if (!paddingCardOpen && !themeCardOpen && !backgroundCardOpen) return
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null
       if (target?.closest('.gm-product-tour')) return
-      if (target?.closest('[data-fullscreen-padding-control], [data-fullscreen-theme-control], [data-fullscreen-background-control], [data-fullscreen-option-panel], [data-fullscreen-file-menu]')) return
+      if (target?.closest('[data-fullscreen-padding-control], [data-fullscreen-theme-control], [data-fullscreen-background-control], [data-fullscreen-option-panel], [data-context-menu]')) return
       setActiveOptionPanel(null)
-      setFileMenuOpen(false)
     }
     window.addEventListener('pointerdown', handlePointerDown, true)
     return () => window.removeEventListener('pointerdown', handlePointerDown, true)
-  }, [backgroundCardOpen, fileMenuOpen, paddingCardOpen, themeCardOpen])
+  }, [backgroundCardOpen, paddingCardOpen, themeCardOpen])
 
   useLayoutEffect(() => {
     const shell = shellRef.current
@@ -794,30 +782,30 @@ export function FullscreenControlBar({
               })}
             </div>
             <div data-fullscreen-file-menu="true">
-              <BubbleButton onClick={toggleFileMenu} title="新建或打开文件" ariaExpanded={fileMenuOpen} ariaControls="fullscreen-file-menu" square>
+              <BubbleButton buttonRef={fileMenuButtonRef} onClick={toggleFileMenu} title="新建或打开文件" ariaExpanded={fileMenuOpen} ariaControls="fullscreen-file-menu" ariaHasPopup="menu" square>
                 <span aria-hidden="true" className="block -translate-y-px text-[22px] font-light leading-none">+</span>
               </BubbleButton>
             </div>
           </div>
         </div>
 
-        <div
+        {fileMenuOpen && <ContextMenu
           id="fullscreen-file-menu"
           data-fullscreen-file-menu="true"
-          role="dialog"
           aria-label="文件操作"
-          aria-hidden={!fileMenuOpen}
-          className={`gm-fullscreen-spacing-card absolute right-3 top-[calc(100%+10px)] w-40 origin-top-right rounded-xl border p-1.5 transition-[opacity,transform,visibility] duration-200 ease-out ${
-            fileMenuOpen ? 'visible translate-y-0 scale-100 opacity-100' : 'invisible -translate-y-1 scale-95 opacity-0 pointer-events-none'
-          }`}
+          anchor={fileMenuButtonRef.current}
+          placement="bottom-end"
+          minWidth={160}
+          maxWidth={160}
+          onClose={() => setFileMenuOpen(false)}
         >
-          <button type="button" onClick={() => selectFileAction(onNewFile)} className="gm-fullscreen-file-action w-full rounded-lg px-3 py-2 text-left text-body font-semibold transition-colors">
+          <ContextMenuItem onClick={() => selectFileAction(onNewFile)}>
             新增文件
-          </button>
-          <button type="button" onClick={() => selectFileAction(onOpenFile)} className="gm-fullscreen-file-action w-full rounded-lg px-3 py-2 text-left text-body font-semibold transition-colors">
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => selectFileAction(onOpenFile)}>
             打开文件
-          </button>
-        </div>
+          </ContextMenuItem>
+        </ContextMenu>}
 
         <AnimatePresence initial={false}>
         {paddingCardOpen && !renderedTabMode && (
@@ -1165,6 +1153,8 @@ function BubbleButton({
   variant,
   ariaExpanded,
   ariaControls,
+  ariaHasPopup,
+  buttonRef,
   square = false,
 }: {
   children: React.ReactNode
@@ -1174,15 +1164,19 @@ function BubbleButton({
   variant?: 'pill' | 'text'
   ariaExpanded?: boolean
   ariaControls?: string
+  ariaHasPopup?: 'menu' | 'dialog'
+  buttonRef?: RefObject<HTMLButtonElement>
   square?: boolean
 }) {
   return (
     <button
+      ref={buttonRef}
       type="button"
       onClick={onClick}
       title={title}
       aria-expanded={ariaExpanded}
       aria-controls={ariaControls}
+      aria-haspopup={ariaHasPopup}
       data-active={active ? 'true' : 'false'}
       className={`gm-fullscreen-bubble h-8 flex-shrink-0 whitespace-nowrap rounded-full ${square ? 'w-8 p-0' : 'px-3'} text-body font-bold transition-colors ${
         active

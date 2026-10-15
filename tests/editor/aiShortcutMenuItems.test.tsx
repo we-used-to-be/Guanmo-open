@@ -20,12 +20,12 @@ describe('AI 快捷操作菜单', () => {
     const onAction = vi.fn()
     render(<AiShortcutMenuItems onAction={onAction} />)
 
-    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['第二项', '第一项'])
+    expect(screen.getAllByRole('menuitem').map((button) => button.textContent)).toEqual(['第二项', '第一项'])
     expect(screen.queryByText('隐藏项')).not.toBeInTheDocument()
     expect(screen.getByText('第二项')).not.toHaveAttribute('title')
     expect(screen.getByText('第一项')).not.toHaveAttribute('title')
 
-    fireEvent.click(screen.getByRole('button', { name: '第一项' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '第一项' }))
     expect(onAction).toHaveBeenCalledWith('第一条命令')
   })
 
