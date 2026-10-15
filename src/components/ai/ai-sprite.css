@@ -6,6 +6,8 @@
   --gm-sprite-body-shadow: #D6E3EA;
   --gm-sprite-stroke: #AFC3CF;
   --gm-sprite-face: #58707C;
+  --gm-sprite-affection: #DB7892;
+  --gm-sprite-sparkle: #D9AD56;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -123,6 +125,108 @@
 
 .gm-ai-sprite[data-state='error'] .gm-ai-sprite__body {
   animation: gmSpriteErrorStroke 0.72s ease-in-out both;
+}
+
+.gm-ai-avatar--interactive {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.gm-ai-avatar--interactive:focus-visible {
+  outline: 2px solid var(--gm-primary);
+  outline-offset: 3px;
+}
+
+.gm-ai-sprite[data-reaction] .gm-ai-sprite__face,
+.gm-ai-sprite[data-reaction] .gm-ai-sprite__eye {
+  animation: none;
+}
+
+.gm-ai-sprite[data-reaction] .gm-ai-sprite__eye {
+  opacity: 0;
+}
+
+.gm-ai-sprite[data-reaction='wink'] .gm-ai-sprite__eye:first-child {
+  opacity: 1;
+}
+
+.gm-ai-sprite[data-reaction='heart'] .gm-ai-sprite__core {
+  animation: gmSpriteHeart 1.4s ease-in-out both;
+}
+
+.gm-ai-sprite[data-reaction='happy'] .gm-ai-sprite__core {
+  animation: gmSpriteHappy 1.4s ease-in-out both;
+}
+
+.gm-ai-sprite[data-reaction='wink'] .gm-ai-sprite__core {
+  animation: gmSpriteWink 1.4s ease-in-out both;
+}
+
+.gm-ai-sprite[data-reaction='star'] .gm-ai-sprite__core {
+  animation: gmSpriteStar 1.4s ease-in-out both;
+}
+
+.gm-ai-sprite[data-reaction='shy'] .gm-ai-sprite__core {
+  animation: gmSpriteShy 1.4s ease-in-out both;
+}
+
+.gm-ai-sprite[data-reaction='shy'] .gm-ai-sprite__face {
+  animation: gmSpriteShyLook 1.4s ease-in-out both;
+}
+
+.gm-ai-sprite__reaction-accent {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: gmSpriteAffection 1.4s ease-out both;
+}
+
+@keyframes gmSpriteHeart {
+  0%, 100% { transform: translateY(0) rotate(0); }
+  20%, 55% { transform: translateY(-2px) rotate(-5deg); }
+  75% { transform: translateY(-1px) rotate(3deg); }
+}
+
+@keyframes gmSpriteHappy {
+  0%, 100% { transform: translateY(0) scale(1); }
+  18% { transform: translateY(1px) scale(1.04, 0.96); }
+  36%, 65% { transform: translateY(-3px) scale(0.98, 1.02); }
+  48%, 80% { transform: translateY(0) scale(1.02, 0.98); }
+}
+
+@keyframes gmSpriteWink {
+  0%, 100% { transform: rotate(0); }
+  22%, 65% { transform: rotate(9deg); }
+  82% { transform: rotate(-3deg); }
+}
+
+@keyframes gmSpriteAffection {
+  0%, 100% { opacity: 0; transform: translateY(2px) scale(0.85); }
+  22%, 65% { opacity: 1; transform: translateY(-1px) scale(1); }
+  90% { opacity: 0; transform: translateY(-5px) scale(1.06); }
+}
+
+@keyframes gmSpriteStar {
+  0%, 100% { transform: translateY(0) scale(1); }
+  15% { transform: translateY(1px) scale(1.03, 0.97); }
+  32% { transform: translateY(-4px) scale(1.04); }
+  48% { transform: translateY(0) scale(0.98); }
+  65% { transform: translateY(-2px) scale(1.02); }
+  82% { transform: translateY(0) scale(1); }
+}
+
+@keyframes gmSpriteShy {
+  0%, 100% { transform: translateY(0) rotate(0) scale(1); }
+  25%, 65% { transform: translateY(1px) rotate(-7deg) scale(0.96); }
+  82% { transform: translateY(0) rotate(2deg) scale(1); }
+}
+
+@keyframes gmSpriteShyLook {
+  0%, 100% { transform: translate(0, 0); }
+  25%, 50% { transform: translate(-1px, 1px); }
+  65%, 80% { transform: translate(1px, 0.5px); }
 }
 
 [data-paused='true'].gm-ai-sprite,

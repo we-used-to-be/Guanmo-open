@@ -1677,7 +1677,7 @@ function GeneralSettings() {
       <SettingField label="定制光标" description="使用 animal-island-ui 的手作风光标">
         <Switch checked={appearance.customCursorEnabled} onChange={(v) => updateAppearanceSettings({ customCursorEnabled: v })} />
       </SettingField>
-      <SettingField label="AI 头像" description="统一使用简约小球，可预览不同工作状态下的动作表现">
+      <SettingField label="AI 头像" description="统一使用简约小球，可预览不同工作状态下的动作表现。点击最新已完成回复的头像可随机触发表情动画">
         <Button type="default" size="small" onClick={() => setSpritePreviewOpen(true)}>
           预览小球样式
         </Button>

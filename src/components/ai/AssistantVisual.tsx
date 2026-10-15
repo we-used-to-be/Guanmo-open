@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react'
-import { AiSprite } from '@/components/ai/AiSprite'
+import { AiSprite, type AssistantReaction } from '@/components/ai/AiSprite'
 import {
   resolveAssistantVisualDefinition,
   type AssistantVisualRenderer,
@@ -13,6 +13,7 @@ export interface AssistantVisualProps {
   animated?: boolean
   size?: number
   className?: string
+  reaction?: AssistantReaction | null
 }
 type BuiltInRendererProps = Omit<AssistantVisualProps, 'visualId'>
 

@@ -11,6 +11,7 @@ import { BookOpen } from 'lucide-react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { AssistantVisual } from '@/components/ai/AssistantVisual'
+import type { AssistantReaction } from '@/components/ai/AiSprite'
 import { SmoothStreamingText, StreamingBubbleContent } from '@/components/ai/SmoothStreamingText'
 import { PromptComposer } from '@/components/ai/PromptComposer'
 import { ContextMenu, ContextMenuItem } from '@/components/common/ContextMenu'
@@ -2132,6 +2133,26 @@ function AiAvatar({
   streaming?: boolean
   visualId?: string | null
 }) {
+  const interactive = size === 'message' && animated && !streaming
+  const [reaction, setReaction] = useState<AssistantReaction | null>(null)
+  const reactionTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (!interactive) setReaction(null)
+    return () => {
+      if (reactionTimer.current !== null) clearTimeout(reactionTimer.current)
+    }
+  }, [interactive])
+
+  const playReaction = () => {
+    if (reactionTimer.current !== null) clearTimeout(reactionTimer.current)
+    setReaction((previous) => {
+      const choices = (['heart', 'happy', 'wink', 'star', 'shy'] as const).filter((value) => value !== previous)
+      return choices[Math.floor(Math.random() * choices.length)]
+    })
+    reactionTimer.current = setTimeout(() => setReaction(null), 1400)
+  }
+
   const className = size === 'empty'
     ? 'gm-ai-empty-icon-shell w-16 h-16 rounded-2xl flex items-center justify-center mb-4'
     : 'gm-ai-avatar w-9 h-9 rounded-xl flex items-center justify-center mr-2 flex-shrink-0 mt-1'
@@ -2139,14 +2160,26 @@ function AiAvatar({
   // 历史消息头像固定 idle 静态展示，最新回复使用 idle 动画，当前流式消息跟随实时状态。
   const forceIdle = size === 'message' && !streaming
   const spriteClassName = size === 'message' ? `${className} gm-ai-avatar--sprite` : className
+  const visual = (
+    <AssistantVisual
+      visualId={visualId}
+      size={size === 'empty' ? 56 : 44}
+      state={forceIdle ? 'idle' : undefined}
+      animated={animated}
+      reaction={interactive ? reaction : null}
+    />
+  )
+  if (interactive) {
+    return (
+      <button type="button" className={`${spriteClassName} gm-ai-avatar--interactive`}
+        aria-label="逗逗 AI 助手" onClick={playReaction}>
+        {visual}
+      </button>
+    )
+  }
   return (
     <div className={spriteClassName}>
-      <AssistantVisual
-        visualId={visualId}
-        size={size === 'empty' ? 56 : 44}
-        state={forceIdle ? 'idle' : undefined}
-        animated={animated}
-      />
+      {visual}
     </div>
   )
 }
