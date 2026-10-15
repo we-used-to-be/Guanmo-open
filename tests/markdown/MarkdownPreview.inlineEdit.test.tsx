@@ -132,6 +132,27 @@ function StatefulAnchoredPreview() {
 }
 
 describe('MarkdownPreview 预览内源码编辑', () => {
+  it.each(['## 标题', '普通段落'])('编辑框顶部对齐首段实际文本而非块外壳：%s', async (content) => {
+    const { container } = renderPreview({ content })
+    const root = container.querySelector<HTMLElement>('.gm-markdown-preview')!
+    const wrapper = container.querySelector<HTMLElement>('[data-md-block-index]')!
+    const text = wrapper.querySelector('[data-gm-src-from]')!
+    vi.spyOn(root, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 100, 800, 600))
+    vi.spyOn(wrapper, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 140, 800, 120))
+    const rangeRects = vi.spyOn(Range.prototype, 'getClientRects').mockReturnValue([
+      new DOMRect(0, 200, 120, 30),
+    ] as unknown as DOMRectList)
+    try {
+      altClick(text)
+      await waitFor(() => {
+        expect(container.querySelector<HTMLElement>('.gm-inline-edit-overlay')!.style.top).toBe('100px')
+      })
+      expect(wrapper).toHaveAttribute('data-md-editing')
+    } finally {
+      rangeRects.mockRestore()
+    }
+  })
+
   it('有无语言标识的围栏代码块使用同款代码框', () => {
     const { container } = renderPreview({
       content: '```\nplain text\n```\n\n```txt\nlabeled text\n```',

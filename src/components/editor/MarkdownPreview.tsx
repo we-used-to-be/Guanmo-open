@@ -1857,7 +1857,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     if (!rootRect) return
     const bcr = target.getBoundingClientRect()
     const next = {
-      top: bcr.top - rootRect.top,
+      top: getInlineEditTop(target, rootRef.current!, activeEdit.block),
       left: bcr.left - rootRect.left,
       width: bcr.width,
     }
@@ -2028,7 +2028,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       if (rootRect) {
         const bcr = blockWrapper.getBoundingClientRect()
         setOverlayRect({
-          top: bcr.top - rootRect.top,
+          top: getInlineEditTop(blockWrapper, rootRef.current!, block),
           left: bcr.left - rootRect.left,
           width: bcr.width,
         })
@@ -2869,7 +2869,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
           className="gm-inline-edit-overlay"
           style={{
             position: 'absolute',
-            top: overlayRect.top - 12,
+            top: overlayRect.top,
             left: overlayRect.left,
             width: overlayRect.width,
             zIndex: 10,
@@ -3014,6 +3014,13 @@ function getMountedPreviewLineForTop(
     return Math.round(block.startLine + (block.endLine - block.startLine) * progress)
   }
   return undefined
+}
+
+function getInlineEditTop(element: HTMLElement, root: HTMLElement, block: PreviewBlock): number {
+  const textTop = getMountedSourceRangeTop(element, root, block.startOffset, block.endOffset)
+  if (textTop !== undefined) return textTop - root.scrollTop
+  const contentRect = (element.firstElementChild ?? element).getBoundingClientRect()
+  return contentRect.top - root.getBoundingClientRect().top
 }
 
 function getMountedSourceRangeTop(
