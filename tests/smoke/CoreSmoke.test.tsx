@@ -198,7 +198,9 @@ describe('Core Smoke（真实 Desktop React Tree，隔离原生 I/O）', () => {
     await checkpoint(() => expect(screen.getByPlaceholderText('输入消息... (Enter 发送)')).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: '关闭面板' }))
     await checkpoint(() => {
-      expect(root.querySelector('.gm-layout-ai-panel .gm-layout-sidebar-content')).toBeNull()
+      const content = root.querySelector<HTMLElement>('.gm-layout-ai-panel .gm-layout-sidebar-content')
+      expect(content).not.toBeNull()
+      expect(content?.inert).toBe(true)
       expect(screen.getByRole('button', { name: /打开 AI 助手/ })).toHaveFocus()
     })
     await user.click(screen.getByRole('button', { name: /打开 AI 助手/ }))
