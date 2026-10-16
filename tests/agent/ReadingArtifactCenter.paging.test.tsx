@@ -29,6 +29,8 @@ describe('ReadingArtifactCenter automatic paging', () => {
   let observers: { callback: IntersectionObserverCallback; target?: Element; root?: Element | Document | null; disconnected: boolean }[]
   beforeEach(() => {
     observers = []
+    // These paging/entrance fixtures keep all twelve cards inside the viewport.
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(2400)
     mocks.reducedMotion = false
     mocks.page.mockReset().mockResolvedValueOnce(page(0, 5, true))
     mocks.documents.mockReset().mockResolvedValue({ documents: [], total: 0, hasMore: false })

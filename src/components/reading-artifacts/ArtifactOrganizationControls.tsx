@@ -1,7 +1,7 @@
 import { ArtifactFilterMenu } from './ArtifactFilterMenu'
 import { ContextMenu, ContextMenuItem, ContextMenuSeparator } from '@/components/common/ContextMenu'
 import { MoreHorizontal, Star, Trash2, X } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   deleteArtifactCategory, loadArtifactOrganization, saveArtifactCategory, setArtifactOrganization,
   type ArtifactCategory, type ArtifactOrganization, type ArtifactOrganizationFilter, type ArtifactOrganizationSnapshot,
@@ -41,12 +41,13 @@ export function useArtifactOrganization(enabled = true) {
       if (mounted.current) setBusy(false)
     }
   }, [])
-  return {
+  const update = useCallback((key: string, patch: { favorite?: boolean; categoryIds?: string[] }) => mutate(() => setArtifactOrganization(key, patch)), [mutate])
+  const saveCategory = useCallback((category: ArtifactCategory) => mutate(() => saveArtifactCategory(category)), [mutate])
+  const removeCategory = useCallback((id: string) => mutate(() => deleteArtifactCategory(id)), [mutate])
+  return useMemo(() => ({
     ...snapshot, revision, busy: busy || !ready,
-    update: (key: string, patch: { favorite?: boolean; categoryIds?: string[] }) => mutate(() => setArtifactOrganization(key, patch)),
-    saveCategory: (category: ArtifactCategory) => mutate(() => saveArtifactCategory(category)),
-    removeCategory: (id: string) => mutate(() => deleteArtifactCategory(id)),
-  }
+    update, saveCategory, removeCategory,
+  }), [snapshot, revision, busy, ready, update, saveCategory, removeCategory])
 }
 
 type Organization = ReturnType<typeof useArtifactOrganization>

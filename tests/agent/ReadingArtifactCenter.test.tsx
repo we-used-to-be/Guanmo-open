@@ -353,7 +353,7 @@ describe('ReadingArtifactCenter', () => {
     expect(highlightCard).toHaveTextContent('高亮原文第8行')
     expect(within(highlightCard!).getByRole('button', { name: 'A.md · 查看原文' })).toBeInTheDocument()
     fireEvent.click(within(highlightCard!).getByRole('button', { name: /成果操作/ }))
-    expect(screen.getByRole('button', { name: '删除成果' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: '删除成果' })).toBeInTheDocument()
     fireEvent.keyDown(document, { key: 'Escape' })
 
     fireEvent.click(annotationExpand)
@@ -369,6 +369,7 @@ describe('ReadingArtifactCenter', () => {
     class TrackingResizeObserver {
       constructor(_callback: ResizeObserverCallback) {}
       observe = vi.fn()
+      unobserve = vi.fn()
       disconnect = disconnect
     }
     globalThis.ResizeObserver = TrackingResizeObserver as unknown as typeof ResizeObserver
@@ -391,6 +392,7 @@ describe('ReadingArtifactCenter', () => {
         callbacks.push(() => callback([], this as unknown as ResizeObserver))
       }
       observe = vi.fn()
+      unobserve = vi.fn()
       disconnect = vi.fn()
     }
     globalThis.ResizeObserver = TrackingResizeObserver as unknown as typeof ResizeObserver

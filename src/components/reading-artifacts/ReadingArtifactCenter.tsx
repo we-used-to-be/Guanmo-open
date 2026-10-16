@@ -1,6 +1,6 @@
 import { ArtifactFilterMenu } from './ArtifactFilterMenu'
 import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink, FileText, Filter } from 'lucide-react'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefCallback } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -39,10 +39,29 @@ import { ArtifactCategoryLabels, ArtifactOrganizationActions, ArtifactOrganizati
 import type { ArtifactOrganizationFilter } from '@/services/database/artifactOrganization'
 import { OriginalSelections } from '@/components/ai/OriginalSelections'
 import './readingArtifactPaging.css'
+import { ArtifactVirtualList, type ArtifactListRow } from './ArtifactVirtualList'
 
 type DocumentAvailability = 'checking' | 'available' | 'unavailable'
 type CenterView = 'recent' | 'documents' | 'detail' | 'focus'
 type DetailFilter = 'all' | 'highlight' | 'annotation' | 'ai'
+
+type CardUiState = { content?: string; editing: boolean; note: string; manualExpanded: boolean; questionExpanded: boolean; contentOverflow?: Record<string, boolean>; replyScrollTop?: number; selectionsOpen?: boolean }
+const CardOrganizationContext = createContext<{
+  organization: ReturnType<typeof useArtifactOrganization>
+  entries: Map<string, ReturnType<typeof useArtifactOrganization>['entries'][number]>
+  categoryId?: string
+  onSelect: (id: string) => void
+} | null>(null)
+
+function CardActions({ item, onDelete }: { item: ReadingArtifactItem; onDelete: () => void }) {
+  const context = useContext(CardOrganizationContext)
+  return context && <ArtifactOrganizationActions artifactKey={item.key} title={item.title || TYPE_LABELS[item.type]} organization={context.organization} entry={context.entries.get(item.key)} categoryId={context.categoryId} onDelete={onDelete} />
+}
+
+function CardLabels({ artifactKey }: { artifactKey: string }) {
+  const context = useContext(CardOrganizationContext)
+  return context && <ArtifactCategoryLabels categories={context.organization.categories} entry={context.entries.get(artifactKey)} onSelect={context.onSelect} />
+}
 
 const ALL_TYPES: ReadingArtifactItemType[] = [
   'highlight',
@@ -176,10 +195,12 @@ export function ReadingArtifactCenter({
   onOpenAiSource,
   focusKey,
   onCloseFocus,
+  active = true,
 }: {
   onOpenAiSource: (artifact: ReadingArtifact, documentRef: ReadingArtifactDocumentRef, location?: ReadingArtifactLocation) => void | Promise<void>
   focusKey?: string | null
   onCloseFocus?: () => void
+  active?: boolean
 }) {
   const workspaceRoots = useAppStore((state) => state.workspaceRoots)
   const updateMark = useReadingMarksStore((state) => state.update)
@@ -228,7 +249,9 @@ export function ReadingArtifactCenter({
   const reducedMotion = useReducedMotion() ?? false
   const rootRef = useRef<HTMLDivElement>(null)
   const contentScrollerRef = useRef<HTMLDivElement>(null)
-  const prefetchCardRef = useRef<HTMLDivElement>(null)
+  const [prefetchCard, setPrefetchCard] = useState<HTMLDivElement | null>(null)
+  const prefetchCardRef = useCallback((node: HTMLDivElement | null) => setPrefetchCard(node), [])
+  const cardUiStates = useRef(new Map<string, CardUiState>())
   const detailHeadingRef = useRef<HTMLHeadingElement>(null)
   const returnFocusRef = useRef<HTMLButtonElement | null>(null)
   const previousViewRef = useRef<CenterView>('recent')
@@ -304,12 +327,22 @@ export function ReadingArtifactCenter({
         : filtered
       const existingKeys = new Set(loadedItemsRef.current.map((item) => item.key))
       const added = append ? next.filter((item) => !existingKeys.has(item.key)) : next
-      const combined = append ? [...loadedItemsRef.current, ...added] : next
+      const previousByKey = new Map(loadedItemsRef.current.map((item) => [item.key, item]))
+      const shared = added.map((item) => {
+        const previous = previousByKey.get(item.key)
+        return previous && JSON.stringify(previous) === JSON.stringify(item) ? previous : item
+      })
+      const combined = append ? [...loadedItemsRef.current, ...shared] : shared
       setEnteringItems(new Map(append ? added.map((item, index) => [item.key, index]) : []))
       setItemsHasMore(result.hasMore && added.length > 0)
+      const previousArtifacts = new Map(loadedAiArtifactsRef.current.map((artifact) => [artifact.id, artifact]))
+      const sharedArtifacts = result.artifacts.map((artifact) => {
+        const previous = previousArtifacts.get(artifact.id)
+        return previous && JSON.stringify(previous) === JSON.stringify(artifact) ? previous : artifact
+      })
       const nextArtifacts = append
         ? [...loadedAiArtifactsRef.current, ...result.artifacts.filter((artifact) => !loadedAiArtifactsRef.current.some((current) => current.id === artifact.id))]
-        : result.artifacts
+        : sharedArtifacts
       loadedAiArtifactsRef.current = nextArtifacts
       setLoadedAiArtifacts(nextArtifacts)
       loadedItemsRef.current = combined
@@ -435,7 +468,7 @@ export function ReadingArtifactCenter({
   const recentItems = useMemo(() => listRecentArtifacts(items), [items])
   useEffect(() => {
     const scroller = contentScrollerRef.current
-    const target = prefetchCardRef.current
+    const target = prefetchCard
     if (view !== 'recent' || itemsLoading || itemsLoadingMore || itemsError || !itemsHasMore || !scroller || !target) return
     let cancelled = false
     const observer = new IntersectionObserver((entries) => {
@@ -443,7 +476,7 @@ export function ReadingArtifactCenter({
     }, { root: scroller })
     observer.observe(target)
     return () => { cancelled = true; observer.disconnect() }
-  }, [view, itemsLoading, itemsLoadingMore, itemsError, itemsHasMore, recentItems, loadItems])
+  }, [view, itemsLoading, itemsLoadingMore, itemsError, itemsHasMore, prefetchCard, recentItems, loadItems])
   const documentSummaries = useMemo(() => documentPage.documents.map((summary) => ({
       documentRef: summary.documentId === '__independent__' ? null : {
         documentId: documentIdForSummary(summary),
@@ -515,7 +548,7 @@ export function ReadingArtifactCenter({
     return () => cancelAnimationFrame(frame)
   }, [view])
 
-  const changeView = (next: CenterView) => {
+  const changeView = useCallback((next: CenterView) => {
     if (next === view) return
     const scroller = contentScrollerRef.current
     if (scroller) scrollPositionsRef.current[view] = scroller.scrollTop
@@ -539,7 +572,7 @@ export function ReadingArtifactCenter({
     }
     setExpandedAiKey(null)
     setView(next)
-  }
+  }, [view])
 
   const openDocument = (documentRef: ReadingArtifactDocumentRef | null, origin?: HTMLButtonElement) => {
     returnFocusRef.current = origin ?? null
@@ -597,13 +630,13 @@ export function ReadingArtifactCenter({
   const loading = view === 'documents'
     ? documentsLoading && documentPage.documents.length === 0
     : view === 'focus' ? focusLoading : itemsLoading && items.length === 0
-  const openReadingMark = async (markId: string) => {
+  const openReadingMark = useCallback(async (markId: string) => {
     try {
       await navigateToReadingMark(markId)
     } catch (error) {
       toast.error(describeFileOperationError(error, '定位批注失败'))
     }
-  }
+  }, [])
   const detailItems = useMemo(() => detailContent.items.filter((item) => matchesDetailFilter(item, detailContent.filter)), [detailContent])
   const positionedDetail = useMemo(() => {
     if (!selectedDocument || detailContent.sort !== 'source' || !documentModel) return { positioned: [], other: detailItems }
@@ -618,6 +651,7 @@ export function ReadingArtifactCenter({
     return { positioned: positioned.map((entry) => entry.item), other }
   }, [detailContent.sort, detailItems, documentModel, selectedDocument])
 
+  const toggleExpanded = useCallback((key: string) => setExpandedAiKey((current) => current === key ? null : key), [])
   const updateCardMark = useCallback(async (item: ReadingArtifactItem, color?: ReadingMarkColor, note?: string) => {
     if (pendingMarkWrites.current.has(item.key)) return false
     pendingMarkWrites.current.add(item.key)
@@ -633,39 +667,44 @@ export function ReadingArtifactCenter({
       pendingMarkWrites.current.delete(item.key)
     }
   }, [updateMark])
+  const deleteCard = useCallback(async (item: ReadingArtifactItem) => {
+    if (item.source === 'ai') await deleteAiArtifact(item.id)
+    else {
+      const path = item.documentRefs[0]?.filePath
+      if (!path) throw new Error('来源文档不可用')
+      await removeMark(item.id, path)
+    }
+    if (view === 'focus') { setLoadedItems([]); loadedItemsRef.current = [] }
+  }, [deleteAiArtifact, removeMark, view])
+  const selectCategory = useCallback((categoryId: string) => {
+    setOrganizationFilter({ collection: 'all', categoryId })
+    if (view === 'focus') onCloseFocus?.()
+    changeView('recent')
+  }, [changeView, onCloseFocus, view])
+  const cardOrganization = useMemo(() => ({ organization, entries: organizationByKey, categoryId: organizationFilter.categoryId, onSelect: selectCategory }), [organization, organizationByKey, organizationFilter.categoryId, selectCategory])
+  const detailTimeItems = useMemo(() => [...detailItems].sort((a, b) => a.createdAt - b.createdAt), [detailItems])
 
   const renderCard = (item: ReadingArtifactItem, currentDocument?: ReadingArtifactDocumentRef | null) => (
     <ArtifactCard
       key={item.key}
       item={item}
-      availability={availability}
+      sourceAvailability={item.documentRefs.map((ref) => availability[ref.documentId] ?? 'checking').join('|')}
+      artifact={aiById.get(item.id)}
+      uiStates={cardUiStates.current}
       anchorStatus={item.source === 'ai' ? anchorStatuses[item.id] : undefined}
       currentDocument={currentDocument}
       reducedMotion={reducedMotion}
       expanded={item.source === 'ai' && expandedAiKey === item.key}
-      renderActions={(remove) => <ArtifactOrganizationActions artifactKey={item.key} title={item.title || TYPE_LABELS[item.type]} organization={organization} entry={organizationByKey.get(item.key)} categoryId={organizationFilter.categoryId} onDelete={remove} />}
-      categoryLabels={<ArtifactCategoryLabels categories={organization.categories} entry={organizationByKey.get(item.key)} onSelect={(categoryId) => { setOrganizationFilter({ collection: 'all', categoryId }); if (view === 'focus') onCloseFocus?.(); changeView('recent') }} />}
-      onToggleExpand={item.source === 'ai' ? () => setExpandedAiKey((current) => current === item.key ? null : item.key) : undefined}
-      onNavigateMark={() => void openReadingMark(item.id)}
-      onUpdateMark={(color, note) => updateCardMark(item, color, note)}
-      onDeleteMark={async () => {
-        const path = item.documentRefs[0]?.filePath
-        if (!path) throw new Error('来源文档不可用')
-        await removeMark(item.id, path)
-        if (view === 'focus') { setLoadedItems([]); loadedItemsRef.current = [] }
-      }}
-      onDeleteAi={async () => {
-        await deleteAiArtifact(item.id)
-        if (view === 'focus') { setLoadedItems([]); loadedItemsRef.current = [] }
-      }}
-      onOpenAiSource={(ref, location) => {
-      const artifact = aiById.get(item.id)
-        if (artifact) return onOpenAiSource(artifact, ref, location)
-      }}
+      onToggleExpand={toggleExpanded}
+      onNavigateMark={openReadingMark}
+      onUpdateMark={updateCardMark}
+      onDelete={deleteCard}
+      onOpenAiSource={onOpenAiSource}
     />
   )
 
   return (
+    <CardOrganizationContext.Provider value={cardOrganization}>
     <div ref={rootRef} data-product-tour="reading-artifact-center" className="flex h-full min-h-0 flex-col bg-gm-canvas text-gm-text">
       <div className="shrink-0 px-4 pt-3">
           {view !== 'detail' && view !== 'focus' ? (
@@ -732,19 +771,23 @@ export function ReadingArtifactCenter({
           )}
       </div>
 
-      <div ref={contentScrollerRef} role="region" aria-label="阅读成果内容" tabIndex={0} className="min-h-0 flex-1 overflow-y-auto px-4 pb-3 outline-none">
+      <div ref={contentScrollerRef} role="region" aria-label="阅读成果内容" tabIndex={0} style={{ overflowAnchor: 'none' }} className="min-h-0 flex-1 overflow-y-auto px-4 pb-3 outline-none">
           {loading ? <EmptyState text="正在加载阅读成果…" /> : view === 'recent' ? (
-            <RecentView items={recentItems} renderCard={renderCard} prefetchCardRef={prefetchCardRef} scrollerRef={contentScrollerRef} enteringItems={enteringItems} reducedMotion={reducedMotion} />
+            <RecentView active={active} items={recentItems} renderCard={renderCard} prefetchCardRef={prefetchCardRef} scrollerRef={contentScrollerRef} enteringItems={enteringItems} reducedMotion={reducedMotion} />
           ) : view === 'documents' ? (
             <DocumentView summaries={documentSummaries} availability={availability} onOpen={openDocument} />
           ) : view === 'focus' ? (
             items.length > 0 ? <div className="space-y-2">{items.map((item) => renderCard(item))}</div> : <EmptyState text={focusError || '该阅读成果不存在'} />
           ) : (
             <DetailView
+              active={active}
+              prefetchCardRef={prefetchCardRef}
+              scrollerRef={contentScrollerRef}
+              enteringItems={enteringItems}
               reducedMotion={reducedMotion}
               contentPending={detailContent.pending}
               contentVersion={detailContent.version}
-              positioned={detailContent.sort === 'time' ? [...detailItems].sort((a, b) => a.createdAt - b.createdAt) : positionedDetail.positioned}
+              positioned={detailContent.sort === 'time' ? detailTimeItems : positionedDetail.positioned}
               other={detailContent.sort === 'source' ? positionedDetail.other : []}
               renderCard={(item) => renderCard(item, selectedDocument)}
             />
@@ -768,6 +811,7 @@ export function ReadingArtifactCenter({
           )}
       </div>
     </div>
+    </CardOrganizationContext.Provider>
   )
 }
 
@@ -786,8 +830,9 @@ function FilterCheck({ type, checked, onToggle }: { type: ReadingArtifactItemTyp
   return <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-caption hover:bg-gm-surface-hover"><input type="checkbox" checked={checked} onChange={() => onToggle(type)} />{TYPE_LABELS[type]}</label>
 }
 
-function RecentView({ items, renderCard, prefetchCardRef, scrollerRef, enteringItems, reducedMotion }: { items: ReadingArtifactItem[]; renderCard: (item: ReadingArtifactItem) => React.ReactNode; prefetchCardRef: React.RefObject<HTMLDivElement>; scrollerRef: React.RefObject<HTMLDivElement>; enteringItems: ReadonlyMap<string, number>; reducedMotion: boolean }) {
+function useCardEntranceQueue() {
   const entranceQueue = useRef(new Map<string, { element: HTMLDivElement; start: (delay: number) => void }>())
+  const revealed = useRef(new Set<string>())
   const nextEntranceAt = useRef(0)
   const registerEntrance = useCallback((key: string, element: HTMLDivElement, start: (delay: number) => void) => {
     const entry = { element, start }
@@ -803,19 +848,30 @@ function RecentView({ items, renderCard, prefetchCardRef, scrollerRef, enteringI
     let startAt = Math.max(now, nextEntranceAt.current)
     for (const [pendingKey, entry] of queue.slice(0, last + 1)) {
       entranceQueue.current.delete(pendingKey)
+      revealed.current.add(pendingKey)
       entry.start(startAt - now)
       startAt += 50
     }
     nextEntranceAt.current = startAt
   }, [])
+  return { registerEntrance, revealThrough, revealed }
+}
+
+function RecentView({ items, renderCard, prefetchCardRef, scrollerRef, enteringItems, reducedMotion, active }: { items: ReadingArtifactItem[]; renderCard: (item: ReadingArtifactItem) => React.ReactNode; prefetchCardRef: RefCallback<HTMLDivElement>; scrollerRef: React.RefObject<HTMLDivElement>; enteringItems: ReadonlyMap<string, number>; reducedMotion: boolean; active: boolean }) {
+  const { registerEntrance, revealThrough, revealed } = useCardEntranceQueue()
+  const rows = useMemo(() => {
+    const grouped = new Map<string, ReadingArtifactItem[]>()
+    for (const item of items) {
+      const date = dateGroupLabel(item.createdAt)
+      const group = grouped.get(date)
+      if (group) group.push(item)
+      else grouped.set(date, [item])
+    }
+    return [...grouped].flatMap(([date, group]): ArtifactListRow[] => [{ key: `date:${date}`, heading: date }, ...group.map((item) => ({ key: item.key, item }))])
+  }, [items])
   if (items.length === 0) return <EmptyState text="当前条件下没有阅读成果" />
-  const dates = new Map<string, ReadingArtifactItem[]>()
-  for (const item of items) {
-    const date = dateGroupLabel(item.createdAt)
-    dates.set(date, [...(dates.get(date) ?? []), item])
-  }
   const prefetchKey = items[Math.max(0, items.length - 2)]?.key
-  return <div className="space-y-6">{[...dates].map(([date, grouped]) => <section key={date}><h3 className="mb-2 text-caption font-bold text-gm-text-secondary">{date}</h3><div className="space-y-2">{grouped.map((item) => <div key={item.key} ref={item.key === prefetchKey ? prefetchCardRef : undefined}><RecentCardEntrance artifactKey={item.key} index={enteringItems.get(item.key)} scrollerRef={scrollerRef} reducedMotion={reducedMotion} registerEntrance={registerEntrance} revealThrough={revealThrough}>{renderCard(item)}</RecentCardEntrance></div>)}</div></section>)}</div>
+  return <ArtifactVirtualList rows={rows} scrollerRef={scrollerRef} active={active} renderRow={(row) => row.item ? <div ref={row.key === prefetchKey ? prefetchCardRef : undefined}><RecentCardEntrance artifactKey={row.key} index={revealed.current.has(row.key) ? undefined : enteringItems.get(row.key)} scrollerRef={scrollerRef} reducedMotion={reducedMotion} registerEntrance={registerEntrance} revealThrough={revealThrough}>{renderCard(row.item)}</RecentCardEntrance></div> : <h3 className="pt-3 text-caption font-bold text-gm-text-secondary">{row.heading}</h3>} />
 }
 
 function RecentCardEntrance({ artifactKey, index, scrollerRef, reducedMotion, registerEntrance, revealThrough, children }: { artifactKey: string; index?: number; scrollerRef: React.RefObject<HTMLDivElement>; reducedMotion: boolean; registerEntrance: (key: string, element: HTMLDivElement, start: (delay: number) => void) => () => void; revealThrough: (key: string) => void; children: React.ReactNode }) {
@@ -870,23 +926,26 @@ function DetailControls({ filter, onFilter, reducedMotion }: { filter: DetailFil
   )
 }
 
-function DetailView({ reducedMotion, contentPending, contentVersion, positioned, other, renderCard }: { reducedMotion: boolean; contentPending: boolean; contentVersion: number; positioned: ReadingArtifactItem[]; other: ReadingArtifactItem[]; renderCard: (item: ReadingArtifactItem) => React.ReactNode }) {
+function DetailView({ reducedMotion, contentPending, positioned, other, renderCard, prefetchCardRef, scrollerRef, enteringItems, active }: { reducedMotion: boolean; contentPending: boolean; contentVersion: number; positioned: ReadingArtifactItem[]; other: ReadingArtifactItem[]; renderCard: (item: ReadingArtifactItem) => React.ReactNode; prefetchCardRef: RefCallback<HTMLDivElement>; scrollerRef: React.RefObject<HTMLDivElement>; enteringItems: ReadonlyMap<string, number>; active: boolean }) {
+  const { registerEntrance, revealThrough, revealed } = useCardEntranceQueue()
+  const rows = useMemo((): ArtifactListRow[] => [
+    ...positioned.map((item) => ({ key: item.key, item })),
+    ...(other.length ? [{ key: 'other-heading', heading: '其他成果' }, ...other.map((item) => ({ key: item.key, item }))] : []),
+  ], [positioned, other])
+  const ordered = [...positioned, ...other]
+  const prefetchKey = ordered[Math.max(0, ordered.length - 2)]?.key
   return (
     <div aria-busy={contentPending} className="grid">
-      <AnimatePresence initial={false} mode="sync">
         <motion.div
-          key={contentVersion}
-          initial={contentVersion === 0 || reducedMotion ? false : { opacity: 0 }}
+          initial={false}
           animate={{ opacity: contentPending ? 0.55 : 1 }}
           exit={reducedMotion ? { opacity: 1 } : { opacity: 0 }}
           transition={reducedMotion ? { duration: 0 } : { duration: 0.18, ease: [0.23, 1, 0.32, 1] }}
           className="col-start-1 row-start-1 min-w-0"
         >
-          <div className="space-y-2">{positioned.map(renderCard)}</div>
-          {other.length > 0 && <section className="mt-5 pt-1"><h3 className="mb-2 text-micro font-bold tracking-wide text-gm-text-tertiary">其他成果</h3><div className="space-y-2">{other.map(renderCard)}</div></section>}
+          <ArtifactVirtualList rows={rows} scrollerRef={scrollerRef} active={active} renderRow={(row) => row.item ? <div ref={row.key === prefetchKey ? prefetchCardRef : undefined}><RecentCardEntrance artifactKey={row.key} index={revealed.current.has(row.key) ? undefined : enteringItems.get(row.key)} scrollerRef={scrollerRef} reducedMotion={reducedMotion} registerEntrance={registerEntrance} revealThrough={revealThrough}>{renderCard(row.item)}</RecentCardEntrance></div> : <h3 className="pt-4 text-micro font-bold tracking-wide text-gm-text-tertiary">{row.heading}</h3>} />
           {positioned.length === 0 && other.length === 0 && <EmptyState text="当前条件下没有阅读成果" />}
         </motion.div>
-      </AnimatePresence>
     </div>
   )
 }
@@ -916,7 +975,9 @@ function ExpandableText({
   const textRef = useRef<HTMLDivElement>(null)
   const [metrics, setMetrics] = useState({ fullHeight: 0, collapsedHeight: 0, overflow: false })
   const [hasMeasured, setHasMeasured] = useState(false)
+  const [initialExpanded] = useState(expanded)
   const [enableMotion, setEnableMotion] = useState(false)
+  const animateHeight = enableMotion || expanded !== initialExpanded
   const measure = useCallback(() => {
     const element = textRef.current
     if (!element) return
@@ -951,19 +1012,21 @@ function ExpandableText({
   }, [hasMeasured, metrics.overflow, onOverflowChange])
 
   useEffect(() => {
-    setEnableMotion(true)
-  }, [])
+    if (expanded !== initialExpanded) setEnableMotion(true)
+  }, [expanded, initialExpanded])
 
   const visibleHeight = expanded || !metrics.overflow ? 'auto' : metrics.collapsedHeight
   return (
     <motion.div
-      animate={{ height: visibleHeight }}
+      animate={animateHeight ? { height: visibleHeight } : undefined}
       initial={false}
-      transition={reducedMotion || !enableMotion ? { duration: 0 } : { height: MORPHING_MOTION_TOKENS.surface }}
-      style={hasMeasured ? undefined : { visibility: 'hidden' }}
+      transition={reducedMotion || !animateHeight ? { duration: 0 } : { height: MORPHING_MOTION_TOKENS.surface }}
+      style={{ height: animateHeight ? undefined : visibleHeight, visibility: hasMeasured ? undefined : 'hidden' }}
       className="relative overflow-hidden"
     >
-      <div ref={textRef} className={className}>{text}</div>
+      {/* Keep the first layout collapsed before measurement; virtual remounts
+          must never report the full text height as a transient row size. */}
+      <div ref={textRef} className={className} style={!hasMeasured && !expanded ? { maxHeight: `${lines}lh`, overflow: 'hidden' } : undefined}>{text}</div>
       {!expanded && metrics.overflow && (
         <div
           aria-hidden="true"
@@ -975,21 +1038,64 @@ function ExpandableText({
   )
 }
 
-function ArtifactCard({ renderActions, categoryLabels, item, availability, anchorStatus, currentDocument, reducedMotion, expanded, onToggleExpand, onNavigateMark, onUpdateMark: updateMark, onDeleteMark, onDeleteAi, onOpenAiSource }: { renderActions: (remove: () => void) => React.ReactNode; categoryLabels: React.ReactNode; item: ReadingArtifactItem; availability: Record<string, DocumentAvailability>; anchorStatus?: SourceAnchorStatus; currentDocument?: ReadingArtifactDocumentRef | null; reducedMotion: boolean; expanded: boolean; onToggleExpand?: () => void; onNavigateMark: () => void; onUpdateMark: (color?: ReadingMarkColor, note?: string) => Promise<boolean>; onDeleteMark: () => Promise<void>; onDeleteAi: () => Promise<void>; onOpenAiSource: (ref: ReadingArtifactDocumentRef, location?: ReadingArtifactLocation) => void | Promise<void> }) {
-  const [editing, setEditing] = useState(false)
+const ArtifactCard = memo(function ArtifactCard({ item, sourceAvailability, artifact, uiStates, anchorStatus, currentDocument, reducedMotion, expanded, onToggleExpand: toggleExpand, onNavigateMark: navigateMark, onUpdateMark: updateMark, onDelete, onOpenAiSource: openAiSource }: {
+  item: ReadingArtifactItem; sourceAvailability: string; artifact?: ReadingArtifact; uiStates: Map<string, CardUiState>
+  anchorStatus?: SourceAnchorStatus; currentDocument?: ReadingArtifactDocumentRef | null; reducedMotion: boolean; expanded: boolean
+  onToggleExpand: (key: string) => void; onNavigateMark: (id: string) => Promise<void>
+  onUpdateMark: (item: ReadingArtifactItem, color?: ReadingMarkColor, note?: string) => Promise<boolean>
+  onDelete: (item: ReadingArtifactItem) => Promise<void>
+  onOpenAiSource: (artifact: ReadingArtifact, ref: ReadingArtifactDocumentRef, location?: ReadingArtifactLocation) => void | Promise<void>
+}) {
+  const saved = uiStates.get(item.key)
+  const initial = saved?.content === item.content ? saved : undefined
+  const [editing, setEditing] = useState(initial?.editing ?? false)
   const [saving, setSaving] = useState(false)
-  const [note, setNote] = useState(item.content ?? '')
-  const [contentOverflow, setContentOverflow] = useState<Record<string, boolean>>({})
-  const [manualExpanded, setManualExpanded] = useState(false)
-  const [questionExpanded, setQuestionExpanded] = useState(false)
+  const [note, setNote] = useState(initial?.note ?? item.content ?? '')
+  const [contentOverflow, setContentOverflow] = useState<Record<string, boolean>>(initial?.contentOverflow ?? {})
+  const [manualExpanded, setManualExpanded] = useState(initial?.manualExpanded ?? false)
+  const [questionExpanded, setQuestionExpanded] = useState(initial?.questionExpanded ?? false)
+  const previousContent = useRef(item.content)
+  const articleRef = useRef<HTMLElement>(null)
+  useLayoutEffect(() => {
+    uiStates.set(item.key, { ...uiStates.get(item.key), content: item.content, editing, note, manualExpanded, questionExpanded, contentOverflow })
+  }, [item.key, item.content, editing, note, manualExpanded, questionExpanded, contentOverflow, uiStates])
+  useLayoutEffect(() => {
+    if (!expanded) return
+    const snapshot = uiStates.get(item.key)
+    const reply = articleRef.current?.querySelector<HTMLElement>('[aria-label="AI 回复正文"]')
+    if (reply) reply.scrollTop = snapshot?.replyScrollTop ?? 0
+    const selections = articleRef.current?.querySelector('details')
+    if (selections) selections.open = snapshot?.selectionsOpen ?? false
+    const rememberSelections = () => {
+      const current = uiStates.get(item.key)
+      if (current && selections) uiStates.set(item.key, { ...current, selectionsOpen: selections.open })
+    }
+    selections?.addEventListener('toggle', rememberSelections)
+    return () => selections?.removeEventListener('toggle', rememberSelections)
+  }, [expanded, item.key, uiStates])
+  const availability = useMemo(() => {
+    const values = sourceAvailability.split('|')
+    return Object.fromEntries(item.documentRefs.map((ref, index) => [ref.documentId, values[index]]))
+  }, [item.documentRefs, sourceAvailability])
   const onUpdateMark = useCallback(async (color?: ReadingMarkColor, note?: string) => {
     setSaving(true)
     try {
-      return await updateMark(color, note)
+      return await updateMark(item, color, note)
     } finally {
       setSaving(false)
     }
-  }, [updateMark])
+  }, [item, updateMark])
+  const onNavigateMark = useCallback(() => void navigateMark(item.id), [item.id, navigateMark])
+  const onToggleExpand = useCallback(() => {
+    const current = uiStates.get(item.key)
+    if (current) uiStates.set(item.key, { ...current, replyScrollTop: 0, selectionsOpen: false })
+    toggleExpand(item.key)
+  }, [item.key, toggleExpand, uiStates])
+  const onOpenAiSource = useCallback((ref: ReadingArtifactDocumentRef, location?: ReadingArtifactLocation) => {
+    if (artifact) return openAiSource(artifact, ref, location)
+  }, [artifact, openAiSource])
+  const renderActions = (remove: () => void) => <CardActions item={item} onDelete={remove} />
+  const categoryLabels = <CardLabels artifactKey={item.key} />
   const isUser = item.source === 'user'
   const refs = item.documentRefs
   const webReferences = item.references?.filter((reference) => reference.kind === 'web') ?? []
@@ -998,7 +1104,7 @@ function ArtifactCard({ renderActions, categoryLabels, item, availability, ancho
   const replyPreview = getAiReplyPreview(item.content)
   const remove = () => {
     const message = isUser ? '确认删除这条人工成果吗？正文中的高亮或批注也会同步移除，原文内容不会改变。' : '确认删除这条 AI 阅读成果吗？多文档入口会一并移除，原文内容不会改变。'
-    if (window.confirm(message)) void (isUser ? onDeleteMark() : onDeleteAi()).catch(() => toast.error('删除成果失败，请重试'))
+    if (window.confirm(message)) void onDelete(item).catch(() => toast.error('删除成果失败，请重试'))
   }
   const contentId = `reading-artifact-${item.id}`
   const triggerId = `${contentId}-trigger`
@@ -1009,16 +1115,22 @@ function ArtifactCard({ renderActions, categoryLabels, item, availability, ancho
     setContentOverflow((current) => current[key] === overflow ? current : { ...current, [key]: overflow })
   }, [])
   useEffect(() => {
+    if (previousContent.current === item.content) return
+    previousContent.current = item.content
     setContentOverflow({})
     setManualExpanded(false)
     setQuestionExpanded(false)
     setEditing(false)
     setNote(item.content ?? '')
-  }, [item.content, item.id])
+  }, [item.content])
   const contentMotion = reducedMotion
     ? { initial: { opacity: 1, height: 'auto' }, animate: { opacity: 1, height: 'auto' }, exit: { opacity: 1, height: 0 }, transition: { duration: 0 } }
     : { initial: { opacity: 0, height: 0 }, animate: { opacity: 1, height: 'auto' }, exit: { opacity: 0, height: 0 }, transition: { height: { duration: 0.24, ease: 'easeOut' as const }, opacity: { duration: 0.16, ease: 'easeOut' as const } } }
-  return <article data-state={isUser ? undefined : expanded ? 'open' : 'closed'} className="overflow-hidden rounded-2xl border border-gm-border-subtle bg-gm-surface shadow-[0_7px_20px_rgba(72,58,42,0.08)]" style={isUser ? { backgroundColor: 'color-mix(in srgb, var(--gm-surface) 96%, #fff5e6 4%)', borderColor: 'color-mix(in srgb, var(--gm-border-subtle) 76%, #d7b98c 24%)' } : { backgroundColor: 'color-mix(in srgb, var(--gm-surface) 97%, var(--gm-primary) 3%)', borderColor: 'color-mix(in srgb, var(--gm-border-subtle) 78%, var(--gm-primary) 22%)' }}>
+  return <article ref={articleRef} onScrollCapture={(event) => {
+    const target = event.target as HTMLElement
+    const current = uiStates.get(item.key)
+    if (current && target.getAttribute('aria-label') === 'AI 回复正文') uiStates.set(item.key, { ...current, replyScrollTop: target.scrollTop })
+  }} data-state={isUser ? undefined : expanded ? 'open' : 'closed'} className="overflow-hidden rounded-2xl border border-gm-border-subtle bg-gm-surface shadow-[0_7px_20px_rgba(72,58,42,0.08)]" style={isUser ? { backgroundColor: 'color-mix(in srgb, var(--gm-surface) 96%, #fff5e6 4%)', borderColor: 'color-mix(in srgb, var(--gm-border-subtle) 76%, #d7b98c 24%)' } : { backgroundColor: 'color-mix(in srgb, var(--gm-surface) 97%, var(--gm-primary) 3%)', borderColor: 'color-mix(in srgb, var(--gm-border-subtle) 78%, var(--gm-primary) 22%)' }}>
     {isUser ? (
       <div className="p-3.5 sm:p-4">
         <div className="flex items-center gap-2 border-b border-gm-border-subtle/80 pb-2.5"><span className={`h-2.5 w-2.5 rounded-full ${COLOR_STYLES[color]}`} /><span className="text-caption font-bold text-gm-text-secondary">{TYPE_LABELS[item.type]}</span><span className="ml-auto text-micro text-gm-text-tertiary">{new Date(item.createdAt).toLocaleDateString('zh-CN')}</span>{renderActions(remove)}</div>
@@ -1078,7 +1190,7 @@ function ArtifactCard({ renderActions, categoryLabels, item, availability, ancho
       </>
     )}
   </article>
-}
+})
 
 function EmptyState({ text }: { text: string }) {
   return <div className="py-12 text-center text-caption text-gm-text-tertiary">{text}</div>
