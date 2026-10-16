@@ -43,8 +43,20 @@ function replaceMark(list: ReadingMark[], mark: ReadingMark): ReadingMark[] {
   return next
 }
 
+function rollbackMark(list: ReadingMark[], previous: ReadingMark[], id: string, optimistic?: ReadingMark): ReadingMark[] {
+  // A different operation may have replaced this row while persistence was pending.
+  if (list.find((mark) => mark.id === id) !== optimistic) return list
+  const original = previous.find((mark) => mark.id === id)
+  return original ? replaceMark(list, original) : list.filter((mark) => mark.id !== id)
+}
+
 let loadAllSequence = 0
 const createQueues = new Map<string, Promise<unknown>>()
+const documentLoads = new Map<string, { changedIds: Set<string> }>()
+
+function trackDocumentChange(documentId: string, id: string): void {
+  documentLoads.get(documentId)?.changedIds.add(id)
+}
 
 function invalidateAllLoad(
   set: (partial: Partial<ReadingMarksState>) => void,
@@ -72,9 +84,19 @@ export const useReadingMarksStore = create<ReadingMarksState>((set, get) => ({
   async load(documentPath) {
     const documentId = readingDocumentId(documentPath)
     if (!documentPath) return []
+    const request = { changedIds: new Set<string>() }
+    documentLoads.set(documentId, request)
+    const previous = get().byDocumentId[documentId]
+    const isCurrent = () => documentLoads.get(documentId) === request && get().byDocumentId[documentId] === previous
     set((state) => ({ loading: { ...state.loading, [documentId]: true }, error: null }))
     try {
-      const marks = await loadReadingMarks(documentPath)
+      const loaded = await loadReadingMarks(documentPath)
+      if (documentLoads.get(documentId) !== request) return get().byDocumentId[documentId] || []
+      // Keep changed rows from the live cache, but still hydrate untouched rows on first load.
+      const current = get().byDocumentId[documentId] || []
+      const marks = request.changedIds.size
+        ? [...loaded.filter((mark) => !request.changedIds.has(mark.id)), ...current.filter((mark) => request.changedIds.has(mark.id))]
+        : isCurrent() ? loaded : current
       set((state) => ({
         byDocumentId: { ...state.byDocumentId, [documentId]: marks },
         allMarks: marks.reduce(replaceMark, state.allMarks),
@@ -82,10 +104,16 @@ export const useReadingMarksStore = create<ReadingMarksState>((set, get) => ({
       }))
       return marks
     } catch (error) {
+      if (!isCurrent()) return get().byDocumentId[documentId] || []
       const message = error instanceof Error ? error.message : String(error)
       set((state) => ({ loading: { ...state.loading, [documentId]: false }, error: message }))
       toast.error(message)
       throw error
+    } finally {
+      if (documentLoads.get(documentId) === request) {
+        documentLoads.delete(documentId)
+        set((state) => ({ loading: { ...state.loading, [documentId]: false } }))
+      }
     }
   },
   async loadAll() {
@@ -127,6 +155,7 @@ export const useReadingMarksStore = create<ReadingMarksState>((set, get) => ({
       if (conflict) return { status: 'conflict' as const, ...conflict }
       try {
         const mark = await createReadingMark(input, model)
+        trackDocumentChange(documentId, mark.id)
         const interruptedAllLoad = invalidateAllLoad(set, get)
         set((state) => ({
           byDocumentId: { ...state.byDocumentId, [documentId]: replaceMark(state.byDocumentId[documentId] || [], mark) },
@@ -165,12 +194,14 @@ export const useReadingMarksStore = create<ReadingMarksState>((set, get) => ({
     const optimisticMark = { ...optimistic, ...patch, note: optimisticNote, type: optimisticType, updatedAt: Date.now() }
     const previousAll = get().allMarks
     const interruptedAllLoad = invalidateAllLoad(set, get)
+    trackDocumentChange(documentId, id)
     set({
       byDocumentId: { ...get().byDocumentId, [documentId]: replaceMark(previous, optimisticMark) },
       allMarks: replaceMark(previousAll, optimisticMark),
     })
     try {
       const mark = await updateReadingMark(id, patch)
+      trackDocumentChange(documentId, id)
       set((state) => ({
         byDocumentId: { ...state.byDocumentId, [documentId]: replaceMark(state.byDocumentId[documentId] || [], mark) },
         allMarks: replaceMark(state.allMarks, mark),
@@ -181,7 +212,12 @@ export const useReadingMarksStore = create<ReadingMarksState>((set, get) => ({
       return mark
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      set((state) => ({ byDocumentId: { ...state.byDocumentId, [documentId]: previous }, allMarks: previousAll, error: message }))
+      trackDocumentChange(documentId, id)
+      set((state) => ({
+        byDocumentId: { ...state.byDocumentId, [documentId]: rollbackMark(state.byDocumentId[documentId] || [], previous, id, optimisticMark) },
+        allMarks: rollbackMark(state.allMarks, previousAll, id, optimisticMark),
+        error: message,
+      }))
       refreshInterruptedAllCache(get, interruptedAllLoad)
       toast.error(message)
       throw error
@@ -192,17 +228,29 @@ export const useReadingMarksStore = create<ReadingMarksState>((set, get) => ({
     const previous = get().byDocumentId[documentId] || []
     const previousAll = get().allMarks
     const interruptedAllLoad = invalidateAllLoad(set, get)
+    trackDocumentChange(documentId, id)
     set({
       byDocumentId: { ...get().byDocumentId, [documentId]: previous.filter((mark) => mark.id !== id) },
       allMarks: previousAll.filter((mark) => mark.id !== id),
     })
     try {
       await deleteReadingMark(id)
-      set((state) => ({ error: null, dataRevision: state.dataRevision + 1 }))
+      trackDocumentChange(documentId, id)
+      set((state) => ({
+        byDocumentId: { ...state.byDocumentId, [documentId]: (state.byDocumentId[documentId] || []).filter((mark) => mark.id !== id) },
+        allMarks: state.allMarks.filter((mark) => mark.id !== id),
+        error: null,
+        dataRevision: state.dataRevision + 1,
+      }))
       refreshInterruptedAllCache(get, interruptedAllLoad)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      set((state) => ({ byDocumentId: { ...state.byDocumentId, [documentId]: previous }, allMarks: previousAll, error: message }))
+      trackDocumentChange(documentId, id)
+      set((state) => ({
+        byDocumentId: { ...state.byDocumentId, [documentId]: rollbackMark(state.byDocumentId[documentId] || [], previous, id) },
+        allMarks: rollbackMark(state.allMarks, previousAll, id),
+        error: message,
+      }))
       refreshInterruptedAllCache(get, interruptedAllLoad)
       toast.error(message)
       throw error

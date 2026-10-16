@@ -107,6 +107,125 @@ describe('readingMarksStore unified cache', () => {
     expect(mocks.create).not.toHaveBeenCalled()
   })
 
+  it.each(['update', 'remove'] as const)('a failed %s does not undo another mark saved in the meantime', async (operation) => {
+    const other = { ...baseMark, id: 'mark-2', note: '另一条批注' }
+    const remote = { ...baseMark, id: 'mark-3', documentId: 'path:c:/anonymous/b.md', documentPath: 'C:/anonymous/B.md' }
+    const updatedOther = { ...other, note: '另一条已保存' }
+    const updatedRemote = { ...remote, note: '另一文档已保存' }
+    useReadingMarksStore.setState({ allMarks: [baseMark, other, remote], byDocumentId: { [baseMark.documentId]: [baseMark, other], [remote.documentId]: [remote] } })
+    let reject!: (reason: Error) => void
+    mocks[operation].mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail }))
+    const pending = operation === 'update'
+      ? useReadingMarksStore.getState().update(baseMark.id, baseMark.documentPath, { note: '失败的修改' })
+      : useReadingMarksStore.getState().remove(baseMark.id, baseMark.documentPath)
+    const failed = expect(pending).rejects.toThrow('匿名写入失败')
+    mocks.update.mockResolvedValueOnce(updatedOther).mockResolvedValueOnce(updatedRemote)
+    await useReadingMarksStore.getState().update(other.id, other.documentPath, { note: updatedOther.note })
+    await useReadingMarksStore.getState().update(remote.id, remote.documentPath, { note: updatedRemote.note })
+    reject(new Error('匿名写入失败'))
+    await failed
+    expect(useReadingMarksStore.getState().allMarks).toEqual(expect.arrayContaining([baseMark, updatedOther, updatedRemote]))
+    expect(useReadingMarksStore.getState().byDocumentId[baseMark.documentId]).toEqual(expect.arrayContaining([baseMark, updatedOther]))
+    expect(useReadingMarksStore.getState().byDocumentId[remote.documentId]).toEqual([updatedRemote])
+  })
+
+  it.each(['update', 'remove'] as const)('ignores a document query that predates a successful %s', async (operation) => {
+    useReadingMarksStore.setState({ allMarks: [baseMark], byDocumentId: { [baseMark.documentId]: [baseMark] } })
+    let resolve!: (marks: ReadingMark[]) => void
+    mocks.load.mockImplementationOnce(() => new Promise<ReadingMark[]>((done) => { resolve = done }))
+    const pending = useReadingMarksStore.getState().load(baseMark.documentPath)
+    if (operation === 'update') await useReadingMarksStore.getState().update(baseMark.id, baseMark.documentPath, { note: '已保存' })
+    else await useReadingMarksStore.getState().remove(baseMark.id, baseMark.documentPath)
+    const expected = operation === 'update' ? [{ ...baseMark, note: '已保存' }] : []
+    resolve([baseMark])
+    expect(await pending).toEqual(expected)
+    expect(useReadingMarksStore.getState().byDocumentId[baseMark.documentId]).toEqual(expected)
+    expect(useReadingMarksStore.getState().allMarks).toEqual(expected)
+    expect(useReadingMarksStore.getState().loading[baseMark.documentId]).toBe(false)
+  })
+
+  it('keeps the latest document request in charge of data and loading state', async () => {
+    let resolveFirst!: (marks: ReadingMark[]) => void
+    let resolveSecond!: (marks: ReadingMark[]) => void
+    mocks.load.mockImplementationOnce(() => new Promise<ReadingMark[]>((done) => { resolveFirst = done }))
+      .mockImplementationOnce(() => new Promise<ReadingMark[]>((done) => { resolveSecond = done }))
+    const first = useReadingMarksStore.getState().load(baseMark.documentPath)
+    const second = useReadingMarksStore.getState().load(baseMark.documentPath)
+    resolveFirst([baseMark])
+    expect(await first).toEqual([])
+    expect(useReadingMarksStore.getState().loading[baseMark.documentId]).toBe(true)
+    const latest = { ...baseMark, note: '最新查询' }
+    resolveSecond([latest])
+    expect(await second).toEqual([latest])
+    expect(useReadingMarksStore.getState().allMarks).toEqual([latest])
+    expect(useReadingMarksStore.getState().loading[baseMark.documentId]).toBe(false)
+  })
+
+  it('does not discard a query because another document changed', async () => {
+    const other = { ...baseMark, id: 'mark-2', documentId: 'path:c:/anonymous/b.md', documentPath: 'C:/anonymous/B.md' }
+    useReadingMarksStore.setState({ allMarks: [other], byDocumentId: { [other.documentId]: [other] } })
+    let resolve!: (marks: ReadingMark[]) => void
+    mocks.load.mockImplementationOnce(() => new Promise<ReadingMark[]>((done) => { resolve = done }))
+    const pending = useReadingMarksStore.getState().load(baseMark.documentPath)
+    mocks.update.mockResolvedValueOnce({ ...other, note: '另一文档已保存' })
+    await useReadingMarksStore.getState().update(other.id, other.documentPath, { note: '另一文档已保存' })
+    resolve([baseMark])
+    expect(await pending).toEqual([baseMark])
+    expect(useReadingMarksStore.getState().allMarks).toEqual(expect.arrayContaining([baseMark, { ...other, note: '另一文档已保存' }]))
+  })
+
+  it('finalizes a deletion even if a query reads the row while deletion is pending', async () => {
+    useReadingMarksStore.setState({ allMarks: [baseMark], byDocumentId: { [baseMark.documentId]: [baseMark] } })
+    let resolve!: () => void
+    mocks.remove.mockImplementationOnce(() => new Promise<void>((done) => { resolve = done }))
+    const pending = useReadingMarksStore.getState().remove(baseMark.id, baseMark.documentPath)
+    await useReadingMarksStore.getState().load(baseMark.documentPath)
+    resolve()
+    await pending
+    expect(useReadingMarksStore.getState().allMarks).toEqual([])
+    expect(useReadingMarksStore.getState().byDocumentId[baseMark.documentId]).toEqual([])
+  })
+
+  it('ignores an obsolete query error after a mark was saved', async () => {
+    useReadingMarksStore.setState({ allMarks: [baseMark], byDocumentId: { [baseMark.documentId]: [baseMark] } })
+    let reject!: (error: Error) => void
+    mocks.load.mockImplementationOnce(() => new Promise<ReadingMark[]>((_done, fail) => { reject = fail }))
+    const pending = useReadingMarksStore.getState().load(baseMark.documentPath)
+    await useReadingMarksStore.getState().update(baseMark.id, baseMark.documentPath, { note: '已保存' })
+    reject(new Error('已过期的查询错误'))
+    await expect(pending).resolves.toEqual([{ ...baseMark, note: '已保存' }])
+    expect(useReadingMarksStore.getState().error).toBeNull()
+    expect(useReadingMarksStore.getState().loading[baseMark.documentId]).toBe(false)
+  })
+
+  it('still hydrates untouched rows when a mark is created during the first document load', async () => {
+    let resolve!: (marks: ReadingMark[]) => void
+    mocks.load.mockImplementationOnce(() => new Promise<ReadingMark[]>((done) => { resolve = done }))
+    const pending = useReadingMarksStore.getState().load(baseMark.documentPath)
+    const created = { ...baseMark, id: 'mark-2' }
+    mocks.create.mockResolvedValueOnce(created)
+    await useReadingMarksStore.getState().create({
+      documentPath: baseMark.documentPath,
+      selection: { range: baseMark.anchor.range, from: 0, to: 2, text: '匿名', startLine: 1, endLine: 1 },
+    }, createMarkdownPreviewModel('匿名内容'))
+    resolve([baseMark])
+    expect(await pending).toEqual(expect.arrayContaining([baseMark, created]))
+    expect(useReadingMarksStore.getState().allMarks).toHaveLength(2)
+    expect(useReadingMarksStore.getState().byDocumentId[baseMark.documentId]).toHaveLength(2)
+  })
+
+  it('hydrates other rows without resurrecting a deletion from an initially empty cache', async () => {
+    let resolve!: (marks: ReadingMark[]) => void
+    mocks.load.mockImplementationOnce(() => new Promise<ReadingMark[]>((done) => { resolve = done }))
+    const pending = useReadingMarksStore.getState().load(baseMark.documentPath)
+    await useReadingMarksStore.getState().remove(baseMark.id, baseMark.documentPath)
+    const other = { ...baseMark, id: 'mark-2' }
+    resolve([baseMark, other])
+    expect(await pending).toEqual([other])
+    expect(useReadingMarksStore.getState().allMarks).toEqual([other])
+    expect(useReadingMarksStore.getState().byDocumentId[baseMark.documentId]).toEqual([other])
+  })
+
   it('serializes concurrent creates for one document', async () => {
     const model = createMarkdownPreviewModel('匿名内容')
     mocks.create.mockResolvedValueOnce(baseMark)
