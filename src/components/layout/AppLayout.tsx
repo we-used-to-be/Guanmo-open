@@ -197,6 +197,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
   ))
   const fullscreenAiPositionRef = useRef(fullscreenAiPosition)
   const fullscreenAiSizeRef = useRef(fullscreenAiSize)
+  const fullscreenAiDragFrameRef = useRef<number | null>(null)
   const fullscreenAiDragRef = useRef<{
     pointerId: number
     startX: number
@@ -229,6 +230,30 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     latestPosition: FullscreenAiPosition
   } | null>(null)
   const fullscreenAiPanelRef = useRef<HTMLDivElement | null>(null)
+
+  const finishFullscreenAiDrag = useCallback(() => {
+    if (fullscreenAiDragFrameRef.current !== null) {
+      cancelAnimationFrame(fullscreenAiDragFrameRef.current)
+      fullscreenAiDragFrameRef.current = null
+    }
+    const drag = fullscreenAiDragRef.current
+    if (!drag) return
+    fullscreenAiDragRef.current = null
+    const position = drag.latestPosition
+    const panel = fullscreenAiPanelRef.current
+    if (panel) {
+      // 先落地坐标再清理临时位移，避免等 React 提交时回跳。
+      panel.style.left = `${position.x}px`
+      panel.style.top = `${position.y}px`
+      panel.style.translate = ''
+      panel.style.willChange = ''
+    }
+    document.body.style.userSelect = ''
+    setFullscreenAiPosition(position)
+    persistFullscreenAiPosition(position)
+  }, [persistFullscreenAiPosition])
+
+  useEffect(() => () => finishFullscreenAiDrag(), [isFullscreen, aiPanelOpen, finishFullscreenAiDrag])
 
   useEffect(() => {
     if (isFullscreen) {
@@ -448,6 +473,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
   useEffect(() => {
     if (!isFullscreen) return
     const handleResize = () => {
+      finishFullscreenAiDrag()
       const { fullscreenAiSize: savedSize, fullscreenAiPosition: savedPosition } = useAppStore.getState()
       const size = clampFullscreenAiSize(
         savedSize?.width ?? fullscreenAiSizeRef.current.width,
@@ -465,9 +491,10 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     }
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
-  }, [isFullscreen])
+  }, [isFullscreen, finishFullscreenAiDrag])
 
   const handleFullscreenAiDragStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (fullscreenAiDragRef.current || fullscreenAiResizeRef.current) return
     e.preventDefault()
     e.currentTarget.setPointerCapture(e.pointerId)
     fullscreenAiDragRef.current = {
@@ -479,6 +506,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
       latestPosition: fullscreenAiPositionRef.current,
       dragged: false,
     }
+    if (fullscreenAiPanelRef.current) fullscreenAiPanelRef.current.style.willChange = 'translate'
     document.body.style.userSelect = 'none'
   }, [])
 
@@ -495,20 +523,27 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     )
     drag.latestPosition = position
     fullscreenAiPositionRef.current = position
-    setFullscreenAiPosition(position)
+    if (fullscreenAiDragFrameRef.current === null) {
+      fullscreenAiDragFrameRef.current = requestAnimationFrame(() => {
+        fullscreenAiDragFrameRef.current = null
+        const current = fullscreenAiDragRef.current
+        const panel = fullscreenAiPanelRef.current
+        if (!current || !panel) return
+        // 独立 translate 不覆盖小窗开关使用的 transform 动画。
+        panel.style.translate = `${current.latestPosition.x - current.originX}px ${current.latestPosition.y - current.originY}px`
+      })
+    }
   }, [])
 
   const handleFullscreenAiDragEnd = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const drag = fullscreenAiDragRef.current
-    if (drag?.pointerId === e.pointerId) {
-      fullscreenAiDragRef.current = null
-      document.body.style.userSelect = ''
-      persistFullscreenAiPosition(drag.latestPosition)
+    if (drag && drag.pointerId === e.pointerId) {
+      finishFullscreenAiDrag()
       if (e.currentTarget.hasPointerCapture(e.pointerId)) {
         e.currentTarget.releasePointerCapture(e.pointerId)
       }
     }
-  }, [persistFullscreenAiPosition])
+  }, [finishFullscreenAiDrag])
 
   const handleFullscreenAiResizeStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -786,6 +821,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
           data-fullscreen-ai-panel="true"
           aria-hidden={!aiPanelOpen}
           ref={fullscreenAiPanelRef}
+          onLostPointerCapture={handleFullscreenAiDragEnd}
           className={`gm-layout-ai-panel gm-layout-ai-panel--fullscreen fixed z-[45] flex flex-col overflow-hidden rounded-2xl border border-gm-border bg-gm-surface shadow-lg ${aiPanelOpen ? '' : 'gm-layout-ai-panel--closed'}`}
           style={{
             left: fullscreenAiPosition.x,
