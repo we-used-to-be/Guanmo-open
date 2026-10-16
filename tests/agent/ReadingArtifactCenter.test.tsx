@@ -45,7 +45,7 @@ vi.mock('@/services/agent/artifactCommands', async (importOriginal) => ({
 import { ReadingArtifactCenter } from '@/components/reading-artifacts/ReadingArtifactCenter'
 import { useReadingArtifactsStore } from '@/stores/readingArtifactsStore'
 import { useReadingMarksStore } from '@/stores/readingMarksStore'
-import { adaptAiReadingArtifact } from '@/services/readingArtifactCenter'
+import { adaptAiReadingArtifact, adaptReadingMark } from '@/services/readingArtifactCenter'
 
 const readingMark: ReadingMark = {
   id: 'mark-1',
@@ -131,6 +131,60 @@ describe('ReadingArtifactCenter', () => {
       selectedId: null,
       anchorStatuses: {},
     })
+  })
+
+  it('serializes note saves and color changes while a write is pending', async () => {
+    let resolve!: (mark: ReadingMark) => void
+    const original = useReadingMarksStore.getState().update
+    const update = vi.fn(() => new Promise<ReadingMark>((done) => { resolve = done }))
+    useReadingMarksStore.setState({ update })
+    try {
+      render(<ReadingArtifactCenter onOpenAiSource={vi.fn()} />)
+      const card = (await screen.findByText('人工批注')).closest('article')!
+      fireEvent.click(within(card).getByRole('button', { name: '编辑批注' }))
+      fireEvent.change(within(card).getByRole('textbox'), { target: { value: '新批注' } })
+      const save = within(card).getByRole('button', { name: '保存' })
+      fireEvent.click(save)
+      fireEvent.click(save)
+      fireEvent.click(within(card).getByRole('button', { name: '改为blue' }))
+      expect(update).toHaveBeenCalledTimes(1)
+      expect(save).toBeDisabled()
+      await act(async () => resolve({ ...readingMark, note: '新批注' }))
+      expect(within(card).queryByRole('textbox')).toBeNull()
+    } finally {
+      useReadingMarksStore.setState({ update: original })
+    }
+  })
+
+  it('refreshes a focused mark after its persisted revision changes', async () => {
+    mocks.loadFocusedArtifact.mockResolvedValue({ item: adaptReadingMark(readingMark) })
+    render(<ReadingArtifactCenter onOpenAiSource={vi.fn()} focusKey="mark:mark-1" />)
+    await screen.findByText('人工批注')
+    mocks.loadFocusedArtifact.mockResolvedValue({ item: adaptReadingMark({ ...readingMark, note: '已保存的新批注' }) })
+    act(() => useReadingMarksStore.setState((state) => ({ dataRevision: state.dataRevision + 1 })))
+    expect(await screen.findByText('已保存的新批注')).toBeInTheDocument()
+    expect(screen.queryByText('人工批注')).toBeNull()
+  })
+
+  it('keeps a failed note draft editable and allows a later retry', async () => {
+    const original = useReadingMarksStore.getState().update
+    const update = vi.fn().mockRejectedValueOnce(new Error('匿名写入失败')).mockResolvedValueOnce(readingMark)
+    useReadingMarksStore.setState({ update })
+    try {
+      render(<ReadingArtifactCenter onOpenAiSource={vi.fn()} />)
+      const card = (await screen.findByText('人工批注')).closest('article')!
+      fireEvent.click(within(card).getByRole('button', { name: '编辑批注' }))
+      fireEvent.change(within(card).getByRole('textbox'), { target: { value: '保留的草稿' } })
+      fireEvent.click(within(card).getByRole('button', { name: '保存' }))
+      await waitFor(() => expect(within(card).getByRole('button', { name: '保存' })).toBeEnabled())
+      expect(within(card).getByRole('textbox')).toHaveValue('保留的草稿')
+      fireEvent.click(within(card).getByRole('button', { name: '保存' }))
+      await waitFor(() => expect(within(card).queryByRole('textbox')).toBeNull())
+      expect(update).toHaveBeenCalledTimes(2)
+      expect(update).toHaveBeenLastCalledWith('mark-1', 'C:/anonymous/A.md', { note: '保留的草稿' })
+    } finally {
+      useReadingMarksStore.setState({ update: original })
+    }
   })
 
   it('keeps card measurement stable while ancestor motion changes its visual bounds', async () => {

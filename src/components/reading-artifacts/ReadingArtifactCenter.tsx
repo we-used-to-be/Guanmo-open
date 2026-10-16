@@ -222,6 +222,7 @@ export function ReadingArtifactCenter({
   const requestSequenceRef = useRef(0)
   const appendRequestRef = useRef<number | null>(null)
   const documentRequestSequenceRef = useRef(0)
+  const pendingMarkWrites = useRef(new Set<string>())
   const searchDebounceRef = useRef<number | null>(null)
   const [expandedAiKey, setExpandedAiKey] = useState<string | null>(null)
   const reducedMotion = useReducedMotion() ?? false
@@ -372,7 +373,7 @@ export function ReadingArtifactCenter({
       .finally(() => {
         if (requestId === requestSequenceRef.current) setFocusLoading(false)
       })
-  }, [focusKey, view, workspaceRoots])
+  }, [focusKey, view, workspaceRoots, marksRevision, artifactsRevision])
 
   const loadDocuments = useCallback(async (append: boolean, quiet = false) => {
     const offset = append ? documentPageRef.current.documents.length : 0
@@ -617,6 +618,22 @@ export function ReadingArtifactCenter({
     return { positioned: positioned.map((entry) => entry.item), other }
   }, [detailContent.sort, detailItems, documentModel, selectedDocument])
 
+  const updateCardMark = useCallback(async (item: ReadingArtifactItem, color?: ReadingMarkColor, note?: string) => {
+    if (pendingMarkWrites.current.has(item.key)) return false
+    pendingMarkWrites.current.add(item.key)
+    try {
+      const path = item.documentRefs[0]?.filePath
+      if (!path) throw new Error('来源文档不可用')
+      await updateMark(item.id, path, { ...(color ? { color } : {}), ...(note !== undefined ? { note } : {}) })
+      return true
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '保存批注失败，请重试')
+      return false
+    } finally {
+      pendingMarkWrites.current.delete(item.key)
+    }
+  }, [updateMark])
+
   const renderCard = (item: ReadingArtifactItem, currentDocument?: ReadingArtifactDocumentRef | null) => (
     <ArtifactCard
       key={item.key}
@@ -630,11 +647,7 @@ export function ReadingArtifactCenter({
       categoryLabels={<ArtifactCategoryLabels categories={organization.categories} entry={organizationByKey.get(item.key)} onSelect={(categoryId) => { setOrganizationFilter({ collection: 'all', categoryId }); if (view === 'focus') onCloseFocus?.(); changeView('recent') }} />}
       onToggleExpand={item.source === 'ai' ? () => setExpandedAiKey((current) => current === item.key ? null : item.key) : undefined}
       onNavigateMark={() => void openReadingMark(item.id)}
-      onUpdateMark={(color, note) => {
-        const path = item.documentRefs[0]?.filePath
-        if (!path) return Promise.reject(new Error('来源文档不可用'))
-        return updateMark(item.id, path, { ...(color ? { color } : {}), ...(note !== undefined ? { note } : {}) })
-      }}
+      onUpdateMark={(color, note) => updateCardMark(item, color, note)}
       onDeleteMark={async () => {
         const path = item.documentRefs[0]?.filePath
         if (!path) throw new Error('来源文档不可用')
@@ -962,12 +975,21 @@ function ExpandableText({
   )
 }
 
-function ArtifactCard({ renderActions, categoryLabels, item, availability, anchorStatus, currentDocument, reducedMotion, expanded, onToggleExpand, onNavigateMark, onUpdateMark, onDeleteMark, onDeleteAi, onOpenAiSource }: { renderActions: (remove: () => void) => React.ReactNode; categoryLabels: React.ReactNode; item: ReadingArtifactItem; availability: Record<string, DocumentAvailability>; anchorStatus?: SourceAnchorStatus; currentDocument?: ReadingArtifactDocumentRef | null; reducedMotion: boolean; expanded: boolean; onToggleExpand?: () => void; onNavigateMark: () => void; onUpdateMark: (color?: ReadingMarkColor, note?: string) => Promise<unknown>; onDeleteMark: () => Promise<void>; onDeleteAi: () => Promise<void>; onOpenAiSource: (ref: ReadingArtifactDocumentRef, location?: ReadingArtifactLocation) => void | Promise<void> }) {
+function ArtifactCard({ renderActions, categoryLabels, item, availability, anchorStatus, currentDocument, reducedMotion, expanded, onToggleExpand, onNavigateMark, onUpdateMark: updateMark, onDeleteMark, onDeleteAi, onOpenAiSource }: { renderActions: (remove: () => void) => React.ReactNode; categoryLabels: React.ReactNode; item: ReadingArtifactItem; availability: Record<string, DocumentAvailability>; anchorStatus?: SourceAnchorStatus; currentDocument?: ReadingArtifactDocumentRef | null; reducedMotion: boolean; expanded: boolean; onToggleExpand?: () => void; onNavigateMark: () => void; onUpdateMark: (color?: ReadingMarkColor, note?: string) => Promise<boolean>; onDeleteMark: () => Promise<void>; onDeleteAi: () => Promise<void>; onOpenAiSource: (ref: ReadingArtifactDocumentRef, location?: ReadingArtifactLocation) => void | Promise<void> }) {
   const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [note, setNote] = useState(item.content ?? '')
   const [contentOverflow, setContentOverflow] = useState<Record<string, boolean>>({})
   const [manualExpanded, setManualExpanded] = useState(false)
   const [questionExpanded, setQuestionExpanded] = useState(false)
+  const onUpdateMark = useCallback(async (color?: ReadingMarkColor, note?: string) => {
+    setSaving(true)
+    try {
+      return await updateMark(color, note)
+    } finally {
+      setSaving(false)
+    }
+  }, [updateMark])
   const isUser = item.source === 'user'
   const refs = item.documentRefs
   const webReferences = item.references?.filter((reference) => reference.kind === 'web') ?? []
@@ -1002,11 +1024,11 @@ function ArtifactCard({ renderActions, categoryLabels, item, availability, ancho
         <div className="flex items-center gap-2 border-b border-gm-border-subtle/80 pb-2.5"><span className={`h-2.5 w-2.5 rounded-full ${COLOR_STYLES[color]}`} /><span className="text-caption font-bold text-gm-text-secondary">{TYPE_LABELS[item.type]}</span><span className="ml-auto text-micro text-gm-text-tertiary">{new Date(item.createdAt).toLocaleDateString('zh-CN')}</span>{renderActions(remove)}</div>
         {(item.quote || editing || item.content) && <div id={contentId} className="mt-3 select-text space-y-3">
           {item.quote && <div className="relative pl-3.5"><span className={`absolute inset-y-1 left-0 w-1 rounded-full ${COLOR_RAIL_STYLES[color]}`} /><ExpandableText text={`“${item.quote}”`} lines={item.type === 'annotation' ? 3 : 6} expanded={contentExpanded || editing} reducedMotion={reducedMotion} onOverflowChange={(value) => updateContentOverflow('quote', value)} className="whitespace-pre-wrap break-words font-serif text-body leading-[1.65] text-gm-text" /></div>}
-          {item.type === 'annotation' && <section className="rounded-xl border px-3 py-2.5" style={COLOR_NOTE_STYLES[color]}><h4 className="mb-1.5 text-micro font-bold tracking-wide text-gm-primary">我的批注</h4>{editing ? <div><textarea value={note} onChange={(event) => setNote(event.target.value)} className="min-h-24 w-full resize-y rounded-lg border border-gm-border-subtle bg-gm-canvas/65 p-2.5 text-caption leading-relaxed text-gm-text outline-none focus:border-gm-primary" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }} /><div className="mt-2 flex justify-end gap-2"><button type="button" onClick={() => { setNote(item.content ?? ''); setEditing(false) }} className="rounded-md px-2 py-1 text-micro text-gm-text-tertiary hover:bg-gm-surface-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gm-primary/40">取消</button><button type="button" onClick={() => void onUpdateMark(undefined, note).then(() => setEditing(false))} className="rounded-md px-2 py-1 text-micro font-bold text-gm-primary hover:bg-gm-surface-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gm-primary/40">保存</button></div></div> : item.content && <ExpandableText text={item.content} lines={5} expanded={contentExpanded} reducedMotion={reducedMotion} onOverflowChange={(value) => updateContentOverflow('note', value)} className="whitespace-pre-wrap break-words text-caption leading-[1.65] text-gm-text" />}</section>}
+          {item.type === 'annotation' && <section className="rounded-xl border px-3 py-2.5" style={COLOR_NOTE_STYLES[color]}><h4 className="mb-1.5 text-micro font-bold tracking-wide text-gm-primary">我的批注</h4>{editing ? <div><textarea disabled={saving} value={note} onChange={(event) => setNote(event.target.value)} className="min-h-24 w-full resize-y rounded-lg border border-gm-border-subtle bg-gm-canvas/65 p-2.5 text-caption leading-relaxed text-gm-text outline-none focus:border-gm-primary" style={{ fontSize: 'var(--gm-ai-chat-font-size)' }} /><div className="mt-2 flex justify-end gap-2"><button type="button" disabled={saving} onClick={() => { setNote(item.content ?? ''); setEditing(false) }} className="rounded-md px-2 py-1 text-micro text-gm-text-tertiary hover:bg-gm-surface-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gm-primary/40">取消</button><button type="button" disabled={saving} onClick={() => void onUpdateMark(undefined, note).then((saved) => { if (saved) setEditing(false) })} className="rounded-md px-2 py-1 text-micro font-bold text-gm-primary hover:bg-gm-surface-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gm-primary/40">保存</button></div></div> : item.content && <ExpandableText text={item.content} lines={5} expanded={contentExpanded} reducedMotion={reducedMotion} onOverflowChange={(value) => updateContentOverflow('note', value)} className="whitespace-pre-wrap break-words text-caption leading-[1.65] text-gm-text" />}</section>}
         </div>}
         {canExpand && !editing && <button type="button" aria-expanded={contentExpanded} aria-controls={contentId} onClick={() => { if (isUser) setManualExpanded((value) => !value); else onToggleExpand?.() }} className="mt-2 inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-micro font-bold text-gm-primary outline-none transition-colors hover:bg-gm-primary/5 focus-visible:ring-1 focus-visible:ring-gm-primary/40 active:scale-[0.98]"><span>{contentExpanded ? '收起' : '展开全文'}</span><ChevronDown size={14} strokeWidth={1.8} className={`transition-transform duration-200 ${contentExpanded ? 'rotate-180' : ''}`} aria-hidden="true" /></button>}
         {refs.length > 0 && <div className="mt-3 flex flex-wrap gap-1.5">{refs.map((ref) => <button key={ref.documentId} type="button" disabled={!ref.filePath || availability[ref.documentId] === 'unavailable'} onClick={onNavigateMark} className="flex min-w-0 max-w-full items-center gap-2 rounded-xl border border-gm-border-subtle/80 bg-gm-canvas/45 px-2.5 py-2 text-left text-micro text-gm-text-secondary transition-colors hover:border-gm-primary/35 hover:text-gm-primary disabled:cursor-not-allowed disabled:text-gm-warning"><FileText size={15} strokeWidth={1.7} aria-hidden="true" /><span className="truncate">{availability[ref.documentId] === 'unavailable' ? `${ref.fileName} · 来源文档不可用` : `${ref.fileName} · 查看原文`}</span><ChevronRight size={14} strokeWidth={1.8} className="ml-auto shrink-0 text-gm-text-tertiary" aria-hidden="true" /></button>)}</div>}
-        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-gm-border-subtle/80 pt-3">{(['yellow', 'green', 'blue', 'pink'] as const).map((nextColor) => <button key={nextColor} type="button" aria-label={`改为${nextColor}`} onClick={() => void onUpdateMark(nextColor)} className={`h-4 w-4 rounded-full outline-none transition-transform hover:scale-110 focus-visible:ring-2 focus-visible:ring-gm-primary/50 focus-visible:ring-offset-2 ${COLOR_STYLES[nextColor]} ${color === nextColor ? 'ring-2 ring-gm-primary ring-offset-1' : ''}`} />)}{item.type === 'annotation' && <button type="button" onClick={() => setEditing(true)} className="ml-1 rounded-md px-2 py-1 text-micro font-bold text-gm-primary hover:bg-gm-primary/5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gm-primary/40">编辑批注</button>}<div className="ml-auto">{categoryLabels}</div></div>
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-gm-border-subtle/80 pt-3">{(['yellow', 'green', 'blue', 'pink'] as const).map((nextColor) => <button key={nextColor} type="button" aria-label={`改为${nextColor}`} disabled={saving} onClick={() => void onUpdateMark(nextColor)} className={`h-4 w-4 rounded-full outline-none transition-transform hover:scale-110 focus-visible:ring-2 focus-visible:ring-gm-primary/50 focus-visible:ring-offset-2 ${COLOR_STYLES[nextColor]} ${color === nextColor ? 'ring-2 ring-gm-primary ring-offset-1' : ''}`} />)}{item.type === 'annotation' && <button type="button" disabled={saving} onClick={() => setEditing(true)} className="ml-1 rounded-md px-2 py-1 text-micro font-bold text-gm-primary hover:bg-gm-primary/5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-gm-primary/40">编辑批注</button>}<div className="ml-auto">{categoryLabels}</div></div>
       </div>
     ) : (
       <>
