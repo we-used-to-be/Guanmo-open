@@ -187,6 +187,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const [reasoningMode, setReasoningMode] = useState<'off' | 'on'>('off')
   const [resetManualToggle, setResetManualToggle] = useState(0)
   const [panelView, setPanelView] = useState<AiPanelView>('chat')
+  const [inputFocusRequest, setInputFocusRequest] = useState(0)
   const [artifactsVisited, setArtifactsVisited] = useState(false)
   useEffect(() => { if (panelView === 'artifacts') setArtifactsVisited(true) }, [panelView])
   useEffect(() => { reportAiPanelView(panelView) }, [panelView])
@@ -300,10 +301,11 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   }, [databaseEnabled, panelView])
 
   useEffect(() => {
-    const applyNavigation = (navigation: { mode: 'open' | 'toggle'; view: AiPanelView; artifactKey?: string }) => {
+    const applyNavigation = (navigation: { mode: 'open' | 'toggle'; view: AiPanelView; artifactKey?: string; focusInput?: boolean }) => {
       if (navigation.view === 'artifacts' && !databaseEnabled) return
       if (navigation.mode === 'open') {
         setPanelView(navigation.view)
+        if (navigation.view === 'chat' && navigation.focusInput) setInputFocusRequest((request) => request + 1)
         if (navigation.view === 'artifacts' && navigation.artifactKey) setArtifactFocusKey(navigation.artifactKey)
       } else if (panelView === navigation.view) {
         useAppStore.getState().closeAiPanel()
@@ -1180,6 +1182,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
       {/* Prompt Composer */}
       {panelView === 'chat' && (
         <PromptComposer
+          focusRequest={inputFocusRequest}
           subtleBorder={Boolean(fullscreenDragHandleProps)}
           onSend={handleSend}
           streaming={streaming}

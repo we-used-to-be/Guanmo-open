@@ -11,6 +11,7 @@ import { extractToc, type TocItem } from '@/services/markdownToc'
 import { toggleMarkdownTaskAtLine } from '@/services/markdownTasks'
 import { saveExternalImageForMarkdown, saveImageFileForMarkdown } from '@/services/markdownImages'
 import { toast } from '@/services/toast'
+import { requestOpenAiChat } from '@/services/aiPanelNavigation'
 import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { openFileDialog } from '@/hooks/useTauri'
 import { eventMarker } from '@/services/eventMarker'
@@ -2022,7 +2023,10 @@ function WelcomeScreen() {
           onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', ctrlKey: true, bubbles: true }))}
           icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" /></svg>}
         />
-        <ActionItem label="AI 对话" shortcut="Ctrl+J" onClick={toggleAiPanel}
+        <ActionItem label="AI 对话" shortcut="Ctrl+J" onClick={() => {
+          if (!useAppStore.getState().aiPanelOpen) toggleAiPanel()
+          requestOpenAiChat(true)
+        }}
           icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" /></svg>}
         />
       </div>

@@ -7,6 +7,7 @@ import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { exportMarkdownAsHtml } from '@/services/markdownExport'
 import { scheduleMarkdownDocumentIndex } from '@/services/rag/indexer'
 import { SHORTCUTS } from '@/services/shortcuts'
+import { requestOpenAiChat } from '@/services/aiPanelNavigation'
 import { isSameFilePath } from '@/services/pathIdentity'
 import { toast } from '@/services/toast'
 import { saveActiveDocument } from '@/services/documentSave'
@@ -168,12 +169,14 @@ export function CommandPalette({ open, onClose, mode = 'commands' }: CommandPale
     },
     {
       id: 'toggle-ai',
-      label: '切换 AI 面板',
+      label: '打开 AI 并聚焦输入框',
       shortcut: shortcut('toggle-ai'),
       category: '视图',
       action: () => {
-        useAppStore.getState().toggleAiPanel()
+        const app = useAppStore.getState()
+        if (!app.aiPanelOpen) app.toggleAiPanel()
         onClose()
+        requestOpenAiChat(true)
       },
     },
   ]

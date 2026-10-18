@@ -163,6 +163,50 @@ async function boot() {
 describe('Core Smoke（真实 Desktop React Tree，隔离原生 I/O）', () => {
   it('空会话启动并完成主界面首次渲染', async () => { await boot() })
 
+  it('Ctrl+J 始终打开 AI 并聚焦草稿，Ctrl+Shift+J 独立打开阅读成果', async () => {
+    const user = userEvent.setup()
+    await boot()
+    const pressShortcut = (shiftKey = false, metaKey = false) => {
+      fireEvent.keyDown(window, { key: 'j', code: 'KeyJ', ctrlKey: !metaKey, metaKey, shiftKey })
+    }
+    const expectChatFocused = () => {
+      expect(useAppStore.getState().aiPanelOpen).toBe(true)
+      expect(screen.getByPlaceholderText('输入消息... (Enter 发送)')).toHaveFocus()
+    }
+    pressShortcut()
+    await checkpoint(expectChatFocused)
+    await user.type(screen.getByPlaceholderText('输入消息... (Enter 发送)'), '保留问题草稿')
+    // AI 已打开时，快捷键应重新聚焦，而不是关闭右栏。
+    await user.click(screen.getByTitle('设置'))
+    fireEvent.keyDown(document, { key: 'Escape' })
+    pressShortcut()
+    await checkpoint(expectChatFocused)
+    pressShortcut(true)
+    await checkpoint(() => expect(screen.getByPlaceholderText('搜索阅读成果')).toBeInTheDocument())
+    pressShortcut(true)
+    await checkpoint(() => expect(useAppStore.getState().aiPanelOpen).toBe(true))
+    await user.click(screen.getByRole('button', { name: '关闭面板' }))
+    await checkpoint(() => expect(useAppStore.getState().aiPanelOpen).toBe(false))
+    pressShortcut()
+    await checkpoint(expectChatFocused)
+    expect(screen.getByPlaceholderText('输入消息... (Enter 发送)')).toHaveValue('保留问题草稿')
+    pressShortcut(true)
+    await checkpoint(() => expect(screen.getByPlaceholderText('搜索阅读成果')).toBeInTheDocument())
+    // 已打开的成果视图与 macOS Meta 键入口。
+    pressShortcut(false, true)
+    await checkpoint(expectChatFocused)
+    await user.click(screen.getByTitle('进入全屏 F11'))
+    await checkpoint(() => expect(useAppStore.getState().isFullscreen).toBe(true))
+    pressShortcut(true)
+    await checkpoint(() => expect(screen.getByPlaceholderText('搜索阅读成果')).toBeInTheDocument())
+    pressShortcut()
+    await checkpoint(expectChatFocused)
+    pressShortcut()
+    await checkpoint(expectChatFocused)
+    await user.click(screen.getByTitle('退出全屏'))
+    await checkpoint(() => expect(useAppStore.getState().isFullscreen).toBe(false))
+  }, 30000)
+
   it('Markdown 编辑/预览/分屏/全屏、侧栏、AI/阅读成果、设置/知识库和 Tab 往返', async () => {
     const user = userEvent.setup()
     await boot()

@@ -6,6 +6,7 @@ import { addFileContextTag, addFolderContextTag } from '@/services/aiContext'
 import { ManualToolToggle } from './ManualToolToggle'
 
 interface PromptComposerProps {
+  focusRequest?: number
   subtleBorder?: boolean
   onSend: (source?: HTMLElement) => void
   streaming: boolean
@@ -14,7 +15,7 @@ interface PromptComposerProps {
   resetManualToggle?: number
 }
 
-export function PromptComposer({ onSend, streaming, onCancel, onReasoningModeChange, resetManualToggle, subtleBorder = false }: PromptComposerProps) {
+export function PromptComposer({ onSend, streaming, onCancel, onReasoningModeChange, resetManualToggle, subtleBorder = false, focusRequest = 0 }: PromptComposerProps) {
   const draftInput = useChatStore((s) => s.draftInput)
   const setDraftInput = useChatStore((s) => s.setDraftInput)
   const contextTags = useChatStore((s) => s.contextTags)
@@ -29,7 +30,7 @@ export function PromptComposer({ onSend, streaming, onCancel, onReasoningModeCha
     if (!streaming) {
       textareaRef.current?.focus()
     }
-  }, [streaming])
+  }, [streaming, focusRequest])
 
   useEffect(() => {
     if (contextTags.length > previousContextTagCountRef.current && !streaming) {

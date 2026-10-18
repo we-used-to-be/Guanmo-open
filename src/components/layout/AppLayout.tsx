@@ -723,7 +723,15 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
       }
       toggleSidebar()
     },
-    'CTRL+J': () => toggleAiPanel(),
+    'CTRL+J': () => {
+      if (!useAppStore.getState().aiPanelOpen) toggleAiPanel()
+      requestOpenAiChat(true)
+    },
+    'CTRL+SHIFT+J': () => {
+      if (!getRuntimeCapabilities().database) return
+      if (!useAppStore.getState().aiPanelOpen) toggleAiPanel()
+      requestOpenReadingArtifacts()
+    },
     'CTRL+N': () => handleNewFile(),
     'CTRL+O': () => void handleOpenFile(),
     'CTRL+S': () => handleSaveFile(),

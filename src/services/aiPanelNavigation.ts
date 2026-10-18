@@ -15,6 +15,7 @@ export type AiPanelNavigation = {
   mode: 'open' | 'toggle'
   view: AiPanelView
   artifactKey?: string
+  focusInput?: boolean
 }
 
 let pendingPanelNavigation: AiPanelNavigation | null = null
@@ -36,8 +37,8 @@ export function consumePendingPanelNavigation() {
   return navigation
 }
 
-export function requestOpenAiChat() {
-  requestPanelNavigation(OPEN_AI_CHAT_EVENT, { mode: 'open', view: 'chat' })
+export function requestOpenAiChat(focusInput = false) {
+  requestPanelNavigation(OPEN_AI_CHAT_EVENT, { mode: 'open', view: 'chat', focusInput })
 }
 
 export function requestToggleAiChat() {
