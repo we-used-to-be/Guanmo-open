@@ -77,6 +77,7 @@ import { getRuntimeCapabilities } from '@/services/runtimeCapabilities'
 import { createMorphingSurfaceMotion } from '@/components/common/useMorphingMotion'
 
 type AiPanelProps = {
+  productTourActive?: boolean
   fullscreenDragHandleProps?: {
     onPointerDown: PointerEventHandler<HTMLDivElement>
     onPointerMove: PointerEventHandler<HTMLDivElement>
@@ -145,7 +146,7 @@ export function buildUserSelectionMap(messages: ChatMessage[]): Map<string, Orig
     .map((message) => [message.id!, buildOriginalSelections(message.tags)]))
 }
 
-export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
+export function AiPanel({ fullscreenDragHandleProps, productTourActive = false }: AiPanelProps = {}) {
   const toggleAiPanel = useAppStore((s) => s.toggleAiPanel)
   const aiPanelOpen = useAppStore((s) => s.aiPanelOpen)
   const { messages, streaming, error, timeline, sendMessage, cancelStream } = useAiChat()
@@ -944,11 +945,13 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
           fullscreenDragHandleProps ? 'absolute inset-x-0 top-0 z-30 h-6 cursor-grab touch-none bg-transparent px-3 active:cursor-grabbing' : 'relative z-10 h-10 border-b border-gm-border-subtle bg-gm-surface px-4'
         }`}
         aria-label={fullscreenDragHandleProps ? '拖动 AI 助手' : undefined}
+        data-fullscreen-ai-drag-handle={fullscreenDragHandleProps ? '' : undefined}
         {...fullscreenDragHandleProps}
       >
         <div className={`flex min-w-0 items-center gap-2 ${fullscreenDragHandleProps ? 'flex-1 justify-center' : ''}`}>
           {fullscreenDragHandleProps ? (
             <FullscreenPanelNavigation
+              productTourActive={productTourActive}
               active={aiPanelOpen}
               view={panelView}
               databaseEnabled={databaseEnabled}

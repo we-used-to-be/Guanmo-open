@@ -77,8 +77,9 @@ export function StatusBar() {
 
       <div className="flex items-center gap-1">
         <StatusAction
+          dataTour="reading-reminder-entry"
           aria-label={databaseEnabled ? '打开阅读提醒' : '阅读提醒仅桌面版可用'}
-          title={databaseEnabled ? '阅读提醒（功能开发中）' : '阅读提醒仅桌面版可用'}
+          title={databaseEnabled ? '阅读提醒' : '阅读提醒仅桌面版可用'}
           disabled={!databaseEnabled}
           onClick={() => {
             if (!databaseEnabled) return

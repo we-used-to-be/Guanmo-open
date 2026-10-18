@@ -2,15 +2,17 @@ import { useEffect, useRef, useState } from 'react'
 import { motion } from 'motion/react'
 import { useMorphingMotion } from '@/components/common/useMorphingMotion'
 import type { AiPanelView } from '@/services/aiPanelNavigation'
+import { FullscreenNavigationHint } from './FullscreenNavigationHint'
 
 interface Props {
   active: boolean
   view: AiPanelView
   databaseEnabled: boolean
+  productTourActive?: boolean
   onSelect: (view: AiPanelView) => void
 }
 
-export function FullscreenPanelNavigation({ active, view, databaseEnabled, onSelect }: Props) {
+export function FullscreenPanelNavigation({ active, view, databaseEnabled, productTourActive = false, onSelect }: Props) {
   const [expanded, setExpanded] = useState(false)
   const [hovered, setHovered] = useState(false)
   const [focused, setFocused] = useState(false)
@@ -81,8 +83,14 @@ export function FullscreenPanelNavigation({ active, view, databaseEnabled, onSel
       ref={rootRef}
       className="pointer-events-none absolute left-1/2 top-1 w-[calc(100%_-_24px)] max-w-[312px] -translate-x-1/2 flex items-start justify-center"
       onPointerDown={(event) => event.stopPropagation()}
-      onPointerEnter={() => setHovered(true)}
-      onPointerLeave={() => { delayRef.current = 2000; setHovered(false) }}
+      onPointerEnter={(event) => {
+        if (event.currentTarget.contains(event.target as Node)) setHovered(true)
+      }}
+      onPointerLeave={(event) => {
+        if (!event.currentTarget.contains(event.target as Node)) return
+        delayRef.current = 2000
+        setHovered(false)
+      }}
       onKeyDown={(event) => {
         if (event.key !== 'Escape' || !expanded) return
         event.preventDefault()
@@ -105,6 +113,7 @@ export function FullscreenPanelNavigation({ active, view, databaseEnabled, onSel
           className="pointer-events-none absolute inset-0 rounded-[inherit] border border-gm-border bg-gm-surface"
         />
         <motion.button
+          data-product-tour="fullscreen-page-switcher"
           ref={triggerRef}
           type="button"
           aria-label="切换页面"
@@ -153,6 +162,14 @@ export function FullscreenPanelNavigation({ active, view, databaseEnabled, onSel
           ))}
         </motion.nav>
       </motion.div>
+      <FullscreenNavigationHint
+        active={active}
+        suppressed={productTourActive}
+        navigationExpanded={expanded}
+        anchorRef={triggerRef}
+        databaseEnabled={databaseEnabled}
+        onDismiss={() => triggerRef.current?.focus()}
+      />
     </div>
   )
 }

@@ -21,15 +21,12 @@
   cursor: default;
 }
 
-.gm-product-tour__spotlight {
+.gm-product-tour__focus-mask {
   position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
-  border: 1px solid var(--gm-tour-focus);
-  border-radius: 10px;
-  box-shadow:
-    0 0 0 100vmax var(--gm-tour-scrim),
-    0 0 0 3px var(--gm-tour-focus-soft);
-  transition: left 180ms ease-out, top 180ms ease-out, width 180ms ease-out, height 180ms ease-out;
 }
 
 .gm-product-tour__connector {
@@ -79,6 +76,17 @@
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.02em;
+}
+
+.gm-product-tour__card.gm-product-tour__card--compact {
+  width: min(280px, calc(100vw - 32px));
+  background: var(--gm-surface-elevated);
+  border-color: var(--gm-border);
+}
+
+.gm-product-tour__card--compact #product-tour-description {
+  font-size: 12px;
+  line-height: 20px;
 }
 
 .gm-product-tour__progress {
@@ -174,7 +182,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .gm-product-tour__spotlight,
+  .gm-product-tour__focus-mask,
   .gm-product-tour__card,
   .gm-product-tour__topic,
   .gm-product-tour__action {

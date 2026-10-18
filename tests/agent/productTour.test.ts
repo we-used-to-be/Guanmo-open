@@ -45,6 +45,11 @@ describe('product tour', () => {
     expect(getProductTourSteps('ai', true).map((step) => step.id)).toEqual(['ai-entry', 'ai-chat', 'ai-model'])
     expect(getProductTourSteps('overview', false).find((step) => step.id === 'reading-artifacts')?.content).toContain('右下角')
     expect(getProductTourSteps('annotations', false).find((step) => step.id === 'artifact-entry')?.content).toContain('右下角')
+    expect(getProductTourSteps('overview', false).find((step) => step.id === 'reading-artifacts')?.target).toBe('[data-product-tour="reading-artifact-entry"]')
+    const reminder = getProductTourSteps('annotations', false).find((step) => step.id === 'reading-reminders')
+    expect(reminder).toMatchObject({ target: '[data-product-tour="reading-reminder-entry"]', surface: 'reminders', desktopOnly: true })
+    expect(fullscreenSteps[1].content).toContain('顶部三点')
+    expect(fullscreenSteps[1].content).toContain('阅读提醒')
     expect(getProductTourSteps('appearance', false)[2].target).toBe('[data-product-tour="settings-appearance"]')
   })
 

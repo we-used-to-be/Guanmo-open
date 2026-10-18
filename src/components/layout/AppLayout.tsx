@@ -389,11 +389,12 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
     }
     const sidebar = tourSurface === 'sidebar'
     if (app.sidebarCollapsed === sidebar) app.toggleSidebar()
-    const ai = tourSurface === 'ai-chat' || tourSurface === 'artifacts'
+    const ai = tourSurface === 'ai-chat' || tourSurface === 'artifacts' || tourSurface === 'reminders'
     if (ai && !app.aiPanelOpen) app.toggleAiPanel()
     if (!ai && app.aiPanelOpen) app.closeAiPanel()
     if (tourSurface === 'ai-chat') requestOpenAiChat()
     if (tourSurface === 'artifacts') requestOpenReadingArtifacts()
+    if (tourSurface === 'reminders') requestOpenReadingReminders()
   }, [productTourOpen, tourSurface])
 
   useEffect(() => {
@@ -843,6 +844,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
             <>
               <div ref={fullscreenAiContentRef} className="min-h-0 min-w-0 flex-1">
                 <Suspense fallback={<AiPanelFallback />}><AiPanel
+                  productTourActive={productTourOpen}
                   fullscreenDragHandleProps={{
                     onPointerDown: handleFullscreenAiDragStart,
                     onPointerMove: handleFullscreenAiDragMove,
@@ -853,6 +855,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
               </div>
               <div
                 aria-label="调整 AI 助手窗口大小"
+                data-fullscreen-ai-resize-handle=""
                 className="absolute bottom-0 right-0 z-30 flex h-5 w-5 cursor-grab items-center justify-center text-gm-text-secondary touch-none hover:text-gm-primary active:cursor-grabbing"
                 onPointerDown={handleFullscreenAiResizeStart}
                 onPointerMove={handleFullscreenAiResizeMove}

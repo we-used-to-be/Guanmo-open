@@ -1,10 +1,11 @@
 export type ProductTourPlacement = 'top' | 'right' | 'bottom' | 'left'
 export type ProductTourTopic = 'overview' | 'files' | 'fullscreen' | 'annotations' | 'ai' | 'appearance'
-export type ProductTourSurface = 'collapsed' | 'sidebar' | 'preview' | 'fullscreen' | 'ai-chat' | 'artifacts' | 'settings-ai' | 'settings-general'
+export type ProductTourSurface = 'collapsed' | 'sidebar' | 'preview' | 'fullscreen' | 'ai-chat' | 'artifacts' | 'reminders' | 'settings-ai' | 'settings-general'
 
 export interface ProductTourStep {
   id: string
   target: string | string[]
+  targetExclude?: string
   title: string
   content: string
   placement: ProductTourPlacement
@@ -15,8 +16,8 @@ export interface ProductTourStep {
 
 export const PRODUCT_TOUR_TOPICS: Array<{ id: ProductTourTopic; title: string; description: string; desktopOnly?: boolean }> = [
   { id: 'files', title: '文件与阅读', description: '文件、侧栏、阅读模式和预览' },
-  { id: 'fullscreen', title: '全屏模式', description: '控制条、AI 小窗、正文边距和文件切换' },
-  { id: 'annotations', title: '批注与阅读成果', description: '高亮、文字批注与成果管理', desktopOnly: true },
+  { id: 'fullscreen', title: '全屏模式', description: '控制条、小窗切页、正文边距和文件切换' },
+  { id: 'annotations', title: '批注与阅读成果', description: '高亮、文字批注、成果管理与阅读提醒', desktopOnly: true },
   { id: 'ai', title: 'AI 助手', description: '对话、选区与模型设置' },
   { id: 'appearance', title: '主题与个性设置', description: '主题选择与自定义' },
 ]
@@ -28,8 +29,8 @@ const steps: Record<ProductTourTopic, ProductTourStep[]> = {
     { id: 'mode-switcher', target: '[data-product-tour="mode-switcher"]', title: '选择阅读方式', content: '按任务切换编辑、预览、分屏和对照阅读。切换模式不会改动文档正文。', placement: 'bottom', surface: 'preview' },
     { id: 'preview-edit', target: ['[data-product-tour="preview-area"] :is(h1,h2,p)', '[data-product-tour="preview-area"]'], title: '在预览中阅读和编辑', content: '预览里可阅读 Markdown；按 Alt + 左键可以定位并编辑对应内容。', placement: 'right', surface: 'preview' },
     { id: 'fullscreen', target: '[data-product-tour="fullscreen"]', title: '全屏专注阅读', content: '点击这里进入全屏模式，隐藏多余界面以专注阅读；也可以使用 F11 切换。', placement: 'bottom', surface: 'preview' },
-    { id: 'ai-assistant', target: '[data-product-tour="ai-panel"]', title: '让 AI 协助阅读', content: '在右侧提问、解释或处理内容。也可以选中文本后通过右键菜单把选区带入对话。', placement: 'left', surface: 'ai-chat' },
-    { id: 'reading-artifacts', target: '[data-product-tour="reading-artifact-center"]', title: '积累阅读成果', content: '桌面版会把人工高亮、批注和保存的 AI 成果汇集在这里；可按文档浏览、搜索和筛选。点击软件右下角的阅读成果入口，即可打开阅读成果面板。', placement: 'left', surface: 'artifacts', desktopOnly: true },
+    { id: 'ai-assistant', target: '[data-product-tour="ai-assistant"]', title: '让 AI 协助阅读', content: '点击右下角「AI」打开右侧助手，也可使用 Ctrl + J。选中文本后，通过右键菜单把选区带入对话。右下角的独立入口可切换侧栏页面，再次点击当前页面入口可收起侧栏。', placement: 'top', surface: 'ai-chat' },
+    { id: 'reading-artifacts', target: '[data-product-tour="reading-artifact-entry"]', title: '积累阅读成果', content: '点击右下角书本图标，查看高亮、批注和保存的 AI 成果，可按文档浏览、搜索和筛选；旁边的铃铛图标可打开阅读提醒。它们与 AI 助手共用右侧面板，通过底部入口切换。', placement: 'top', surface: 'artifacts', desktopOnly: true },
     { id: 'theme', target: '[data-product-tour="settings-appearance"]', title: '调整外观', content: '在通用设置的外观区域统一调整主题、光标、AI 头像、字号和全屏动效。桌面版还可通过提示词生成主题 JSON 并导入自定义主题。', placement: 'top', surface: 'settings-general' },
   ],
   files: [
@@ -41,20 +42,21 @@ const steps: Record<ProductTourTopic, ProductTourStep[]> = {
   ],
   fullscreen: [
     { id: 'fullscreen-controls', target: '[data-fullscreen-control-bar]', title: '隐藏式顶部控制条', content: '将鼠标移到屏幕顶部，控制条就会出现。这里可以切换阅读模式、打开 AI 助手、调整边距与主题，也可以退出全屏。', placement: 'bottom', surface: 'fullscreen' },
-    { id: 'fullscreen-ai', target: '[data-fullscreen-ai-panel]', title: '随用随开的 AI 助手', content: '点击控制条中的「AI」打开小窗。拖动小窗顶部可调整位置，拖动右下角可调整大小；点击小窗外部即可关闭，即用即走。', placement: 'left', surface: 'fullscreen' },
+    { id: 'fullscreen-ai', target: ['[data-product-tour="fullscreen-page-switcher"]', '[data-fullscreen-ai-panel]'], title: '一个小窗，切换多个页面', content: '点击控制条中的「AI」打开小窗，再点击顶部三点展开页面导航；桌面版可切换 AI 助手、阅读成果和阅读提醒。导航空闲两秒后自动收起，悬停或键盘聚焦时保持展开。拖动小窗顶部除三点按钮外的区域可移动小窗，拖动右下角可缩放；点击小窗外部即可关闭。', placement: 'left', surface: 'fullscreen' },
     { id: 'fullscreen-padding', target: '#fullscreen-padding-card', title: '调整正文边距', content: '点击「边距」，拖动滑块调整正文左右留白，选择更适合自己的阅读宽度。', placement: 'bottom', surface: 'fullscreen' },
     { id: 'fullscreen-files', target: '[data-fullscreen-file-drawer]', title: '在全屏中切换文件', content: '点击「标签 / 文件」查看已打开的标签，并点击标签切换文档；文件侧栏还可从最近文件、收藏和工作区继续打开内容。标签栏右侧的「+」可新建或打开文件。', placement: 'right', surface: 'fullscreen' },
   ],
   annotations: [
     { id: 'mark-selection', target: ['[data-product-tour="preview-area"] :is(h1,h2,p)', '[data-product-tour="preview-area"]'], title: '选中文本，添加高亮', content: '在桌面版已打开的 Markdown 文件预览中选中文字，选择颜色即可保存高亮。下方是只读操作示意，不会写入文件或数据库。', placement: 'right', surface: 'preview', example: 'annotation', desktopOnly: true },
     { id: 'mark-note', target: ['[data-product-tour="preview-area"] :is(h1,h2,p)', '[data-product-tour="preview-area"]'], title: '写下文字批注', content: '在高亮工具栏中进入文字批注并提交。再次点击标记可以查看、修改颜色、编辑内容或删除。', placement: 'right', surface: 'preview', example: 'annotation', desktopOnly: true },
-    { id: 'artifact-entry', target: '[data-product-tour="reading-artifact-center"]', title: '在阅读成果中回顾', content: '阅读成果汇总人工高亮与批注，也收纳你明确保存的 AI 摘要、问题集、AI 解读和阅读笔记。点击软件右下角的阅读成果入口，即可打开阅读成果面板；两类内容有独立标识。', placement: 'left', surface: 'artifacts', desktopOnly: true },
-    { id: 'artifact-find', target: '[data-product-tour="reading-artifact-filters"]', title: '查找并返回原文', content: '切换“最近/按文档”，用搜索和类型筛选缩小范围；打开成果卡片可查看来源并定位原文。', placement: 'left', surface: 'artifacts', desktopOnly: true },
+    { id: 'artifact-entry', target: '[data-product-tour="reading-artifact-entry"]', title: '在阅读成果中回顾', content: '点击右下角书本图标打开阅读成果，汇总人工高亮与批注，以及你明确保存的 AI 摘要、问题集、AI 解读和阅读笔记。侧栏打开时，可通过底部入口切换到 AI 助手或阅读提醒。', placement: 'top', surface: 'artifacts', desktopOnly: true },
+    { id: 'artifact-find', target: '[data-product-tour="reading-artifact-filters"]', title: '查找并返回原文', content: '切换“最近/按文档”，用搜索和筛选缩小范围；打开成果卡片可查看来源并定位原文。', placement: 'left', surface: 'artifacts', desktopOnly: true },
+    { id: 'reading-reminders', target: '[data-product-tour="reading-reminder-entry"]', title: '管理阅读提醒', content: '点击右下角铃铛图标打开阅读提醒，在右侧查看、编辑或取消已有提醒。点击书本图标或「AI」，即可切换回阅读成果或 AI 助手；再次点击铃铛可收起当前面板。', placement: 'top', surface: 'reminders', desktopOnly: true },
   ],
   ai: [
-    { id: 'ai-entry', target: '[data-product-tour="ai-assistant"]', title: '打开 AI 助手', content: '点击软件右下角的 AI 入口，或使用 Ctrl + J 快捷键打开；选中文本后右键快捷提问，也能直接打开并带入上下文。', placement: 'top', surface: 'ai-chat' },
+    { id: 'ai-entry', target: '[data-product-tour="ai-assistant"]', title: '打开 AI 助手', content: '点击右下角「AI」，或使用 Ctrl + J 打开助手。侧栏已显示其他页面时，点击「AI」可切回对话；再次点击当前入口可收起侧栏。选中文本后右键快捷提问，也能打开并带入上下文。', placement: 'top', surface: 'ai-chat' },
     { id: 'ai-chat', target: '[data-product-tour="ai-panel"]', title: '框选文本，一框一问', content: '框选正在阅读的文本，右键选择“添加到上下文”或“解释”等快捷预设，快速解答文档中的疑惑点；也可以在右侧 AI 面板补充问题或继续追问。', placement: 'left', surface: 'ai-chat' },
-    { id: 'ai-save', target: ['[data-product-tour="ai-save"]', '[data-product-tour="ai-panel"]'], title: '保存 AI 阅读成果', content: '对 AI 回复满意后，将鼠标移到回复旁的保存按钮，可保存为摘要、问题集、AI 解读或阅读笔记；之后可从右下角阅读成果入口回顾。', placement: 'left', surface: 'ai-chat', desktopOnly: true },
+    { id: 'ai-save', target: ['[data-product-tour="ai-save"]', '[data-product-tour="ai-panel"]'], title: '保存 AI 阅读成果', content: '对 AI 回复满意后，将鼠标移到回复旁的保存按钮，可保存为摘要、问题集、AI 解读或阅读笔记；之后点击右下角书本图标，切换到阅读成果回顾。', placement: 'left', surface: 'ai-chat', desktopOnly: true },
     { id: 'ai-model', target: '[data-product-tour="ai-settings-content"]', title: '配置 AI 模型', content: '在“AI 模型”设置内容区配置对话服务、联网搜索和相关模型能力。桌面版还提供本地知识库能力；网页端不启用数据库、Embedding 和 RAG。', placement: 'top', surface: 'settings-ai' },
   ],
   appearance: [
