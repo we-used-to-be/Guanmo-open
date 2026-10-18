@@ -154,6 +154,7 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
   const assistantFontSize = useSettingsStore((s) => s.appearance.aiAssistantFontSize)
   const sendMessageAnimationEnabled = useSettingsStore((s) => s.appearance.sendMessageAnimationEnabled)
   const setDraftInput = useChatStore((s) => s.setDraftInput)
+  const clearMessages = useChatStore((s) => s.clearMessages)
   const hasMoreHistory = useChatStore((s) => s.hasMoreHistory)
   const loadMoreHistory = useChatStore((s) => s.loadMoreHistory)
   const [loadingHistory, setLoadingHistory] = useState(false)
@@ -960,15 +961,31 @@ export function AiPanel({ fullscreenDragHandleProps }: AiPanelProps = {}) {
               {panelView === 'artifacts' ? '阅读成果' : panelView === 'reminders' ? '阅读提醒' : 'AI 助手'}
             </span>
           )}
-          {streaming && (
-            <span className={fullscreenDragHandleProps ? 'pointer-events-none absolute left-3 h-1.5 w-1.5 rounded-full bg-gm-primary motion-safe:animate-pulse' : 'text-caption text-gm-primary animate-pulse'}>
-              <span className={fullscreenDragHandleProps ? 'sr-only' : undefined}>生成中...</span>
+          {streaming && !fullscreenDragHandleProps && (
+            <span className="text-caption text-gm-primary animate-pulse">
+              <span>生成中...</span>
             </span>
           )}
         </div>
         {!fullscreenDragHandleProps && <div className="flex-1" />}
         <div className={`flex items-center ${fullscreenDragHandleProps ? 'pointer-events-none ml-auto [&_button]:pointer-events-auto' : ''}`} onPointerDown={(e) => e.stopPropagation()}>
-
+          {!fullscreenDragHandleProps && panelView === 'chat' && messages.length > 0 && (
+            <Button
+              type="text"
+              size="small"
+              onClick={() => {
+                historyAutoLoadRef.current = false
+                historyAnchorRef.current = null
+                clearMessages()
+              }}
+              title="清空对话"
+              icon={
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                </svg>
+              }
+            />
+          )}
           {!fullscreenDragHandleProps && <Button
             type="text"
             size="small"

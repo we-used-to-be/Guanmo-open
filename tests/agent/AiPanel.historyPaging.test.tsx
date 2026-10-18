@@ -132,8 +132,26 @@ describe('AI 历史记录上滑分页', () => {
     expect(mocks.load).not.toHaveBeenCalled()
   })
 
-  it('不再提供清空对话按钮，已有消息保持可见', () => {
-    mount()
+  it('普通模式可清空对话，清空后不因滚动自动加载历史', async () => {
+    const container = mount()
+    await act(async () => fireEvent.click(screen.getByText('加载更早的记录')))
+    fireEvent.click(screen.getByTitle('清空对话'))
+    expect(useChatStore.getState().messages).toEqual([])
+    expect(screen.queryByText('匿名问题')).toBeNull()
+    expect(screen.queryByText('匿名回答')).toBeNull()
+    expect(screen.queryByTitle('清空对话')).toBeNull()
+    scroll(container, 300)
+    await act(async () => scroll(container, 100))
+    expect(mocks.load).toHaveBeenCalledTimes(1)
+    await act(async () => fireEvent.click(screen.getByText('加载历史记录')))
+    expect(mocks.load).toHaveBeenCalledTimes(2)
+  })
+
+  it('全屏小窗仍隐藏清空对话按钮', () => {
+    render(<AiPanel fullscreenDragHandleProps={{
+      onPointerDown: vi.fn(), onPointerMove: vi.fn(),
+      onPointerUp: vi.fn(), onPointerCancel: vi.fn(),
+    }} />)
     expect(screen.queryByTitle('清空对话')).toBeNull()
     expect(screen.getByText('匿名问题')).toBeVisible()
     expect(screen.getByText('匿名回答')).toBeVisible()
