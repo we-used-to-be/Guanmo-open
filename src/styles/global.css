@@ -1776,16 +1776,23 @@ html[data-gm-runtime='web'] .gm-settings-tabs--web > div:nth-child(2) {
   visibility: hidden;
 }
 
+/* 分屏外框等宽，避免预览外层 padding 参与 flex 剩余空间分配后把中线挤偏。 */
+.gm-fullscreen-content-split-left,
+.gm-fullscreen-content-split-right {
+  flex: 0 0 50%;
+}
+
 /* 分屏模式：内侧边距固定 15px，外侧保持全量 */
 .gm-fullscreen-content-split-left.gm-fullscreen-editor-content .cm-content,
 .gm-fullscreen-content-split-left.gm-fullscreen-preview-content {
   padding-right: 15px;
 }
 
-/* 分屏左栏为编辑器时，行号槽在布局流中占据宽度（由 CodeMirrorEditor 实测为 --gm-cm-gutter-width），
+/* 编辑正文的百分比基于半屏 scroller，需翻倍以匹配预览基于整个分屏容器的外侧留白。
+   行号槽在布局流中占据宽度（由 CodeMirrorEditor 实测为 --gm-cm-gutter-width），
    外侧留白需扣除行号槽宽度，使编辑栏文本起点与预览栏文本终点到屏幕边缘的距离一致、两栏文本列等宽 */
 .gm-fullscreen-content-split-left.gm-fullscreen-editor-content .cm-content {
-  padding-left: max(15px, calc(var(--gm-fullscreen-content-padding-percent, 7%) - var(--gm-cm-gutter-width, 0px)));
+  padding-left: max(15px, calc(var(--gm-fullscreen-content-padding-percent, 7%) * 2 - var(--gm-cm-gutter-width, 0px)));
 }
 
 .gm-fullscreen-content-split-right.gm-fullscreen-editor-content .cm-content,
