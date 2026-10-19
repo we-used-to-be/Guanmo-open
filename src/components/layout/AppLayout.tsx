@@ -725,11 +725,19 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
       toggleSidebar()
     },
     'CTRL+J': () => {
+      if (useAppStore.getState().aiPanelOpen && getAiPanelView() === 'chat') {
+        useAppStore.getState().closeAiPanel()
+        return
+      }
       if (!useAppStore.getState().aiPanelOpen) toggleAiPanel()
       requestOpenAiChat(true)
     },
     'CTRL+SHIFT+J': () => {
       if (!getRuntimeCapabilities().database) return
+      if (useAppStore.getState().aiPanelOpen && getAiPanelView() === 'artifacts') {
+        useAppStore.getState().closeAiPanel()
+        return
+      }
       if (!useAppStore.getState().aiPanelOpen) toggleAiPanel()
       requestOpenReadingArtifacts()
     },
