@@ -229,7 +229,6 @@ export function ReadingArtifactCenter({
   const [documentModel, setDocumentModel] = useState<MarkdownPreviewModel | null>(null)
   const [loadedItems, setLoadedItems] = useState<ReadingArtifactItem[]>([])
   const [loadedAiArtifacts, setLoadedAiArtifacts] = useState<ReadingArtifact[]>([])
-  const [itemsTotal, setItemsTotal] = useState(0)
   const [itemsLoading, setItemsLoading] = useState(true)
   const [itemsLoadingMore, setItemsLoadingMore] = useState(false)
   const [itemsHasMore, setItemsHasMore] = useState(false)
@@ -243,15 +242,22 @@ export function ReadingArtifactCenter({
   const requestSequenceRef = useRef(0)
   const appendRequestRef = useRef<number | null>(null)
   const documentRequestSequenceRef = useRef(0)
-  const pendingMarkWrites = useRef(new Set<string>())
   const searchDebounceRef = useRef<number | null>(null)
   const [expandedAiKey, setExpandedAiKey] = useState<string | null>(null)
   const reducedMotion = useReducedMotion() ?? false
+  const [initialLoadReady, setInitialLoadReady] = useState(false)
+  useEffect(() => {
+    if (!active || initialLoadReady) return
+    // Let the sidebar finish entering before querying and mounting its cards.
+    const timer = window.setTimeout(() => setInitialLoadReady(true), reducedMotion ? 0 : 240)
+    return () => window.clearTimeout(timer)
+  }, [active, initialLoadReady, reducedMotion])
   const rootRef = useRef<HTMLDivElement>(null)
   const contentScrollerRef = useRef<HTMLDivElement>(null)
   const [prefetchCard, setPrefetchCard] = useState<HTMLDivElement | null>(null)
   const prefetchCardRef = useCallback((node: HTMLDivElement | null) => setPrefetchCard(node), [])
   const cardUiStates = useRef(new Map<string, CardUiState>())
+  const pendingMarkWrites = useRef(new Set<string>())
   const detailHeadingRef = useRef<HTMLHeadingElement>(null)
   const returnFocusRef = useRef<HTMLButtonElement | null>(null)
   const previousViewRef = useRef<CenterView>('recent')
@@ -259,7 +265,7 @@ export function ReadingArtifactCenter({
   const focusReturnViewRef = useRef<CenterView>('recent')
   const [focusLoading, setFocusLoading] = useState(false)
   const [focusError, setFocusError] = useState<string | null>(null)
-  const organization = useArtifactOrganization()
+  const organization = useArtifactOrganization(initialLoadReady)
   const organizationRevisionRef = useRef(0)
   const dataRevisionRef = useRef({ marks: marksRevision, artifacts: artifactsRevision })
   const [organizationFilter, setOrganizationFilter] = useState<ArtifactOrganizationFilter>({ collection: 'all' })
@@ -288,7 +294,7 @@ export function ReadingArtifactCenter({
   const loadItems = useCallback(async (append: boolean, quiet = false) => {
     if (append && appendRequestRef.current !== null) return
     const offset = append ? loadedItemsRef.current.length : 0
-    const limit = view === 'recent' ? 5 : queryOptions.limit
+    const limit = 5
     const requestId = ++requestSequenceRef.current
     appendRequestRef.current = append ? requestId : null
     if (append) setItemsLoadingMore(true)
@@ -297,7 +303,7 @@ export function ReadingArtifactCenter({
     let detailSnapshot: ReadingArtifactItem[] | null = null
     try {
       // Refresh the loaded range in bounded pages so mutations do not collapse it.
-      const refreshCount = !append && quiet && view === 'recent'
+      const refreshCount = !append && quiet
         ? Math.max(limit, loadedItemsRef.current.length)
         : limit
       const result = await loadReadingArtifactCenterItemsPage({ ...queryOptions, offset, limit })
@@ -333,7 +339,7 @@ export function ReadingArtifactCenter({
         return previous && JSON.stringify(previous) === JSON.stringify(item) ? previous : item
       })
       const combined = append ? [...loadedItemsRef.current, ...shared] : shared
-      setEnteringItems(new Map(append ? added.map((item, index) => [item.key, index]) : []))
+      setEnteringItems(new Map((quiet ? added.filter((item) => !existingKeys.has(item.key)) : added).map((item, index) => [item.key, index])))
       setItemsHasMore(result.hasMore && added.length > 0)
       const previousArtifacts = new Map(loadedAiArtifactsRef.current.map((artifact) => [artifact.id, artifact]))
       const sharedArtifacts = result.artifacts.map((artifact) => {
@@ -348,7 +354,6 @@ export function ReadingArtifactCenter({
       loadedItemsRef.current = combined
       setLoadedItems(combined)
       if (view === 'detail') detailSnapshot = combined
-      setItemsTotal(result.total)
     } catch (error) {
       if (requestId === requestSequenceRef.current) setItemsError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -368,6 +373,7 @@ export function ReadingArtifactCenter({
   }, [activeTypes, detailFilter, detailSort, query, queryOptions, selectedDocument, view, workspaceRoots])
 
   useEffect(() => {
+    if (!initialLoadReady || focusKey) return
     if (view === 'documents' || view === 'focus') {
       requestSequenceRef.current += 1
       return
@@ -375,10 +381,11 @@ export function ReadingArtifactCenter({
     if (view !== 'detail' || isDatabaseReady()) {
       void loadItems(false)
     }
-  }, [loadItems, view])
+    return () => { requestSequenceRef.current += 1 }
+  }, [initialLoadReady, focusKey, loadItems, view])
 
   useEffect(() => {
-    if (!focusKey) return
+    if (!initialLoadReady || !focusKey) return
     if (view !== 'focus') focusReturnViewRef.current = view
     const requestId = ++requestSequenceRef.current
     setView('focus')
@@ -397,7 +404,6 @@ export function ReadingArtifactCenter({
         loadedAiArtifactsRef.current = loaded.artifact ? [loaded.artifact] : []
         setLoadedItems([loaded.item])
         setLoadedAiArtifacts(loaded.artifact ? [loaded.artifact] : [])
-        setItemsTotal(1)
         if (loaded.item.source === 'ai') setExpandedAiKey(loaded.item.key)
       })
       .catch((error) => {
@@ -406,7 +412,7 @@ export function ReadingArtifactCenter({
       .finally(() => {
         if (requestId === requestSequenceRef.current) setFocusLoading(false)
       })
-  }, [focusKey, view, workspaceRoots, marksRevision, artifactsRevision])
+  }, [initialLoadReady, focusKey, view, workspaceRoots, marksRevision, artifactsRevision])
 
   const loadDocuments = useCallback(async (append: boolean, quiet = false) => {
     const offset = append ? documentPageRef.current.documents.length : 0
@@ -430,6 +436,7 @@ export function ReadingArtifactCenter({
   }, [activeTypes, organizationFilter, query])
 
   useEffect(() => {
+    if (!initialLoadReady) return
     if (view !== 'documents') {
       documentRequestSequenceRef.current += 1
       return
@@ -438,24 +445,25 @@ export function ReadingArtifactCenter({
     documentPageRef.current = emptyPage
     setDocumentPage(emptyPage)
     void loadDocuments(false)
-  }, [loadDocuments, view])
+    return () => { documentRequestSequenceRef.current += 1 }
+  }, [initialLoadReady, loadDocuments, view])
 
   useEffect(() => {
     if (organization.revision === organizationRevisionRef.current) return
     organizationRevisionRef.current = organization.revision
-    if (view === 'focus') return
+    if (!initialLoadReady || view === 'focus') return
     if (view === 'documents') void loadDocuments(false, true)
     else void loadItems(false, true)
-  }, [organization.revision, loadDocuments, loadItems, view])
+  }, [initialLoadReady, organization.revision, loadDocuments, loadItems, view])
 
   useEffect(() => {
     const previous = dataRevisionRef.current
     if (previous.marks === marksRevision && previous.artifacts === artifactsRevision) return
     dataRevisionRef.current = { marks: marksRevision, artifacts: artifactsRevision }
-    if (view === 'focus') return
+    if (!initialLoadReady || view === 'focus') return
     if (view === 'documents') void loadDocuments(false)
     else void loadItems(false, true)
-  }, [artifactsRevision, loadDocuments, loadItems, marksRevision, view])
+  }, [initialLoadReady, artifactsRevision, loadDocuments, loadItems, marksRevision, view])
 
   useEffect(() => {
     for (const artifact of loadedAiArtifacts) {
@@ -469,14 +477,14 @@ export function ReadingArtifactCenter({
   useEffect(() => {
     const scroller = contentScrollerRef.current
     const target = prefetchCard
-    if (view !== 'recent' || itemsLoading || itemsLoadingMore || itemsError || !itemsHasMore || !scroller || !target) return
+    if ((view !== 'recent' && view !== 'detail') || itemsLoading || itemsLoadingMore || itemsError || !itemsHasMore || !scroller || !target) return
     let cancelled = false
     const observer = new IntersectionObserver((entries) => {
       if (!cancelled && entries.some((entry) => entry.isIntersecting)) void loadItems(true)
     }, { root: scroller })
     observer.observe(target)
     return () => { cancelled = true; observer.disconnect() }
-  }, [view, itemsLoading, itemsLoadingMore, itemsError, itemsHasMore, prefetchCard, recentItems, loadItems])
+  }, [view, itemsLoading, itemsLoadingMore, itemsError, itemsHasMore, prefetchCard, recentItems, detailContent, documentModel, loadItems])
   const documentSummaries = useMemo(() => documentPage.documents.map((summary) => ({
       documentRef: summary.documentId === '__independent__' ? null : {
         documentId: documentIdForSummary(summary),
@@ -553,13 +561,13 @@ export function ReadingArtifactCenter({
     const scroller = contentScrollerRef.current
     if (scroller) scrollPositionsRef.current[view] = scroller.scrollTop
     requestSequenceRef.current += 1
+    documentRequestSequenceRef.current += 1
     const resetItems = next !== 'documents' && (next !== 'detail' || isDatabaseReady())
     if (resetItems) {
       loadedItemsRef.current = []
       loadedAiArtifactsRef.current = []
       setLoadedItems([])
       setLoadedAiArtifacts([])
-      setItemsTotal(0)
       setItemsLoading(true)
     }
     setDetailContent((current) => ({ ...current, pending: next === 'detail' && isDatabaseReady() }))
@@ -795,16 +803,13 @@ export function ReadingArtifactCenter({
           {itemsError && (
             <div className="mt-3 flex items-center justify-center gap-2 text-micro text-gm-error">
               <span>加载失败：{itemsError}</span>
-              <button type="button" className="underline underline-offset-2" onClick={() => void (view === 'documents' ? loadDocuments(false) : loadItems(view === 'recent' && items.length > 0))}>重试</button>
+              <button type="button" className="underline underline-offset-2" onClick={() => void (view === 'documents' ? loadDocuments(false) : loadItems((view === 'recent' || view === 'detail') && items.length > 0))}>重试</button>
             </div>
           )}
-          {view === 'recent' && !loading && items.length > 0 && (
+          {(view === 'recent' || view === 'detail') && !loading && items.length > 0 && (
             <div role="status" aria-live="polite" className="flex h-12 items-center justify-center text-caption text-gm-text-tertiary">
               {itemsLoadingMore ? <><span className="sr-only">正在加载更多阅读成果</span><span aria-hidden="true" className="gm-artifact-loading-dots"><i /><i /><i /></span></> : !itemsHasMore && !itemsError ? '没有更多了' : null}
             </div>
-          )}
-          {view === 'detail' && items.length > 0 && items.length < itemsTotal && (
-            <button type="button" disabled={itemsLoadingMore} onClick={() => void loadItems(true)} className="mt-3 w-full rounded-md border border-gm-border py-2 text-caption text-gm-text-secondary hover:bg-gm-surface-hover disabled:opacity-50">{itemsLoadingMore ? '加载中…' : '加载更多'}</button>
           )}
           {view === 'documents' && documentPage.documents.length > 0 && documentPage.documents.length < documentPage.total && (
             <button type="button" disabled={documentsLoading} onClick={() => void loadDocuments(true)} className="mt-3 w-full rounded-md border border-gm-border py-2 text-caption text-gm-text-secondary hover:bg-gm-surface-hover disabled:opacity-50">{documentsLoading ? '加载中…' : '加载更多'}</button>

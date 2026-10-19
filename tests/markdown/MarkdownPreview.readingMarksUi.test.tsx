@@ -380,6 +380,47 @@ describe('MarkdownPreview 批注浮层', () => {
     expect(previewRef.current?.getSelection()?.text).toBe('第一段批注目标。第二段批注目标。')
   })
 
+  it.each(['editor', 'input'] as const)('从 %s 拖选预览正文后，Ctrl/Cmd+C 复制当前预览选区', async (focusedSurface) => {
+    const caretDocument = document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
+    caretDocument.caretRangeFromPoint = (x) => {
+      const textNode = host?.querySelector('[data-md-block-index] p span')?.firstChild
+      if (!textNode) return null
+      const range = document.createRange()
+      const offset = x < 50 ? 0 : (textNode.textContent?.length ?? 0)
+      range.setStart(textNode, offset)
+      range.setEnd(textNode, offset)
+      return range
+    }
+    const previewRef = { current: null } as MutableRefObject<MarkdownPreviewHandle | null>
+    const writeText = vi.fn(async () => undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    render(
+      <>
+        {focusedSurface === 'editor'
+          ? <div className="cm-editor"><div className="cm-content" contentEditable tabIndex={0} /></div>
+          : <input aria-label="其他输入框" defaultValue="输入框内容" />}
+        <MarkdownPreview ref={previewRef} content={content} documentKey="doc-copy-focus" documentVersion={1} />
+      </>,
+      { container: host! },
+    )
+    const previousTarget = host!.querySelector<HTMLElement>(focusedSurface === 'editor' ? '.cm-content' : 'input')!
+    previousTarget.focus()
+    expect(document.activeElement).toBe(previousTarget)
+    const block = host!.querySelector<HTMLElement>('[data-md-block-index]')!
+    fireEvent.mouseDown(block, { button: 0, clientX: 4, clientY: 110 })
+    fireEvent.mouseUp(document, { button: 0, clientX: 120, clientY: 110 })
+    await waitFor(() => expect(previewRef.current?.getSelection()?.text).toBe(content))
+
+    fireEvent.keyDown(document.activeElement!, { key: 'c', code: 'KeyC', ctrlKey: true })
+    expect(writeText).toHaveBeenCalledWith(content)
+    fireEvent.keyDown(document.activeElement!, { key: 'c', code: 'KeyC', metaKey: true })
+    expect(writeText).toHaveBeenCalledTimes(2)
+
+    previousTarget.focus()
+    fireEvent.keyDown(previousTarget, { key: 'c', code: 'KeyC', ctrlKey: true })
+    expect(writeText).toHaveBeenCalledTimes(2)
+  })
+
   it('搜索框保持焦点时，Ctrl+C 复制预览拖选而非搜索框内容', async () => {
     const caretRangeFromPoint = (document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null })
     caretRangeFromPoint.caretRangeFromPoint = (x) => {

@@ -96,6 +96,7 @@ interface SettingsState {
   updateKnowledgeSettings: (settings: Partial<KnowledgeSettings>) => void
   // 仅将 Web 密钥运行时读取到的 API Key 写入内存（不触发 secureStorage 持久化）
   applyWebRuntimeApiKeys: (keys: { chatApiKey: string; webSearchApiKey: string }) => void
+  applyDesktopCredentialStatus: (kind: ApiConnection['kind'], configured: boolean, revision: number) => void
   updateUsageTrackingSettings: (settings: Partial<UsageTrackingSettings>) => void
   setAiShortcutActions: (actions: AiShortcutAction[]) => void
   resetAiShortcutActions: () => void
@@ -255,6 +256,17 @@ export const useSettingsStore = create<SettingsState>()(
           ai: { ...s.ai, apiKey: chatApiKey },
           webSearch: { ...s.webSearch, apiKey: webSearchApiKey },
         }))
+      },
+
+      applyDesktopCredentialStatus: (kind, configured, revision) => {
+        set((state) => {
+          const metadata = { apiKey: '', apiKeyConfigured: configured, credentialVersion: revision }
+          if (kind === 'chat') return { ai: { ...state.ai, ...metadata } }
+          if (kind === 'embedding') return { ai: { ...state.ai, embedding: { ...state.ai.embedding, ...metadata } } }
+          const webSearch = { ...state.webSearch, ...metadata }
+          updateSearchConfig(webSearch)
+          return { webSearch }
+        })
       },
 
       updateUsageTrackingSettings: (settings) =>
@@ -612,14 +624,7 @@ export function syncDesktopCredential(
     const metadata = kind === 'chat' ? current.ai : kind === 'embedding' ? current.ai.embedding : current.webSearch
     if (!pendingCredentialChanges.has(kind) && metadata.credentialVersion !== undefined && metadata.apiKeyConfigured === status.configured) return true
     if (kind !== 'search') resetAiClient(kind)
-    useSettingsStore.setState((state) => {
-      const metadata = { apiKey: '', apiKeyConfigured: status.configured, credentialVersion: revision }
-      if (kind === 'chat') return { ai: { ...state.ai, ...metadata } }
-      if (kind === 'embedding') return { ai: { ...state.ai, embedding: { ...state.ai.embedding, ...metadata } } }
-      const webSearch = { ...state.webSearch, ...metadata }
-      updateSearchConfig(webSearch)
-      return { webSearch }
-    })
+    current.applyDesktopCredentialStatus(kind, status.configured, revision)
     pendingCredentialChanges.delete(kind)
     return true
   })

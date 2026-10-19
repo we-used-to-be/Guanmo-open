@@ -6,7 +6,7 @@ const fileApi = vi.hoisted(() => ({
   writeFile: vi.fn(),
 }))
 
-vi.mock('@/hooks/useTauri', () => fileApi)
+vi.mock('@/hooks/useTauri', () => ({ ...fileApi, isTauri: () => false }))
 vi.mock('@/hooks/usePerfMonitor', () => ({ usePerfMonitor: vi.fn() }))
 
 import { PerfMonitorPanel } from '@/components/devtools/PerfMonitorPanel'

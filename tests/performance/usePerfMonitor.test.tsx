@@ -75,7 +75,7 @@ describe('usePerfMonitor', () => {
 
   it('按实际挂载节点统计预览和编辑器实例', () => {
     render(<Harness />)
-    document.body.insertAdjacentHTML('beforeend', '<div class="gm-markdown-preview"></div><div class="gm-markdown-preview"></div><div class="cm-editor"></div>')
+    document.body.insertAdjacentHTML('beforeend', '<div class="gm-markdown-preview"></div><div class="gm-markdown-preview"></div><div class="cm-editor"></div><div data-preview-switch-snapshot inert><div class="gm-markdown-preview"></div><div class="cm-editor"></div></div>')
     const sources = perfCollectorMock.setDocumentContextSources.mock.calls.at(-1)?.[0]
     expect(sources.getPreviewInstanceCount()).toBe(2)
     expect(sources.getEditorInstanceCount()).toBe(1)

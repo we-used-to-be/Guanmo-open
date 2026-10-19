@@ -8,6 +8,7 @@ build/
 coverage/
 .cache/
 src-tauri/target/
+src-tauri/target-*/
 src-tauri/gen/
 
 # Release artifacts
@@ -67,6 +68,7 @@ secrets.json
 *.pfx
 
 # Internal assistant/workflow state
+.workbuddy/
 .claude/
 .codex-logs/
 output/

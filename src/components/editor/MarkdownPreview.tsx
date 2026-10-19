@@ -2150,6 +2150,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       if (offset === null) return
       // 命中标注文本：接管选区（阻止原生 DOM Selection 启动）
       event.preventDefault()
+      // 接管拖选后同步接管键盘焦点，避免 Ctrl+C 仍发送给此前的编辑器或输入框。
+      root.focus({ preventScroll: true })
       const current = selectionRangeRef.current
       const anchor = event.shiftKey && current
         ? (selectionAnchorRef.current ?? current.from)
@@ -2718,6 +2720,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   return (
     <div
       ref={rootRef}
+      tabIndex={-1}
       data-md-render-mode={requiresWholeDocumentRender ? 'whole' : 'virtual'}
       className="prose gm-markdown-preview max-w-none min-w-0 text-gm-text"
       style={{ fontSize: `${fontSize}px`, lineHeight, position: 'relative' }}

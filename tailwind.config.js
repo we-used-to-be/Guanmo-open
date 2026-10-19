@@ -3,6 +3,7 @@ export default {
   content: [
     './index.html',
     './src/**/*.{js,ts,jsx,tsx}',
+    ...JSON.parse(process.env.GUANMO_TAILWIND_EXCLUDES ?? '[]'),
     // DEV-only panels are absent from production JS and must not add utilities to its CSS.
     ...(process.env.NODE_ENV === 'production' ? ['!./src/components/devtools/**'] : []),
   ],

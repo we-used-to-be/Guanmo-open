@@ -160,7 +160,9 @@ pub async fn configure_api_connection(
     tauri::async_runtime::spawn_blocking(move || {
         let path = super::secret_file_path(&app)?;
         configure_at_path(&path, request)
-    }).await.map_err(|_| "安全配置任务失败".to_owned())?
+    })
+    .await
+    .map_err(|_| "安全配置任务失败".to_owned())?
 }
 
 fn configure_at_path(
@@ -339,9 +341,11 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), original_legacy);
         std::fs::remove_dir(&temporary).unwrap();
         let status = configure_at_path(&path, make(None, false, true)).unwrap();
-        assert!(configure_at_path(&path, make(None, false, true))
-            .unwrap()
-            .configured);
+        assert!(
+            configure_at_path(&path, make(None, false, true))
+                .unwrap()
+                .configured
+        );
         assert!(status.configured);
         let persisted = super::super::read_secret_map(&path).unwrap();
         assert!(!persisted.contains_key("ai.apiKey"));
@@ -354,19 +358,14 @@ mod tests {
                 .configured
         );
         assert!(
-            configure_at_path(
-                &path,
-                make(Some("synthetic-replacement"), false, false)
-            )
-            .unwrap()
-            .configured
+            configure_at_path(&path, make(Some("synthetic-replacement"), false, false))
+                .unwrap()
+                .configured
         );
         let original = std::fs::read(&path).unwrap();
         // Force a temporary-file write failure; the committed file must remain intact.
         std::fs::create_dir(&temporary).unwrap();
-        assert!(
-            configure_at_path(&path, make(Some("synthetic-failed"), false, false)).is_err()
-        );
+        assert!(configure_at_path(&path, make(Some("synthetic-failed"), false, false)).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), original);
         std::fs::remove_dir(&temporary).unwrap();
         assert!(

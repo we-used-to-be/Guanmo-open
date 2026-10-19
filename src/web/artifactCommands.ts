@@ -1,4 +1,5 @@
 import { UnsupportedCapabilityError } from './externalHttp'
+export { buildReadingArtifactReferences } from '@/services/ai/sourceReferences'
 import type {
   LoadReadingArtifactsPageOptions,
   ReadingArtifactsPage,

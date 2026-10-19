@@ -1009,7 +1009,7 @@ export function AiPanel({ fullscreenDragHandleProps, productTourActive = false }
 
       {(artifactsVisited || panelView === 'artifacts') && (
         <div hidden={panelView !== 'artifacts'} className={panelView === 'artifacts' ? `flex-1 min-h-0 overflow-hidden min-w-0 bg-gm-canvas ${fullscreenDragHandleProps ? 'pt-3' : ''}` : 'hidden'}>
-          <ReadingArtifactCenter onOpenAiSource={handleOpenArtifactSource} focusKey={artifactFocusKey} onCloseFocus={() => setArtifactFocusKey(null)} />
+          <ReadingArtifactCenter active={aiPanelOpen && panelView === 'artifacts'} onOpenAiSource={handleOpenArtifactSource} focusKey={artifactFocusKey} onCloseFocus={() => setArtifactFocusKey(null)} />
         </div>
       )}
 

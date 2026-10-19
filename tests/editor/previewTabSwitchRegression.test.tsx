@@ -181,7 +181,7 @@ afterEach(() => {
 })
 
 function getLeftPreviewContainer(container: HTMLElement): HTMLElement | null {
-  const all = container.querySelectorAll('.select-text.bg-gm-surface')
+  const all = container.querySelectorAll('[data-product-tour="preview-area"]')
   for (let i = 0; i < all.length; i++) {
     const el = all[i] as HTMLElement
     if (!el.classList.contains('hidden')) return el
@@ -627,7 +627,7 @@ describe('preview selection bridge', () => {
     selection.addRange(range)
 
     fireEvent.contextMenu(preview, { clientX: 20, clientY: 20 })
-    fireEvent.click(screen.getByRole('button', { name: '添加到 AI 上下文' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '添加到 AI 上下文' }))
 
     expect(aiContextMocks.addSelectionContextTag).toHaveBeenCalledWith(expect.objectContaining({
       title: '匿名文档-tab-a.md',
@@ -1118,6 +1118,43 @@ describe('preview visibility regression: restoredPreviewKeysRef race', () => {
           useEditorStore.getState().setActiveTab('tab-b')
         })
         expect(useEditorStore.getState().readingPositions['tab-a']?.previewScrollTop).toBe(520)
+      } finally {
+        if (clientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', clientHeight)
+        else Reflect.deleteProperty(HTMLElement.prototype, 'clientHeight')
+      }
+    })
+
+    it('保留不可交互的旧页画面，直到新页位置恢复完成', async () => {
+      const content = Array.from({ length: 80 }, (_, index) => `## Section ${index + 1}\n\nParagraph ${index + 1}`).join('\n\n')
+      setupEditor([anonymousTab('tab-a', '# 旧页画面'), anonymousTab('tab-b', content), anonymousTab('tab-c', content)], 'tab-a', 'preview')
+      useEditorStore.setState({ readingPositions: {
+        'tab-b': { previewScrollTop: 400, topLine: 25 },
+        'tab-c': { previewScrollTop: 500, topLine: 30 },
+      } })
+      const clientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+      Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 600 })
+      try {
+        const { container, unmount } = render(<EditorArea />)
+        await settleLazyEditorModules()
+        act(() => vi.advanceTimersByTime(50))
+        const oldPreview = getLeftPreviewContainer(container)!
+        oldPreview.scrollTop = 120
+        act(() => useEditorStore.getState().setActiveTab('tab-b'))
+        const snapshot = container.querySelector<HTMLElement>('[data-preview-switch-snapshot]')!
+        expect(snapshot).not.toBeNull()
+        expect(snapshot).toHaveAttribute('inert')
+        expect(snapshot).toHaveAttribute('aria-hidden', 'true')
+        expect(snapshot).toHaveTextContent('旧页画面')
+        expect(snapshot.firstElementChild?.scrollTop).toBe(120)
+        expect(getLeftPreviewContainer(container)!.style.visibility).toBe('hidden')
+        act(() => useEditorStore.getState().setActiveTab('tab-c'))
+        expect(container.querySelectorAll('[data-preview-switch-snapshot]')).toHaveLength(1)
+        expect(container.querySelector('[data-preview-switch-snapshot]')).toBe(snapshot)
+        act(() => vi.advanceTimersByTime(50))
+        expect(getLeftPreviewContainer(container)!.style.visibility).not.toBe('hidden')
+        expect(container.querySelector('[data-preview-switch-snapshot]')).toBeNull()
+        unmount()
+        expect(snapshot.isConnected).toBe(false)
       } finally {
         if (clientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', clientHeight)
         else Reflect.deleteProperty(HTMLElement.prototype, 'clientHeight')

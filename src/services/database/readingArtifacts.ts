@@ -10,9 +10,10 @@
 import { getDatabase, isDatabaseReady } from './db'
 import type { ChatMessageSource, ReadingScope } from '@/services/ai/types'
 import { parseMarkdownBlocks, type MarkdownBlock } from '@/services/markdownBlocks'
-import { normalizeFilePath } from '@/services/pathIdentity'
 import { decodeOriginalSelections, type OriginalSelectionSnapshot } from '@/services/originalSelections'
-import type { SourceReferenceId } from '@/services/ai/sourceReferences'
+import { buildReadingArtifactReferences, type SourceReferenceId } from '@/services/ai/sourceReferences'
+
+export { buildReadingArtifactReferences }
 
 /** 阅读成果类型，与 schema CHECK 约束保持一致 */
 export type ReadingArtifactType =
@@ -231,56 +232,6 @@ export function mergeReadingArtifactQuestionMetadata(
   return structuredContent === null || structuredContent === undefined
     ? { question: normalizedQuestion }
     : { question: normalizedQuestion, content: structuredContent }
-}
-
-/** 将聊天消息来源转换为稳定持久化快照，并按原顺序去重。 */
-export function buildReadingArtifactReferences(
-  sources: readonly ChatMessageSource[] | undefined,
-  selections: readonly OriginalSelectionSnapshot[] = [],
-): ReadingArtifactReference[] {
-  const references: ReadingArtifactReference[] = []
-  const seen = new Set<string>()
-  const selectionSources: LocalReadingArtifactReference[] = selections.flatMap((selection) => {
-    const filePath = selection.filePath?.trim()
-    if (!filePath || !isValidLineRange(selection.startLine, selection.endLine)) return []
-    return [{ kind: 'local', filePath, fileName: filePath.replace(/\\/g, '/').split('/').pop()!,
-      startLine: selection.startLine!, endLine: selection.endLine! }]
-  })
-  for (const source of [...(sources ?? []), ...selectionSources]) {
-    if (source.kind === 'web') {
-      const title = source.title.trim()
-      const url = source.url.trim()
-      if (!title || !url) continue
-      const key = `web:${url}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      references.push({
-        kind: 'web',
-        title,
-        url,
-        ...(source.siteName?.trim() ? { siteName: source.siteName.trim() } : {}),
-        ...(source.publishedAt?.trim() ? { publishedAt: source.publishedAt.trim() } : {}),
-      })
-      continue
-    }
-
-    const filePath = source.filePath.trim()
-    const fileName = source.fileName.trim()
-    if (!filePath || !fileName || !isValidLineRange(source.startLine, source.endLine)) continue
-    const key = `local:${normalizeFilePath(filePath)}:${source.startLine}:${source.endLine}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    references.push({
-      kind: 'local',
-      filePath,
-      fileName,
-      ...(source.titlePath?.length ? { titlePath: [...source.titlePath] } : {}),
-      ...(source.heading?.trim() ? { heading: source.heading.trim() } : {}),
-      startLine: source.startLine,
-      endLine: source.endLine,
-    })
-  }
-  return references
 }
 
 /** 把完整参考来源合并进成果结构化元数据。 */

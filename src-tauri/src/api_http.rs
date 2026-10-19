@@ -224,10 +224,12 @@ pub struct BoundApiRequest {
     count: Option<u32>,
 }
 
+type BoundApiTarget = (String, String, Vec<(String, String)>);
+
 fn bound_target(
     record: &crate::api_credentials::StoredConnection,
     api: &BoundApiRequest,
-) -> Result<(String, String, Vec<(String, String)>), ApiHttpError> {
+) -> Result<BoundApiTarget, ApiHttpError> {
     let connection = &record.connection;
     connection
         .clone()

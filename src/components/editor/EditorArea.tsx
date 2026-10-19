@@ -30,6 +30,7 @@ import type { MarkdownDiffViewHandle } from './MarkdownDiffView'
 import { SearchOverlay, type SearchRequest } from './SearchOverlay'
 import { TabBar } from './TabBar'
 import { useScheduledPreviewContent } from './useScheduledPreviewContent'
+import { usePreviewSwitchSnapshot } from './usePreviewSwitchSnapshot'
 import { useEditorResourceLifecycle } from './useEditorResourceLifecycle'
 import { getPreviewTopForLine, useReadingPositionBridge } from './useReadingPositionBridge'
 import { usePreviewSelectionBridge } from './usePreviewSelectionBridge'
@@ -619,6 +620,8 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
     rightTab?.id
     && restoredPreviewKeysRef.current.right !== getPreviewRestoreKey(rightTab.id, viewMode)
   )
+
+  usePreviewSwitchSnapshot(leftPreviewRef, activeTab?.id, viewMode === 'preview', leftPreviewMasked)
 
   // 文件/模式切换恢复阅读位置；同文档刷新由 MarkdownPreview 保持当前视口，
   // 不重播旧位置，也取消上一轮恢复留下的迟到布局校正。
@@ -1643,7 +1646,7 @@ export function EditorArea({ databaseReady = true }: EditorAreaProps) {
                 </Suspense>
               </div>
             )}
-            <div className={`${viewMode === 'diff-preview' ? 'hidden' : 'flex'} flex-1 overflow-hidden bg-gm-surface`}>
+            <div className={`${viewMode === 'diff-preview' ? 'hidden' : 'flex'} flex-1 overflow-hidden bg-gm-surface relative`}>
             {(editorMounted || editorVisible) && (
             <div className={`${editorVisible ? (viewMode === 'edit-preview' ? 'min-w-0 flex-1 border-r border-gm-border-subtle' : 'flex-1') : 'hidden'} ${isFullscreen ? 'gm-fullscreen-editor-content' : ''} ${isFullscreen && viewMode === 'edit-preview' ? 'gm-fullscreen-content-split-left' : ''} ${fullscreenTocExpanded && viewMode === 'edit' ? `gm-fullscreen-toc-adjacent ${fullscreenTocWidthClass}` : ''} overflow-hidden relative`}>
               {activeTab && (

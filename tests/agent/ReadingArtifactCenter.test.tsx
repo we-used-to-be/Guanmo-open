@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReadingArtifact } from '@/services/database/readingArtifacts'
 import type { ReadingMark } from '@/services/readingMarks'
 
@@ -46,6 +46,14 @@ import { ReadingArtifactCenter } from '@/components/reading-artifacts/ReadingArt
 import { useReadingArtifactsStore } from '@/stores/readingArtifactsStore'
 import { useReadingMarksStore } from '@/stores/readingMarksStore'
 import { adaptAiReadingArtifact, adaptReadingMark } from '@/services/readingArtifactCenter'
+
+beforeEach(() => {
+  vi.stubGlobal('IntersectionObserver', class {
+    observe() {}
+    disconnect() {}
+  })
+})
+afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 const readingMark: ReadingMark = {
   id: 'mark-1',
@@ -247,6 +255,7 @@ describe('ReadingArtifactCenter', () => {
   it('opens document detail with four filters and routes manual source navigation', async () => {
     mocks.fileExists.mockResolvedValue(true)
     render(<ReadingArtifactCenter onOpenAiSource={vi.fn()} />)
+    await screen.findByText('人工批注')
     fireEvent.click(await screen.findByRole('tab', { name: '按文档' }))
     fireEvent.click(await screen.findByRole('button', { name: /A\.md/ }))
 
@@ -271,7 +280,7 @@ describe('ReadingArtifactCenter', () => {
     fireEvent.click(sortButton)
     fireEvent.pointerDown(document.body)
     expect(screen.queryByRole('menu', { name: '排序方式' })).not.toBeInTheDocument()
-    const manualCard = screen.getAllByText('人工批注')[0].closest('article')
+    const manualCard = (await screen.findAllByText('人工批注'))[0].closest('article')
     fireEvent.click(within(manualCard!).getByRole('button', { name: 'A.md · 查看原文' }))
     expect(mocks.navigateToReadingMark).toHaveBeenCalledWith('mark-1')
   })

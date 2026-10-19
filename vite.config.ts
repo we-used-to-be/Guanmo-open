@@ -9,6 +9,13 @@ export default defineConfig(({ mode, command }) => ({
     react(),
     {
       name: 'guanmo-build-mode',
+      config(config) {
+        // Web shims replace these desktop modules; Tailwind must not scan them.
+        process.env.GUANMO_TAILWIND_EXCLUDES = JSON.stringify(mode === 'web'
+          ? Object.keys(config.resolve?.alias ?? {}).filter((alias) => alias.startsWith('@/'))
+            .map((alias) => `!./src/${alias.slice(2)}.{ts,tsx}`)
+          : [])
+      },
       transformIndexHtml: {
         order: 'pre',
         handler(html) {

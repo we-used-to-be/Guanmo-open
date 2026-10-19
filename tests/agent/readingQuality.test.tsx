@@ -170,7 +170,7 @@ describe('阅读来源展示', () => {
       onOpenSource={onOpenSource}
     />)
 
-    fireEvent.click(screen.getByRole('button', { name: '检索来源/未确认引用 1' }))
+    fireEvent.click(screen.getByRole('button', { name: '来源 · 1' }))
     fireEvent.click(screen.getByRole('button', { name: /anonymous\.md/ }))
     expect(onOpenSource).toHaveBeenCalledWith(expect.objectContaining({
       filePath: 'C:\\Temp\\anonymous.md',
@@ -205,7 +205,7 @@ describe('阅读来源展示', () => {
       onOpenSource={vi.fn()}
     />)
 
-    fireEvent.click(screen.getByRole('button', { name: '引用来源 1' }))
+    fireEvent.click(screen.getByRole('button', { name: '来源 · 1' }))
     expect(screen.getByRole('button', { name: /used\.md/ })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /unused\.md/ })).not.toBeInTheDocument()
   })
@@ -226,7 +226,7 @@ describe('阅读来源展示', () => {
       onOpenSource={vi.fn()}
     />)
 
-    fireEvent.click(screen.getByRole('button', { name: '检索来源/未确认引用 1' }))
+    fireEvent.click(screen.getByRole('button', { name: '来源 · 1' }))
     expect(screen.getByRole('link', { name: /匿名网页/ }))
       .toHaveAttribute('href', 'https://example.com/anonymous')
   })
@@ -295,8 +295,8 @@ describe('保存回复交互', () => {
     expect(screen.getByRole('button', { name: '保存回复' })).toHaveAttribute('aria-haspopup', 'menu')
     expect(screen.getAllByRole('menuitem')).toHaveLength(5)
     for (const item of screen.getAllByRole('menuitem')) {
-      expect(item.className).toContain('hover:bg-gm-surface-hover')
-      expect(item.className).toContain('focus-visible:bg-gm-surface-hover')
+      expect(item).toHaveClass('gm-menu-option')
+      expect(item).toHaveAttribute('data-menu-item', 'true')
     }
   })
 })

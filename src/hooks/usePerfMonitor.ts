@@ -76,10 +76,10 @@ export function usePerfMonitor() {
         return state.tabs.find((tab) => tab.id === state.activeTabId)?.content.split('\n').length ?? 0
       },
       getPreviewInstanceCount: () => {
-        return document.querySelectorAll('.gm-markdown-preview').length
+        return document.querySelectorAll('.gm-markdown-preview:not([data-preview-switch-snapshot] *)').length
       },
       getEditorInstanceCount: () => {
-        return document.querySelectorAll('.cm-editor').length
+        return document.querySelectorAll('.cm-editor:not([data-preview-switch-snapshot] *)').length
       },
       getAiPanelOpen: () => useAppStore.getState().aiPanelOpen,
       getIsFullscreen: () => useAppStore.getState().isFullscreen,

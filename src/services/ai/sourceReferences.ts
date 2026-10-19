@@ -1,5 +1,7 @@
 import type { ChatMessageSource } from './types'
 import { normalizeFilePath } from '@/services/pathIdentity'
+import type { LocalReadingArtifactReference, ReadingArtifactReference } from '@/services/database/readingArtifacts'
+import type { OriginalSelectionSnapshot } from '@/services/originalSelections'
 
 export type SourceReferenceId = `S${number}`
 
@@ -33,6 +35,56 @@ function isValidLineRange(startLine: unknown, endLine: unknown): boolean {
     && typeof endLine === 'number'
     && Number.isInteger(endLine)
     && endLine >= startLine
+}
+
+/** 将聊天消息来源转换为稳定持久化快照，并按原顺序去重。 */
+export function buildReadingArtifactReferences(
+  sources: readonly ChatMessageSource[] | undefined,
+  selections: readonly OriginalSelectionSnapshot[] = [],
+): ReadingArtifactReference[] {
+  const references: ReadingArtifactReference[] = []
+  const seen = new Set<string>()
+  const selectionSources: LocalReadingArtifactReference[] = selections.flatMap((selection) => {
+    const filePath = selection.filePath?.trim()
+    if (!filePath || !isValidLineRange(selection.startLine, selection.endLine)) return []
+    return [{ kind: 'local', filePath, fileName: filePath.replace(/\\/g, '/').split('/').pop()!,
+      startLine: selection.startLine!, endLine: selection.endLine! }]
+  })
+  for (const source of [...(sources ?? []), ...selectionSources]) {
+    if (source.kind === 'web') {
+      const title = source.title.trim()
+      const url = source.url.trim()
+      if (!title || !url) continue
+      const key = `web:${url}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      references.push({
+        kind: 'web',
+        title,
+        url,
+        ...(source.siteName?.trim() ? { siteName: source.siteName.trim() } : {}),
+        ...(source.publishedAt?.trim() ? { publishedAt: source.publishedAt.trim() } : {}),
+      })
+      continue
+    }
+
+    const filePath = source.filePath.trim()
+    const fileName = source.fileName.trim()
+    if (!filePath || !fileName || !isValidLineRange(source.startLine, source.endLine)) continue
+    const key = `local:${normalizeFilePath(filePath)}:${source.startLine}:${source.endLine}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    references.push({
+      kind: 'local',
+      filePath,
+      fileName,
+      ...(source.titlePath?.length ? { titlePath: [...source.titlePath] } : {}),
+      ...(source.heading?.trim() ? { heading: source.heading.trim() } : {}),
+      startLine: source.startLine,
+      endLine: source.endLine,
+    })
+  }
+  return references
 }
 
 export function normalizeSafeWebSourceUrl(url: string): string | null {
