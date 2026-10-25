@@ -19,7 +19,7 @@ describe('Markdown file open policy', () => {
       actualBytes: MAX_OPEN_MARKDOWN_BYTES + 1,
       limitBytes: MAX_OPEN_MARKDOWN_BYTES,
     })
-    expect(describeFileOperationError(parsed, '打开失败')).toBe('文件过大，当前最多支持 1.0 MiB')
+    expect(describeFileOperationError(parsed, '打开失败')).toBe('文件过大，当前最多支持 1.5 MiB')
   })
 
   it('checks browser file size before reading its content', async () => {
@@ -42,7 +42,7 @@ describe('Markdown file open policy', () => {
   })
 
   it('formats the stable size units used by user-facing errors', () => {
-    expect(formatFileSize(MAX_OPEN_MARKDOWN_BYTES)).toBe('1.0 MiB')
+    expect(formatFileSize(MAX_OPEN_MARKDOWN_BYTES)).toBe('1.5 MiB')
     expect(formatFileSize(1025)).toBe('2 KiB')
     expect(formatFileSize(42)).toBe('42 B')
   })

@@ -554,7 +554,11 @@ async function main() {
   console.log(JSON.stringify(summary, null, 2))
 }
 
-main().catch((error) => {
-  console.error(`[cold-start] ${error.message}`)
-  process.exitCode = 1
-})
+export { getFreePort, connectPage, createEnvironment, stopApp, readStartupMarks }
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(`[cold-start] ${error.message}`)
+    process.exitCode = 1
+  })
+}

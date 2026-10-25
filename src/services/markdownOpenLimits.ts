@@ -1,5 +1,5 @@
 const FILE_TOO_LARGE_PREFIX = 'FILE_TOO_LARGE|'
-export const MAX_OPEN_MARKDOWN_BYTES = 1 * 1024 * 1024
+export const MAX_OPEN_MARKDOWN_BYTES = 1536 * 1024
 export interface FileTooLargeDetails { actualBytes: number; limitBytes: number }
 export class FileTooLargeError extends Error {
   readonly actualBytes: number

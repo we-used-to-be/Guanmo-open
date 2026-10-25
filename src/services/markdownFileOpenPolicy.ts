@@ -10,7 +10,7 @@ export {
 } from '@/services/markdownOpenLimits'
 import { MAX_OPEN_MARKDOWN_BYTES, parseFileTooLargeError, assertMarkdownOpenSize } from '@/services/markdownOpenLimits'
 
-// 1 MiB is the current containment limit for Markdown files opened in the editor.
+// Display the UTF-8 byte limit consistently across Markdown open entry points.
 export function formatFileSize(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MiB`
   if (bytes >= 1024) return `${Math.ceil(bytes / 1024)} KiB`
