@@ -1,0 +1,11 @@
+{
+  "productName": "MCP Anonymous Smoke",
+  "version": "0.1.0",
+  "identifier": "com.guanmo.mcp-smoke",
+  "build": { "frontendDist": "./web" },
+  "app": {
+    "windows": [],
+    "security": { "assetProtocol": { "enable": true, "scope": [] }, "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost" }
+  },
+  "bundle": { "active": false, "icon": ["../../../src-tauri/icons/icon.ico"] }
+}

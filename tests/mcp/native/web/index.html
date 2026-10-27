@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>MCP smoke</title>
+<style>body{font:18px system-ui;margin:36px;background:#f4f4f4;color:#222}button{font:inherit;margin:8px;padding:12px}pre{white-space:pre-wrap;overflow-wrap:anywhere}#status{font-weight:bold}</style>
+</head><body>
+<h1>MCP 匿名原生验收</h1><p>仅临时 Node 服务；不加载观墨业务数据。</p>
+<button id="register">1 登记</button><button id="connect">2 连接</button><button id="call">3 提案并确认</button>
+<button id="cancel">取消调用</button><button id="refresh">刷新目录</button><button id="disconnect">4 断开</button>
+<p id="status">ready</p><pre id="output"></pre>
+<script>
+const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
+let catalog, proposal;
+const status = document.querySelector('#status'), output = document.querySelector('#output');
+function action(id, fn) { document.getElementById(id).onclick = async () => {
+  status.textContent = id + ' pending';
+  try { const result = await fn(); status.textContent = id + ' PASS'; output.textContent = JSON.stringify(result ?? null, null, 2); }
+  catch (error) { status.textContent = id + ' ERROR'; output.textContent = String(error); }
+}; }
+action('register', () => invoke('mcp_register_stdio', { config: window.smokeConfig }));
+action('connect', async () => catalog = await invoke('mcp_connect', { serverId: 'anonymous', requestId: crypto.randomUUID() }));
+action('call', async () => {
+  proposal = await invoke('mcp_prepare_call', { request: { connectionId: catalog.connectionId, catalogRevision: catalog.catalogRevision, toolName: 'echo', arguments: { nested: [{ value: 'a' }] } } });
+  return invoke('mcp_confirm_call', { proposalId: proposal.proposalId });
+});
+action('cancel', () => invoke('mcp_cancel_call', { proposalId: proposal.proposalId }));
+action('refresh', async () => catalog = await invoke('mcp_list_tools', { connectionId: catalog.connectionId }));
+action('disconnect', () => invoke('mcp_disconnect', { connectionId: catalog.connectionId }));
+</script></body></html>

@@ -4,6 +4,7 @@ import type { AgentEditTarget } from '@/services/aiScope'
 import { prepareChatHistoryForModel } from '@/services/aiChatMessages'
 import type { AppContext } from './intentDetector'
 import type { AgentRunRequest, AgentStep, RoutingDecision } from './types'
+import { copyMcpTurnSnapshot, type McpTurnSnapshot } from '@/services/mcp/turnSnapshot'
 
 export function buildRoutingAppContext(
   contextTags: ContextTag[] = [],
@@ -58,6 +59,7 @@ export function buildEditTargetsContext(editTargets: AgentEditTarget[]): string 
 }
 
 export function buildAgentRunRequest(options: {
+  mcpTools?: McpTurnSnapshot
   content: string
   messages: ChatMessage[]
   modelHistory?: ChatMessage[]
@@ -98,6 +100,7 @@ export function buildAgentRunRequest(options: {
     editTargets,
     originalRequest,
     request: {
+      ...(options.mcpTools?.length ? { mcpTools: copyMcpTurnSnapshot(options.mcpTools) } : {}),
       query,
       chatHistory: options.modelHistory || prepareChatHistoryForModel(options.messages),
       rawQuery: normalizedUserIntent,

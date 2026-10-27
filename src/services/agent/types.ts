@@ -2,6 +2,7 @@ import type { ChatMessage, ChatMessageSource, ReadingArtifactMessageReference, R
 import type { SourceReferenceId, SourceReferenceRegistry } from '@/services/ai/sourceReferences'
 import type { Capability, SelectionRequestKind } from './intentDetector'
 import type { AgentToolName } from './toolSelector'
+import type { McpTurnSnapshot } from '@/services/mcp/turnSnapshot'
 
 export interface ToolParameter {
   name: string
@@ -43,6 +44,8 @@ export interface ToolExecutionContext {
 }
 
 export interface AgentStep {
+  /** External MCP data must never be decoded as an internal edit/action proposal. */
+  externalMcp?: { serverId: string; remoteName: string; status?: 'success' | 'error' | 'outcome_unknown' }
   type: 'thought' | 'action' | 'observation' | 'progress'
   content: string
   toolName?: string
@@ -86,6 +89,8 @@ export interface AgentConfig {
 }
 
 export interface AgentRunRequest {
+  /** Explicit current-turn external selection; never inherited from chat history. */
+  mcpTools?: McpTurnSnapshot
   query: string
   chatHistory?: ChatMessage[]
   config?: Partial<AgentConfig>

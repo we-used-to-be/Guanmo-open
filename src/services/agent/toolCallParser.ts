@@ -78,17 +78,17 @@ function getJsonCandidates(text: string): string[] {
   return Array.from(new Set(candidates.filter(Boolean)))
 }
 
-export function parseToolCall(text: string): ParsedToolCall | null {
+export function parseToolCall(text: string, isExternalTool?: (name: string) => boolean): ParsedToolCall | null {
   const trimmed = text.trim()
   if (!trimmed) return null
 
   for (const candidate of getJsonCandidates(trimmed)) {
     try {
       const parsed = JSON.parse(candidate)
-      if (parsed.tool && typeof parsed.tool === 'string' && getTool(parsed.tool)) {
+      if (parsed.tool && typeof parsed.tool === 'string' && (getTool(parsed.tool) || isExternalTool?.(parsed.tool))) {
         return {
           name: parsed.tool,
-          args: isRecord(parsed.args) ? parsed.args : {},
+          args: isRecord(parsed.args) ? parsed.args : isExternalTool?.(parsed.tool) ? null as unknown as Record<string, unknown> : {},
           rawJson: candidate,
           actionMessage: normalizeActionMessage(parsed.actionMessage),
         }

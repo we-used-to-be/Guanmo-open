@@ -16,6 +16,14 @@ export function isTauri(): boolean {
 
 // --- File System ---
 
+// The Rust command accepts only an approved, sealed proposal ID. No path/body
+// supplied by the WebView can replace the Rust-held snapshot.
+export async function commitMcpDocumentEdit(proposalId: string): Promise<void> {
+  if (!isTauri()) throw new Error('Not running in Tauri')
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke<void>('mcp_server_commit_edit', { proposalId })
+}
+
 function toNativeFilePath(path: string): string {
   if (/^[a-zA-Z]:[\\/]/.test(path) || /^\\\\/.test(path) || /^\/\//.test(path)) {
     return path.replace(/\//g, '\\')

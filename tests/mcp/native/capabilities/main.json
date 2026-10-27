@@ -1,0 +1,6 @@
+{
+  "identifier": "main",
+  "webviews": ["main"],
+  "local": true,
+  "permissions": ["core:default", "allow-mcp-smoke"]
+}

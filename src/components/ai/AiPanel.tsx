@@ -13,6 +13,8 @@ import { AssistantVisual } from '@/components/ai/AssistantVisual'
 import type { AssistantReaction } from '@/components/ai/AiSprite'
 import { SmoothStreamingText, StreamingBubbleContent } from '@/components/ai/SmoothStreamingText'
 import { PromptComposer } from '@/components/ai/PromptComposer'
+import { McpToolPicker } from '@/components/ai/McpToolPicker'
+import type { McpTurnSnapshot } from '@/services/mcp/turnSnapshot'
 import { FullscreenPanelNavigation } from './FullscreenPanelNavigation'
 import { ContextMenu, ContextMenuItem } from '@/components/common/ContextMenu'
 import { readRememberedMarkdownFileForOpen } from '@/services/markdownFileOpenPolicy'
@@ -150,6 +152,7 @@ export function AiPanel({ fullscreenDragHandleProps, productTourActive = false }
   const toggleAiPanel = useAppStore((s) => s.toggleAiPanel)
   const aiPanelOpen = useAppStore((s) => s.aiPanelOpen)
   const { messages, streaming, error, timeline, sendMessage, cancelStream } = useAiChat()
+  const [mcpTools, setMcpTools] = useState<McpTurnSnapshot>([])
   const databaseEnabled = getRuntimeCapabilities().database
   const assistantVisualId = useSettingsStore((s) => s.appearance.assistantVisualId)
   const assistantFontSize = useSettingsStore((s) => s.appearance.aiAssistantFontSize)
@@ -624,13 +627,14 @@ export function AiPanel({ fullscreenDragHandleProps, productTourActive = false }
     pendingOutgoingMessageCountRef.current = chatState.messages.filter((msg) => !msg.hidden).length
     streamingMessageIdRef.current = null
     streamingStartScrollTopRef.current = 0
-    sendMessage(currentDraft, undefined, currentContextTags.length > 0 ? currentContextTags : undefined, undefined, reasoningMode)
+    sendMessage(currentDraft, undefined, currentContextTags.length > 0 ? currentContextTags : undefined, undefined, reasoningMode, ...(mcpTools.length ? [mcpTools] as const : [] as const))
+    setMcpTools([])
     setDraftInput('')
     chatState.clearContextTags()
     // 重置深度思考开关
     setReasoningMode('off')
     setResetManualToggle((prev) => prev + 1)
-  }, [clearSendAnimation, reasoningMode, sendMessage, sendMessageAnimationEnabled, setDraftInput, updateSendAnimation, visibleMessages.length])
+  }, [clearSendAnimation, mcpTools, reasoningMode, sendMessage, sendMessageAnimationEnabled, setDraftInput, updateSendAnimation, visibleMessages.length])
 
   useEffect(() => {
     const handleShortcutSubmit = () => {
@@ -1192,7 +1196,9 @@ export function AiPanel({ fullscreenDragHandleProps, productTourActive = false }
           onCancel={cancelStream}
           onReasoningModeChange={setReasoningMode}
           resetManualToggle={resetManualToggle}
-        />
+        >
+          <McpToolPicker value={mcpTools} onChange={setMcpTools} disabled={streaming} />
+        </PromptComposer>
       )}
       {sendAnimation && sendMorphMotion && createPortal((
         <motion.div

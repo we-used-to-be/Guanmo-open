@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ChatMessage } from '@/services/ai/types'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AiPanel } from '@/components/ai/AiPanel'
@@ -10,6 +10,8 @@ import { useChatStore } from '@/stores/chatStore'
 import { useAppStore } from '@/stores/appStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { AI_SHORTCUT_SUBMIT_EVENT, setAiShortcutPrompt } from '@/services/aiContext'
+import * as mcpClient from '@/services/mcp/client'
+import { decodeMcpToolCatalog } from '@/services/mcp/toolCatalog'
 
 const aiChat = vi.hoisted(() => ({
   messages: [
@@ -135,6 +137,33 @@ describe('AI 面板视图返回', () => {
     vi.useRealTimers()
     vi.unstubAllGlobals()
     delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo
+  })
+
+  it('本轮 MCP 选择进入发送参数，下一轮不继承且不自动连接', async () => {
+    vi.stubGlobal('__TAURI__', {})
+    const connect = vi.spyOn(mcpClient, 'connectMcp')
+    vi.spyOn(mcpClient, 'listMcpServers').mockResolvedValue([{
+      config: { serverId: 'anon', executable: 'C:\\fixture\\node.exe', args: [], cwd: 'C:\\fixture' },
+      name: 'Anonymous', enabled: true, envNames: [], connectionId: 'conn', status: 'connected',
+    }])
+    vi.spyOn(mcpClient, 'refreshMcpTools').mockResolvedValue({
+      connectionId: 'conn', protocolVersion: 'fixture',
+      catalog: decodeMcpToolCatalog('anon', 'rev', [{ name: 'echo', inputSchema: { type: 'object' } }]),
+    })
+    render(<AiPanel />)
+    fireEvent.click(screen.getByRole('button', { name: '本轮 MCP 工具' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Anonymous' }))
+    fireEvent.click(await screen.findByRole('menuitemcheckbox', { name: 'echo' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '完成选择' }))
+    act(() => useChatStore.getState().setDraftInput('使用工具'))
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(aiChat.sendMessage).toHaveBeenCalledTimes(1))
+    expect(aiChat.sendMessage.mock.calls[0][5]).toMatchObject([{ serverId: 'anon', connectionId: 'conn', catalogRevision: 'rev', remoteName: 'echo' }])
+    expect(screen.queryByRole('button', { name: '清除选择' })).not.toBeInTheDocument()
+    act(() => useChatStore.getState().setDraftInput('下一轮'))
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    expect(aiChat.sendMessage.mock.calls[1][5]).toBeUndefined()
+    expect(connect).not.toHaveBeenCalled()
   })
 
   it('普通模式移除顶部导航，切回聊天保留滚动位置', () => {

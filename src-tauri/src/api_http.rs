@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::SocketAddr,
     path::PathBuf,
     str::FromStr,
     sync::{
@@ -18,10 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{ipc::Channel, AppHandle, Manager, State};
-use tokio::{
-    net::lookup_host,
-    sync::{Mutex as AsyncMutex, Semaphore},
-};
+use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use tokio_util::sync::CancellationToken;
 use url::{Host, Url};
 
@@ -590,87 +587,18 @@ fn build_headers(headers: &[(String, String)]) -> Result<HeaderMap, ApiHttpError
     Ok(output)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AddressKind {
-    Loopback,
-    Private,
-    Public,
-    Blocked,
-}
-
-fn classify_ip(ip: IpAddr) -> AddressKind {
-    match ip {
-        IpAddr::V4(ip) => {
-            if ip.is_unspecified()
-                || ip.is_link_local()
-                || ip.is_multicast()
-                || ip == Ipv4Addr::BROADCAST
-            {
-                AddressKind::Blocked
-            } else if ip.is_loopback() {
-                AddressKind::Loopback
-            } else if ip.is_private() {
-                AddressKind::Private
-            } else {
-                AddressKind::Public
-            }
-        }
-        IpAddr::V6(ip) => {
-            if let Some(v4) = ip.to_ipv4_mapped() {
-                return classify_ip(IpAddr::V4(v4));
-            }
-            if ip.is_unspecified() || ip.is_multicast() || ip.is_unicast_link_local() {
-                AddressKind::Blocked
-            } else if ip.is_loopback() {
-                AddressKind::Loopback
-            } else if (ip.segments()[0] & 0xfe00) == 0xfc00 {
-                AddressKind::Private
-            } else {
-                AddressKind::Public
-            }
-        }
-    }
-}
-
 async fn resolve_target(url: &Url) -> Result<Vec<SocketAddr>, ApiHttpError> {
-    let host = url
-        .host_str()
-        .ok_or_else(|| ApiHttpError::new("INVALID_URL", "API 地址缺少主机名"))?;
-    let port = url
-        .port_or_known_default()
-        .ok_or_else(|| ApiHttpError::new("INVALID_URL", "API 地址缺少端口"))?;
-    let addresses: Vec<_> = lookup_host((host, port))
+    crate::network_target::resolve_target(url)
         .await
-        .map_err(|error| ApiHttpError::new("DNS_RESOLUTION_FAILED", error.to_string()))?
-        .collect();
-    if addresses.is_empty() {
-        return Err(ApiHttpError::new(
-            "DNS_RESOLUTION_FAILED",
-            "API 地址未解析到可用 IP",
-        ));
-    }
-    let kinds: Vec<_> = addresses
-        .iter()
-        .map(|address| classify_ip(address.ip()))
-        .collect();
-    validate_address_kinds(url.scheme(), &kinds)?;
-    Ok(addresses)
+        .map_err(|e| ApiHttpError::new(e.code, e.message))
 }
 
+#[cfg(test)]
+use crate::network_target::{classify_ip, AddressKind};
+#[cfg(test)]
 fn validate_address_kinds(scheme: &str, kinds: &[AddressKind]) -> Result<(), ApiHttpError> {
-    if kinds.contains(&AddressKind::Blocked) {
-        return Err(ApiHttpError::new(
-            "ADDRESS_NOT_ALLOWED",
-            "目标地址属于永久禁止访问的网络范围",
-        ));
-    }
-    if scheme == "http" && kinds.contains(&AddressKind::Public) {
-        return Err(ApiHttpError::new(
-            "PUBLIC_HTTP_NOT_ALLOWED",
-            "公网 API 仅允许使用 HTTPS",
-        ));
-    }
-    Ok(())
+    crate::network_target::validate_address_kinds(scheme, kinds)
+        .map_err(|e| ApiHttpError::new(e.code, e.message))
 }
 
 fn response_headers(response: &Response, secret: &str) -> Vec<(String, String)> {

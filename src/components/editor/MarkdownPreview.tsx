@@ -148,6 +148,7 @@ interface PreviewDragSelection {
   clientY: number
   lastResolvedClientX: number
   lastResolvedClientY: number
+  horizontalScroller: HTMLElement | null
 }
 
 interface FloatingAnchorRect {
@@ -2083,8 +2084,15 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
 
   /* ---------------- 统一 Range：拖选引擎 + 键盘（Ctrl+A/C、双击选词、Shift+点击） ---------------- */
 
-  const resolveCaretOffsetRef = useRef<(clientX: number, clientY: number) => number | null>(() => null)
-  resolveCaretOffsetRef.current = (clientX: number, clientY: number) => {
+  const resolveCaretOffsetRef = useRef<(clientX: number, clientY: number, horizontalScroller?: HTMLElement | null) => number | null>(() => null)
+  resolveCaretOffsetRef.current = (clientX: number, clientY: number, horizontalScroller?: HTMLElement | null) => {
+    // 鼠标越过代码块左右边缘后，仍从可见边缘解析选区终点。
+    if (horizontalScroller && rootRef.current?.contains(horizontalScroller)) {
+      const rect = horizontalScroller.getBoundingClientRect()
+      if (rect.width > 2 && clientY >= rect.top && clientY <= rect.bottom) {
+        clientX = Math.max(rect.left + 1, Math.min(clientX, rect.right - 1))
+      }
+    }
     const doc = document as Document & {
       caretRangeFromPoint?: (x: number, y: number) => Range | null
       caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null
@@ -2125,8 +2133,25 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       }
       if (dy !== 0) container.scrollTop += dy
     }
+    const horizontalScroller = drag.horizontalScroller
+    if (horizontalScroller && rootRef.current?.contains(horizontalScroller)) {
+      const rect = horizontalScroller.getBoundingClientRect()
+      if (drag.clientY >= rect.top && drag.clientY <= rect.bottom) {
+        const edge = Math.min(DRAG_AUTOSCROLL_EDGE, rect.width / 2)
+        let dx = 0
+        if (drag.clientX < rect.left + edge) {
+          dx = -Math.ceil(Math.min(DRAG_AUTOSCROLL_MAX_STEP, (rect.left + edge - drag.clientX) / 3))
+        } else if (drag.clientX > rect.right - edge) {
+          dx = Math.ceil(Math.min(DRAG_AUTOSCROLL_MAX_STEP, (drag.clientX - rect.right + edge) / 3))
+        }
+        horizontalScroller.scrollLeft = Math.max(0, Math.min(
+          horizontalScroller.scrollWidth - horizontalScroller.clientWidth,
+          horizontalScroller.scrollLeft + dx,
+        ))
+      }
+    }
     // 每帧最多更新一次终点，且只有 offset 真正变化时才写入选区
-    const offset = resolveCaretOffsetRef.current(drag.clientX, drag.clientY)
+    const offset = resolveCaretOffsetRef.current(drag.clientX, drag.clientY, horizontalScroller)
     if (offset !== null) {
       drag.lastResolvedClientX = drag.clientX
       drag.lastResolvedClientY = drag.clientY
@@ -2164,6 +2189,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
         clientY: event.clientY,
         lastResolvedClientX: event.clientX,
         lastResolvedClientY: event.clientY,
+        horizontalScroller: event.target instanceof Element ? event.target.closest<HTMLElement>('.gm-code-block pre') : null,
       }
       applySelection(anchor === offset ? null : { from: anchor, to: offset })
     }
@@ -2188,7 +2214,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     }
 
     const resolveReleaseOffset = (drag: PreviewDragSelection, event: MouseEvent) => {
-      const exact = resolveCaretOffsetRef.current(event.clientX, event.clientY)
+      const exact = resolveCaretOffsetRef.current(event.clientX, event.clientY, drag.horizontalScroller)
       if (exact !== null) return exact
       if (Math.abs(event.clientY - drag.lastResolvedClientY) > DRAG_ENDPOINT_SAME_LINE_TOLERANCE) return drag.focusOffset
       if (event.clientX === drag.lastResolvedClientX) return drag.focusOffset

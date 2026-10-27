@@ -6,6 +6,7 @@
  * 使用方式：
  *   node scripts/pre-push-check.mjs              # 默认（当前分支 vs origin/master）
  *   node scripts/pre-push-check.mjs --release    # 发布模式（额外检查版本/tag/描述一致性）
+ *   node scripts/pre-push-check.mjs --security-only # 用户明确要求时，仅执行基础安全检查
  *
  * 返回码：
  *   0 — 无阻断项（可能有警告）
@@ -540,6 +541,8 @@ async function main() {
   console.log(colors.bold + colors.cyan + '╚══════════════════════════════════════╝' + colors.reset);
 
   const isRelease = process.argv.includes('--release');
+  const securityOnly = process.argv.includes('--security-only');
+  console.log(`   校验模式: ${securityOnly ? '基础安全检查（用户明确要求跳过复杂测试）' : '默认完整检查'}`);
 
   // 1. Git 状态
   const { branch, unstaged, untracked } = checkGitStatus();
@@ -560,7 +563,12 @@ async function main() {
   checkDependencies();
 
   // 7. 构建 & 代码质量
-  checkBuildAndQuality();
+  if (securityOnly) {
+    console.log('\n=== 7. 构建 & 代码质量检查 ===');
+    console.log('   NOT TESTED: TypeScript 类型检查、Vite 构建、Cargo check（--security-only）');
+  } else {
+    checkBuildAndQuality();
+  }
 
   // 8. 版本一致性（仅发布模式）
   if (isRelease) {

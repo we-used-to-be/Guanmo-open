@@ -1,6 +1,6 @@
 import { DesktopApiKeyControl } from './DesktopApiKeyControl'
 import { hasApiCredential, embeddingConnection } from '@/services/apiConnection'
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Button, Collapse, Divider, Footer, Icon, Input, Modal, Select, Switch, Table, Tabs } from 'animal-island-ui'
 import appIcon from '@/assets/icon-settings.png'
 
@@ -84,6 +84,8 @@ import {
 import type { WebApiSecrets } from '@/web/webSecretStorage'
 
 const AI_ROUTING_GUIDE_URL = 'https://github.com/we-used-to-be/Guanmo-open/blob/main/docs/AI_ROUTING_GUIDE.md'
+const McpSettings = lazy(() => import('./McpSettings').then(module => ({ default: module.McpSettings })))
+const McpServerSettings = lazy(() => import('./McpServerSettings').then(module => ({ default: module.McpServerSettings })))
 
 const AI_SPRITE_PREVIEW_STATES: ReadonlyArray<{
   state: AssistantState
@@ -115,6 +117,7 @@ async function openUrl(url: string, external: boolean) {
 
 const TABS_CONFIG = [
   { key: 'ai', text: 'AI 模型' },
+  { key: 'mcp', text: 'MCP' },
   { key: 'editor', text: '编辑器', children: <EditorSettings /> },
   { key: 'memory', text: '记忆', children: <MemorySettings /> },
   { key: 'ai-shortcuts', text: '快捷操作', children: <AiShortcutSettings /> },
@@ -130,11 +133,13 @@ export function SettingsPage({ initialSection = null, onSectionChange }: { initi
   const openKnowledgeManager = useCallback(() => setShowKnowledgeManager(true), [])
   const closeKnowledgeManager = useCallback(() => setShowKnowledgeManager(false), [])
 
-  const tabs = TABS_CONFIG.map((tab) => ({
+  const tabs = TABS_CONFIG.filter(tab => tab.key !== 'mcp' || isTauri()).map((tab) => ({
     key: tab.key,
     label: <span data-product-tour={tab.key === 'ai' ? 'settings-ai-tab' : undefined} className="text-body">{tab.text}</span>,
     children: tab.key === 'ai'
       ? <AiSettings onOpenKnowledgeManager={openKnowledgeManager} />
+      : tab.key === 'mcp'
+        ? active === 'mcp' && <Suspense fallback={<p className="text-caption">正在加载 MCP 设置…</p>}><McpSettings /><McpServerSettings /></Suspense>
       : tab.children,
   }))
 

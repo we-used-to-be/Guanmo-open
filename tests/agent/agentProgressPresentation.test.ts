@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { getAgentProgressText, getAgentToolLabel } from '@/hooks/useAiChat'
 
 describe('Agent 阶段展示文案', () => {
+  it('区分 MCP 原生确认、返回、失败和未知结果', () => {
+    const step = { type: 'action' as const, content: '', toolName: 'mcp_anon_0', externalMcp: { serverId: 'anon', remoteName: 'echo' }, timestamp: 0 }
+    expect(getAgentProgressText(step)).toContain('等待原生确认 MCP：anon / echo')
+    expect(getAgentProgressText({ ...step, type: 'observation', externalMcp: { ...step.externalMcp, status: 'success' } })).toContain('已返回外部数据')
+    expect(getAgentProgressText({ ...step, type: 'observation', externalMcp: { ...step.externalMcp, status: 'error' } })).toContain('调用失败或已取消')
+    expect(getAgentProgressText({ ...step, type: 'observation', externalMcp: { ...step.externalMcp, status: 'outcome_unknown' } })).toContain('调用结果未知，未自动重试')
+  })
   it('为上下文读取显示开始阶段文案', () => {
     expect(getAgentProgressText({
       type: 'action',

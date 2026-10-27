@@ -109,6 +109,60 @@ afterEach(() => {
 })
 
 describe('MarkdownPreview 批注浮层', () => {
+  it('代码块边缘拖选会横向滚动并延伸选区，松手后停止', async () => {
+    const code = 'abcdefghijklmnopqrstuvwxyz'.repeat(20)
+    const previewRef = { current: null } as MutableRefObject<MarkdownPreviewHandle | null>
+    render(<MarkdownPreview ref={previewRef} content={'```\n' + code + '\n```'} documentKey="horizontal-drag" />, { container: host! })
+    const pre = host!.querySelector<HTMLElement>('.gm-code-block pre')!
+    const span = pre.querySelector('[data-gm-src-from]')!
+    const text = span.firstChild!
+    expect(span.closest('.gm-code-block')).not.toBeNull()
+    expect(text.nodeType).toBe(Node.TEXT_NODE)
+    Object.defineProperties(pre, {
+      clientWidth: { configurable: true, value: 300 },
+      scrollWidth: { configurable: true, value: 3000 },
+    })
+    vi.spyOn(pre, 'getBoundingClientRect').mockReturnValue(makeRect(100, 40, 300, 80))
+    const caretDocument = document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
+    caretDocument.caretRangeFromPoint = (x) => {
+      if (x < 40 || x >= 340) return null
+      const offset = Math.min(code.length, Math.max(0, Math.floor((x - 40 + pre.scrollLeft) / 5)))
+      const range = document.createRange()
+      range.setStart(text, offset)
+      range.collapse(true)
+      return range
+    }
+    // 只接管拖选的帧，避免其他布局帧干扰断言。
+    const frames = new Map<number, FrameRequestCallback>()
+    let frameId = 0
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.set(++frameId, callback)
+      return frameId
+    })
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id))
+    const tick = () => act(() => {
+      const callbacks = [...frames.values()]
+      frames.clear()
+      callbacks.forEach((callback) => callback(0))
+    })
+    expect(fireEvent.mouseDown(span, { button: 0, buttons: 1, clientX: 60, clientY: 130 })).toBe(false)
+    fireEvent.mouseMove(document, { buttons: 1, clientX: 370, clientY: 130 })
+    expect(frames.size).toBeGreaterThan(0)
+    tick()
+    expect(pre.scrollLeft).toBeGreaterThan(0)
+    const first = previewRef.current!.getSelection()!
+    tick()
+    expect(previewRef.current!.getSelection()!.to).toBeGreaterThan(first.to)
+    const right = pre.scrollLeft
+    fireEvent.mouseMove(document, { buttons: 1, clientX: 20, clientY: 130 })
+    tick()
+    expect(pre.scrollLeft).toBeLessThan(right)
+    fireEvent.mouseUp(document, { button: 0, clientX: 20, clientY: 130 })
+    const stopped = pre.scrollLeft
+    tick()
+    expect(pre.scrollLeft).toBe(stopped)
+  })
+
   it('优先以触发鼠标点定位，并在视口边缘翻转或夹紧', () => {
     const originalWidth = window.innerWidth
     const originalHeight = window.innerHeight

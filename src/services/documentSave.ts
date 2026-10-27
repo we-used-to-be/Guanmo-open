@@ -26,7 +26,19 @@ interface Request {
   bind: boolean
   waiters: Waiter[]
 }
-interface Queue { running?: Request; pending?: Request; timer?: ReturnType<typeof setTimeout> }
+interface Queue {
+  running?: Request
+  pending?: Request
+  timer?: ReturnType<typeof setTimeout>
+  exclusive?: () => Promise<void>
+  exclusiveRunning?: boolean
+}
+
+export interface DocumentWriteSnapshot {
+  readonly path: string
+  readonly content: string
+  readonly owner: Owner | null
+}
 
 const queues = new Map<string, Queue>()
 const failures = new Map<string, number>()
@@ -74,7 +86,7 @@ function cancelPending() {
       queue.pending = undefined
       if (queue.timer) clearTimeout(queue.timer)
       queue.timer = undefined
-      if (!queue.running) queues.delete(pathKey)
+      if (!queue.running && !queue.exclusiveRunning) void drain(pathKey, queue)
     }
   }
 }
@@ -99,7 +111,7 @@ function enqueue(request: Omit<Request, 'waiters'>): Promise<SaveReceipt> {
       source: pending && pending.owner?.identity === request.owner?.identity && pending.source === 'manual' ? 'manual' : request.source,
       waiters: [...(pending && pending.owner?.identity === request.owner?.identity ? pending.waiters : []), waiter],
     }
-    if (!queue.running) {
+    if (!queue.running && !queue.exclusiveRunning) {
       if (queue.timer && request.source === 'manual') { clearTimeout(queue.timer); queue.timer = undefined }
       if (!queue.timer) void drain(pathKey, queue)
     }
@@ -108,9 +120,20 @@ function enqueue(request: Omit<Request, 'waiters'>): Promise<SaveReceipt> {
 }
 
 async function drain(pathKey: string, queue: Queue): Promise<void> {
+  if (queue.running || queue.exclusiveRunning) return
   const request = queue.pending
   queue.pending = undefined
-  if (!request) { queues.delete(pathKey); return }
+  if (!request) {
+    const operation = queue.exclusive
+    if (!operation) { queues.delete(pathKey); return }
+    queue.exclusive = undefined
+    queue.exclusiveRunning = true
+    try { await operation() } finally {
+      queue.exclusiveRunning = false
+      void drain(pathKey, queue)
+    }
+    return
+  }
   const tab = current(request.owner)
   if ((request.owner && !tab) || (request.source === 'auto' && !autoEnabled())) {
     cancel(request)
@@ -168,11 +191,69 @@ async function drain(pathKey: string, queue: Queue): Promise<void> {
       queue.pending = undefined
     }
   }
-  if (!queue.pending) { queues.delete(pathKey); return }
+  if (!queue.pending) { void drain(pathKey, queue); return }
   if (!succeeded && queue.pending.source === 'auto') {
-    if ((failures.get(pathKey) ?? 0) >= 3) { cancel(queue.pending); queue.pending = undefined; queues.delete(pathKey); return }
+    if ((failures.get(pathKey) ?? 0) >= 3) { cancel(queue.pending); queue.pending = undefined; void drain(pathKey, queue); return }
     queue.timer = setTimeout(() => { queue.timer = undefined; void drain(pathKey, queue) }, delay())
   } else void drain(pathKey, queue)
+}
+
+// A sealed external write shares the ordinary save lock, but is never coalesced
+// with a user save or replaced with a newer Tab body.
+export function runDocumentSaveTransaction<T>(path: string, operation: () => Promise<T>): Promise<T> {
+  const pathKey = key(path)
+  let queue = queues.get(pathKey)
+  if (!queue) { queue = {}; queues.set(pathKey, queue) }
+  if (queue.exclusive || queue.exclusiveRunning) return Promise.reject(new Error('DOCUMENT_SAVE_BUSY'))
+  const promise = new Promise<T>((resolve, reject) => {
+    queue.exclusive = async () => {
+      try { resolve(await operation()) } catch (error) { reject(error) }
+    }
+  })
+  if (!queue.running && !queue.timer) void drain(pathKey, queue)
+  return promise
+}
+
+function tabsAtPath(path: string): Tab[] {
+  return useEditorStore.getState().tabs.filter(tab => tab.filePath && key(tab.filePath) === key(path))
+}
+
+export function captureDocumentWriteSnapshot(path: string, content: string): DocumentWriteSnapshot {
+  const tabs = tabsAtPath(path)
+  if (tabs.length > 1 || tabs.some(tab => tab.content !== content || tab.savedContent !== content)) throw new Error('DOCUMENT_SAVE_CONFLICT')
+  return { path, content, owner: tabs[0] ? ownerFor(tabs[0]) : null }
+}
+
+export function validateDocumentWriteSnapshot(snapshot: DocumentWriteSnapshot): void {
+  const tabs = tabsAtPath(snapshot.path)
+  const tab = current(snapshot.owner)
+  if (snapshot.owner
+    ? !tab || tabs.length !== 1 || tabs[0] !== tab || tab.content !== snapshot.content || tab.savedContent !== snapshot.content
+    : tabs.length !== 0) throw new Error('DOCUMENT_SAVE_CONFLICT')
+}
+
+export function applyDocumentWriteSnapshot(snapshot: DocumentWriteSnapshot, content: string, write: () => Promise<void>): Promise<SaveReceipt> {
+  return runDocumentSaveTransaction(snapshot.path, async () => {
+    validateDocumentWriteSnapshot(snapshot)
+    // Never stage the proposal in the Tab before Rust confirms the disk write:
+    // a rejected/failed proposal must not become a later auto-save.
+    await write()
+    const tab = current(snapshot.owner)
+    if (tab) {
+      if (tab.content === snapshot.content && tab.savedContent === snapshot.content) {
+        const queue = queues.get(key(snapshot.path))
+        if (queue?.pending?.owner?.identity === snapshot.owner?.identity && queue?.pending) {
+          cancel(queue.pending)
+          queue.pending = undefined
+        }
+        useEditorStore.getState().updateTabContent(tab.id, content)
+      }
+      useEditorStore.getState().markTabSaved(tab.id, content)
+    }
+    const title = tab?.title ?? snapshot.path.split(/[\\/]/).pop() ?? 'Markdown'
+    scheduleMarkdownDocumentIndex(tab?.filePath ?? snapshot.path, title, content, 1200)
+    return { status: 'written', path: snapshot.path, content, currentSaved: !!tab && current(snapshot.owner)?.content === content }
+  })
 }
 
 export function saveDocument(tabId: string, source: Source = 'manual'): Promise<SaveReceipt | null> {

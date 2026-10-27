@@ -187,16 +187,20 @@ export interface ChatToolCall {
   args: Record<string, unknown>
 }
 
+/** 保留外部工具的完整 JSON Schema；这里只声明对象形状，不代替运行时参数校验。 */
+export interface ToolInputSchema {
+  type: 'object'
+  properties?: Record<string, unknown>
+  required?: string[]
+  [keyword: string]: unknown
+}
+
 export interface ChatTool {
   type: 'function'
   function: {
     name: string
     description: string
-    parameters: {
-      type: 'object'
-      properties: Record<string, { type: string; description: string }>
-      required: string[]
-    }
+    parameters: ToolInputSchema
   }
 }
 

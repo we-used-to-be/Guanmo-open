@@ -20,6 +20,11 @@ mod api_http_limits;
 mod background_library;
 mod database_transactions;
 mod diagnostics;
+mod mcp;
+mod mcp_server;
+mod network_target;
+mod secret_protection;
+use secret_protection::{protect_secret, unprotect_secret};
 mod perf_monitor;
 mod rag_index;
 mod reading_reminder_notifications;
@@ -961,76 +966,6 @@ fn write_secret_map(path: &PathBuf, secrets: &HashMap<String, Vec<u8>>) -> Resul
     fs::rename(&temporary, path).map_err(|_| "安全存储更新失败".into())
 }
 
-#[cfg(target_os = "windows")]
-fn protect_secret(value: &str) -> Result<Vec<u8>, String> {
-    use std::ptr::null;
-    use windows_sys::Win32::Foundation::LocalFree;
-    use windows_sys::Win32::Security::Cryptography::{CryptProtectData, CRYPT_INTEGER_BLOB};
-
-    let bytes = value.as_bytes();
-    let input = CRYPT_INTEGER_BLOB {
-        cbData: bytes.len() as u32,
-        pbData: bytes.as_ptr() as *mut u8,
-    };
-    let mut output = CRYPT_INTEGER_BLOB {
-        cbData: 0,
-        pbData: std::ptr::null_mut(),
-    };
-
-    let ok = unsafe { CryptProtectData(&input, null(), null(), null(), null(), 0, &mut output) };
-    if ok == 0 {
-        return Err("failed to encrypt secret with Windows DPAPI".into());
-    }
-
-    let encrypted =
-        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
-    unsafe {
-        LocalFree(output.pbData as _);
-    }
-    Ok(encrypted)
-}
-
-#[cfg(target_os = "windows")]
-fn unprotect_secret(value: &[u8]) -> Result<String, String> {
-    use std::ptr::{null, null_mut};
-    use windows_sys::Win32::Foundation::LocalFree;
-    use windows_sys::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
-
-    let input = CRYPT_INTEGER_BLOB {
-        cbData: value.len() as u32,
-        pbData: value.as_ptr() as *mut u8,
-    };
-    let mut output = CRYPT_INTEGER_BLOB {
-        cbData: 0,
-        pbData: std::ptr::null_mut(),
-    };
-
-    let ok =
-        unsafe { CryptUnprotectData(&input, null_mut(), null(), null(), null(), 0, &mut output) };
-    if ok == 0 {
-        return Err("failed to decrypt secret with Windows DPAPI".into());
-    }
-
-    let decrypted =
-        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
-    unsafe {
-        LocalFree(output.pbData as _);
-    }
-    String::from_utf8(decrypted).map_err(|err| err.to_string())
-}
-
-#[cfg(not(target_os = "windows"))]
-fn protect_secret(value: &str) -> Result<Vec<u8>, String> {
-    let _ = value;
-    Err("当前平台不支持系统安全存储".into())
-}
-
-#[cfg(not(target_os = "windows"))]
-fn unprotect_secret(value: &[u8]) -> Result<String, String> {
-    let _ = value;
-    Err("当前平台不支持系统安全存储".into())
-}
-
 #[tauri::command]
 fn authorize_workspace_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let path = canonical_dir(&PathBuf::from(path)).inspect_err(|_| {
@@ -1868,6 +1803,38 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            mcp_server::runtime::mcp_server_options,
+            mcp_server::runtime::mcp_server_start,
+            mcp_server::runtime::mcp_server_stop,
+            mcp_server::runtime::mcp_server_status,
+            mcp_server::runtime::mcp_server_connection_info,
+            mcp_server::runtime::mcp_server_reply,
+            mcp_server::runtime::edits::mcp_server_edits,
+            mcp_server::runtime::edits::mcp_server_edit_detail,
+            mcp_server::runtime::edits::mcp_server_cancel_edit,
+            mcp_server::runtime::edits::mcp_server_revert_edit,
+            mcp_server::runtime::edits::mcp_server_approve_edit,
+            mcp_server::runtime::edits::mcp_server_commit_edit,
+            mcp::config::mcp_list_servers,
+            mcp::oauth::mcp_authorize,
+            mcp::oauth::mcp_cancel_authorize,
+            mcp::oauth::mcp_revoke_authorization,
+            mcp::config::mcp_save_server,
+            mcp::config::mcp_set_server_enabled,
+            mcp::config::mcp_delete_server,
+            mcp::mcp_register_stdio,
+            mcp::mcp_connect,
+            mcp::http::mcp_connect_http,
+            mcp::mcp_cancel_connect,
+            mcp::mcp_list_tools,
+            mcp::mcp_list_resources,
+            mcp::mcp_read_resource,
+            mcp::mcp_list_prompts,
+            mcp::mcp_get_prompt,
+            mcp::mcp_prepare_call,
+            mcp::mcp_confirm_call,
+            mcp::mcp_cancel_call,
+            mcp::mcp_disconnect,
             background_library::list_reading_backgrounds,
             background_library::read_reading_background,
             background_library::import_reading_background,
@@ -1940,6 +1907,8 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                mcp::shutdown();
+                mcp_server::runtime::shutdown();
                 diagnostics::record_exit(app);
             }
         });

@@ -22,7 +22,7 @@ export function extractKnowledgeSourcesFromSteps(steps: AgentStep[]): ChatMessag
   const seen = new Set<string>()
 
   for (const step of steps) {
-    if (step.type !== 'observation') continue
+    if (step.type !== 'observation' || step.externalMcp || step.toolName?.startsWith('mcp_')) continue
     try {
       const parsed = JSON.parse(step.content)
       if (!isPlainObject(parsed) || !Array.isArray(parsed.results)) continue
@@ -77,7 +77,9 @@ export function buildAgentResultPresentation(result: AgentResult, tagCount: numb
         (step) => step.type === 'action' && step.toolName === 'web_search'
       ),
     }),
-    answer: stripToolCallJson(result.answer) || '已生成修改确认卡片，请在下方确认。',
+    answer: stripToolCallJson(result.answer) || (result.steps.some(step => step.externalMcp)
+      ? 'MCP 工具已返回外部数据。'
+      : '已生成修改确认卡片，请在下方确认。'),
   }
 }
 

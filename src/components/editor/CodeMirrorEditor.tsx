@@ -448,8 +448,20 @@ export function CodeMirrorEditor({ content, onChange, onSave, onImageFiles, view
     }
     const currentContent = view.state.doc.toString()
     if (content !== currentContent) {
+      // 外部局部修改只替换差异区间，保留其余文本的选区与视口锚点。
+      let from = 0
+      const commonLength = Math.min(currentContent.length, content.length)
+      while (from < commonLength && currentContent[from] === content[from]) from += 1
+      let to = currentContent.length
+      let insertTo = content.length
+      while (to > from && insertTo > from && currentContent[to - 1] === content[insertTo - 1]) {
+        to -= 1
+        insertTo -= 1
+      }
+      const changes = view.state.changes({ from, to, insert: content.slice(from, insertTo) })
       view.dispatch({
-        changes: { from: 0, to: currentContent.length, insert: content },
+        changes,
+        effects: view.scrollSnapshot().map(changes),
       })
       lastEmittedContentRef.current = content
     }

@@ -6,6 +6,7 @@ import { addFileContextTag, addFolderContextTag } from '@/services/aiContext'
 import { ManualToolToggle } from './ManualToolToggle'
 
 interface PromptComposerProps {
+  children?: React.ReactNode
   focusRequest?: number
   subtleBorder?: boolean
   onSend: (source?: HTMLElement) => void
@@ -15,7 +16,7 @@ interface PromptComposerProps {
   resetManualToggle?: number
 }
 
-export function PromptComposer({ onSend, streaming, onCancel, onReasoningModeChange, resetManualToggle, subtleBorder = false, focusRequest = 0 }: PromptComposerProps) {
+export function PromptComposer({ children, onSend, streaming, onCancel, onReasoningModeChange, resetManualToggle, subtleBorder = false, focusRequest = 0 }: PromptComposerProps) {
   const draftInput = useChatStore((s) => s.draftInput)
   const setDraftInput = useChatStore((s) => s.setDraftInput)
   const contextTags = useChatStore((s) => s.contextTags)
@@ -118,6 +119,7 @@ export function PromptComposer({ onSend, streaming, onCancel, onReasoningModeCha
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {children}
       {/* 拖拽提示 */}
       {isDragOver && (
         <div className="mb-2 text-center text-micro text-gm-primary animate-pulse">

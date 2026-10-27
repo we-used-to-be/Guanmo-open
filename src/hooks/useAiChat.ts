@@ -23,6 +23,7 @@ import { singletonManager, SINGLETON_IDS } from '@/services/singletonPromise'
 import { promoteTask } from '@/services/idleScheduler'
 import { prepareConversationContext, prepareConversationRouting } from '@/services/agent/conversationRequest'
 import { buildAgentRunRequest } from '@/services/agent/requestBuilder'
+import { copyMcpTurnSnapshot, type McpTurnSnapshot } from '@/services/mcp/turnSnapshot'
 import {
   buildScopedAgentResultPresentation,
   resolveAgentAnswerSources,
@@ -33,6 +34,13 @@ import { READING_REMINDER_FEATURE_AVAILABLE } from '@/services/readingReminderFe
 import { finishAgentTrace, finishAgentTraceSpan, startAgentTrace, startAgentTraceSpan, type AgentTraceStatus } from '@/services/devAgentDiagnostics'
 
 export function getAgentProgressText(step: AgentStep, knowledgeActionMessage?: string): string {
+  if (step.externalMcp) {
+    const target = `${step.externalMcp.serverId} / ${step.externalMcp.remoteName}`
+    return step.type === 'action' ? `等待原生确认 MCP：${target}`
+      : step.externalMcp.status === 'success' ? `MCP ${target} 已返回外部数据`
+      : step.externalMcp.status === 'outcome_unknown' ? `MCP ${target} 调用结果未知，未自动重试`
+      : `MCP ${target} 调用失败或已取消，未自动重试`
+  }
   if (step.type === 'progress') {
     if (knowledgeActionMessage) return knowledgeActionMessage
     return {
@@ -230,10 +238,12 @@ export function useAiChat() {
   }, [setStreaming])
 
   const sendMessage = useCallback(
-    async (content: string, forceAgent?: boolean, contextTags?: ContextTag[], manualCapabilities?: ManualCapability[], reasoningMode?: 'off' | 'on') => {
+    async (content: string, forceAgent?: boolean, contextTags?: ContextTag[], manualCapabilities?: ManualCapability[], reasoningMode?: 'off' | 'on', mcpTools?: McpTurnSnapshot) => {
       const hasText = content.trim().length > 0
       const hasTags = contextTags && contextTags.length > 0
       if ((!hasText && !hasTags) || useChatStore.getState().streaming) return
+      // Capture before any async work; later picker changes cannot alter this turn.
+      const mcpSnapshot = mcpTools?.length ? copyMcpTurnSnapshot(mcpTools) : undefined
       setStreaming(true)
       setError(null)
       clearTimeline()
@@ -313,7 +323,7 @@ export function useAiChat() {
       const routingDecision = prepareConversationRouting({
         content,
         contextTags,
-        forceAgent,
+        forceAgent: mcpSnapshot ? true : forceAgent,
         manualCapabilities,
         agentTaskContext,
         hasRecentEditContext,
@@ -459,6 +469,8 @@ export function useAiChat() {
             } else {
               addTimelineItem({ type: 'error', label: '本地知识库检索失败' })
             }
+          } else if ((event.type === 'action' || event.type === 'observation') && step.externalMcp) {
+            addTimelineItem({ type: step.externalMcp.status === 'error' || step.externalMcp.status === 'outcome_unknown' ? 'error' : 'local_search_start', label: getAgentProgressText(step) })
           } else if (event.type === 'action' && event.toolName === 'search_knowledge') {
             addTimelineItem({ type: 'local_search_start', label: '检索本地知识库索引' })
           } else if (event.type === 'action' && event.toolName === 'read_selection_context') {
@@ -517,6 +529,7 @@ export function useAiChat() {
         }
 
         const createAgentRequest = () => buildAgentRunRequest({
+            mcpTools: mcpSnapshot,
             content,
             messages,
             modelHistory,

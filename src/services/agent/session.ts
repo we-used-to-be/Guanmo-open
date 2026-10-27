@@ -156,6 +156,9 @@ export function decodeAgentStepEvent(step: AgentStep): AgentSessionEvent {
   }
   if (step.type === 'thought') return { type: 'thought', step }
   if (step.type === 'action') return { type: 'action', step, toolName: step.toolName }
+  if (step.externalMcp || step.toolName?.startsWith('mcp_')) {
+    return { type: 'observation', step, toolName: step.toolName }
+  }
 
   let pendingEdit: PendingEditPayload | undefined
   let pendingAction: PendingActionPayload | undefined

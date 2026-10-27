@@ -7,7 +7,16 @@
 ```bash
 node scripts/pre-push-check.mjs           # 普通推送
 node scripts/pre-push-check.mjs --release # 发布版本
+node scripts/pre-push-check.mjs --security-only # 用户明确要求时，仅基础安全检查
 ```
+
+## 模式选择
+
+- **默认模式**保持现有流程，执行基础安全检查和类型检查、Vite 构建、Cargo check。
+- **基础安全模式**仅在用户针对当前任务明确要求“无需复杂测试”“跳过测试/构建”或“只做基础安全检查”时使用 `--security-only`。Agent 不得仅因文档改动、改动量小或耗时较长自行降级，也不得在基础模式结束后追加执行已跳过的复杂检查。
+- 基础模式继续执行 Git 状态与待推送提交、敏感文件与内容（含路径和地址）、不应公开的文件、构建产物与大文件、轻量依赖元数据检查；不执行类型检查、Vite 构建、Cargo check，也不追加测试、Lint、编译、打包或完整依赖审计。跳过项必须明确报告为 `NOT TESTED`，不得计为通过。
+- `--release` 可与 `--security-only` 组合，仍执行版本/tag/变更日志检查；独立的发布前流程不因该参数而豁免。
+- 两种模式都保留阻断项处理、校验结果展示和二次确认要求；“跳过测试”不表示“跳过安全检查”或授权自动推送。
 
 ## 校验项目
 
@@ -41,14 +50,13 @@ node scripts/pre-push-check.mjs --release # 发布版本
 - 超大文件（>10MB）
 
 ### 6. 依赖与许可证
-- 新增依赖的许可证是否合规
-- 是否有已知安全漏洞
+- 清单变化时检查 `package.json` 与 `Cargo.toml` 的许可证元数据和解析错误
+- 脚本不执行完整许可证合规或漏洞审计；发布或其他独立门禁按对应流程执行
 
 ### 7. 代码质量
-- lint 检查
-- 类型检查
-- 构建是否通过
-- cargo check（Rust 部分）
+- 默认执行 TypeScript 类型检查、Vite 构建、Cargo check
+- 基础安全模式跳过本节，输出 `NOT TESTED`
+- 脚本不自动执行 Lint 或测试套件
 
 ## 输出格式
 

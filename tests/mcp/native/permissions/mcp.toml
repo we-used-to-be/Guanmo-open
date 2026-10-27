@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-mcp-smoke"
+description = "Anonymous MCP smoke window only."
+commands.allow = ["mcp_list_servers", "mcp_save_server", "mcp_set_server_enabled", "mcp_delete_server", "mcp_authorize", "mcp_cancel_authorize", "mcp_revoke_authorization", "mcp_register_stdio", "mcp_connect", "mcp_connect_http", "mcp_cancel_connect", "mcp_list_tools", "mcp_list_resources", "mcp_read_resource", "mcp_list_prompts", "mcp_get_prompt", "mcp_prepare_call", "mcp_confirm_call", "mcp_cancel_call", "mcp_disconnect"]
