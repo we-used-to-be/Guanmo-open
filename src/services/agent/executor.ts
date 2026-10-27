@@ -3,6 +3,8 @@ import type { ChatMessage, ChatMessageSource, ReadingArtifactMessageReference } 
 import { getAiClient, isAiReady } from '@/services/ai/aiClient'
 import { getAllTools, getTool, getToolDescriptions, getToolsForLLM } from './toolRegistry'
 import { registerBuiltinTools } from './tools'
+import { qualifyCandidates, qualifyTool } from './toolEligibility'
+import { currentToolEligibilityContext } from './toolEligibilityContext'
 import { normalizeActionMessage, parseToolCall, stripToolCallJson } from './toolCallParser'
 import {
   detectIntentScores,
@@ -577,6 +579,14 @@ async function executeTool(
     return { result, rawResult: result, status: 'tool_error' }
   }
 
+  const eligibility = qualifyTool(name, currentToolEligibilityContext(userIntent))
+  if (eligibility !== 'available') {
+    const result = eligibility === 'needs_input'
+      ? '工具暂不可执行：缺少本轮授权的必要上下文，请用户补充目标。'
+      : '工具调用被拒绝：当前不可用或未获授权。'
+    return { result, rawResult: result, status: 'tool_error' }
+  }
+
   const knownParameters = new Set(tool.parameters.map((param) => param.name))
   for (const key of Object.keys(args)) {
     if (!knownParameters.has(key)) {
@@ -694,7 +704,8 @@ async function executeToolCalls(
     const readResults = await Promise.allSettled(
       regularReadCalls.map(async tc => {
         const cacheKey = buildToolCallKey(tc.name, tc.args)
-        const cached = readResultCache?.get(cacheKey)
+        const cached = qualifyTool(tc.name, currentToolEligibilityContext(userIntent)) === 'available'
+          ? readResultCache?.get(cacheKey) : undefined
         if (cached) {
           const reused = await cached
           return {
@@ -890,7 +901,7 @@ async function runAgentInternal({
       })()
 
   // 构建候选工具 — 优先使用统一路由决策
-  const candidateTools = rd
+  const selectedTools = rd
     ? rd.candidateTools
     : (candidateToolNames && candidateToolNames.length > 0
       ? [...candidateToolNames] as AgentToolName[]
@@ -904,14 +915,19 @@ async function runAgentInternal({
       isDocumentRewrite
       && fbCtx.hasSelection
       && fbIntent.candidates.includes('selection_context')
-      && !candidateTools.includes('read_selection_context')
+      && !selectedTools.includes('read_selection_context')
     ) {
-      candidateTools.unshift('read_selection_context')
+      selectedTools.unshift('read_selection_context')
     }
-    if (isFileSummary && !candidateTools.includes('read_context_file')) {
-      candidateTools.unshift('read_context_file')
+    if (isFileSummary && !selectedTools.includes('read_context_file')) {
+      selectedTools.unshift('read_context_file')
     }
   }
+
+  const qualified = qualifyCandidates(selectedTools, currentToolEligibilityContext(userIntent))
+  const candidateTools = qualified.available
+  const needsInput = [...new Set([...(rd?.needsInputTools || []), ...qualified.needsInput])]
+  const hasBlockedTools = Boolean(rd?.blockedTools?.length || qualified.blocked.length)
 
   if (isDocumentRewrite && currentEditTargetCount === 0) {
     return {
@@ -940,13 +956,15 @@ async function runAgentInternal({
   }
 
   // 构建系统提示
-  const activeToolNames = candidateTools.length > 0 ? candidateTools : undefined
+  const activeToolNames = candidateTools
   const systemPrompt = buildSystemPrompt(mergedConfig, activeToolNames, customPreferencePrompt)
   const llmTools = candidateTools.length > 0 ? getToolsForLLM(activeToolNames) : []
 
   const contextMessage = buildUntrustedContextMessage(untrustedContext || '')
   let messages: ChatMessage[] = [
-    { role: 'system', content: systemPrompt },
+    { role: 'system', content: systemPrompt + (needsInput.length
+      ? '\n部分候选工具缺少本轮授权的必要输入；如回答依赖这些输入，请用户添加目标文件或选区。不得假装已读取或修改。' : '')
+      + (hasBlockedTools ? '\n部分候选工具当前不可用或未获授权；请说明限制，不得声称已检索、没有资料或已完成操作。' : '') },
     ...chatHistory,
     ...(contextMessage ? [contextMessage] : []),
     ...(answerInstruction ? [{ role: 'user' as const, content: answerInstruction }] : []),

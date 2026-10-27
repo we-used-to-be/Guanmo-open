@@ -1,4 +1,5 @@
 import { DesktopApiKeyControl } from './DesktopApiKeyControl'
+import { resolveRouterConfig } from '@/services/agent/routerConfig'
 import { hasApiCredential, embeddingConnection } from '@/services/apiConnection'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Button, Collapse, Divider, Footer, Icon, Input, Modal, Select, Switch, Table, Tabs } from 'animal-island-ui'
@@ -585,6 +586,7 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
     addCustomChatPreset, removeCustomChatPreset,
     addCustomEmbeddingPreset, removeCustomEmbeddingPreset,
   } = useSettingsStore()
+  const routing = resolveRouterConfig(ai.routing)
   const webRuntimeSecrets = useSyncExternalStore(subscribeWebSecretRuntime, getWebSecretRuntimeState, getWebSecretRuntimeState)
 
   // 测试状态
@@ -1015,6 +1017,21 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
       <SettingField label="联网搜索" description="允许 Agent 使用 Web 搜索工具">
         <Switch checked={ai.webSearchEnabled} onChange={(v) => updateAiConfig({ webSearchEnabled: v })} />
       </SettingField>
+      {isTauri() && <>
+        <SettingField label="模糊意图辅助判断" description="仅在意图不明确时使用模型辅助选择；普通问答和明确工具请求保持原路径">
+          <Switch checked={routing.enabled} onChange={(enabled) => updateAiConfig({ routing: { ...routing, enabled } })} />
+        </SettingField>
+        {routing.enabled && <>
+          <SettingField label="轻量路由模型" description="留空复用对话模型；填写同一 API 连接支持的快速模型名称">
+            <Input aria-label="轻量路由模型" value={routing.model} onChange={(e) => updateAiConfig({ routing: { ...routing, model: e.target.value } })} placeholder="复用对话模型" />
+          </SettingField>
+          <SliderField label="辅助判断时限（毫秒）" description="超时即沿用原规则结果" value={routing.timeoutMs} min={100} max={3000} step={100} onChange={(timeoutMs) => updateAiConfig({ routing: { ...routing, timeoutMs } })} />
+          <SliderField label="类别冲突分差" description="有检索线索且类别分数相近时辅助判断" value={routing.conflictMargin} min={0} max={3} step={1} onChange={(conflictMargin) => updateAiConfig({ routing: { ...routing, conflictMargin } })} />
+        </>}
+        <SettingField label="匿名路由诊断" description="仅在本次运行内保留耗时、触发原因和候选数量，不记录对话或文档内容">
+          <Switch checked={routing.diagnostics} onChange={(diagnostics) => updateAiConfig({ routing: { ...routing, diagnostics } })} />
+        </SettingField>
+      </>}
       <SettingField label="用户偏好提示词" description="只影响回答风格和偏好，不覆盖安全、工具、记忆和文件确认规则">
         <textarea
           value={ai.customPreferencePrompt}
@@ -1498,6 +1515,7 @@ function GeneralSettings() {
       streamEnabled: true,
       webSearchEnabled: false,
       customPreferencePrompt: '',
+      routing: resolveRouterConfig(),
       timeout: 60000,
       maxContextLength: 8192,
       temperature: 0.7,

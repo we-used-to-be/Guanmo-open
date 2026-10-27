@@ -29,7 +29,7 @@ export type AgentToolName =
   | 'get_current_time'
 
 // 能力到工具的映射
-const CAPABILITY_TOOLS: Record<Capability, AgentToolName[]> = {
+export const CAPABILITY_TOOLS: Readonly<Record<Capability, readonly AgentToolName[]>> = {
   memory: ['search_memory', 'list_memories'],
   knowledge: ['search_knowledge', 'list_database_contents'],
   artifact_read: ['search_reading_artifacts', 'get_reading_artifact'],

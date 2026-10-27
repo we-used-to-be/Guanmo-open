@@ -3,6 +3,13 @@ import type { AiProvider, ChatRequest, ChatResponse, StreamChunk } from '@/servi
 import { makeRoutingDecision } from '@/services/agent/routingService'
 import { setAgentScopeContext } from '@/services/aiScope'
 
+vi.mock('@/hooks/useTauri', async importOriginal => ({
+  ...await importOriginal<typeof import('@/hooks/useTauri')>(), isTauri: () => true,
+}))
+vi.mock('@/services/database/db', async importOriginal => ({
+  ...await importOriginal<typeof import('@/services/database/db')>(), isDatabaseReady: () => true,
+}))
+
 const responses: StreamChunk[][] = []
 const streamChat = vi.fn(async function* (_request: ChatRequest) {
   const response = responses.shift()

@@ -2,6 +2,16 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import type { AiProvider, ChatRequest, ChatResponse, StreamChunk } from '@/services/ai/types'
 import { decodeAgentStepEvent, decodeKnowledgeSearchOutcome } from '@/services/agent/session'
 import { clearAgentDiagnostics, finishAgentTrace, startAgentTrace, useAgentDiagnosticsStore } from '@/services/devAgentDiagnostics'
+import { useSettingsStore } from '@/stores/settingsStore'
+import { useEditorStore } from '@/stores/editorStore'
+import { setAgentScopeContext } from '@/services/aiScope'
+
+vi.mock('@/hooks/useTauri', async importOriginal => ({
+  ...await importOriginal<typeof import('@/hooks/useTauri')>(), isTauri: () => true,
+}))
+vi.mock('@/services/database/db', async importOriginal => ({
+  ...await importOriginal<typeof import('@/services/database/db')>(), isDatabaseReady: () => true,
+}))
 
 const responseQueue: StreamChunk[][] = []
 const streamChat = vi.fn(async function* (_request: ChatRequest) {
@@ -59,6 +69,7 @@ describe('Agent execution budget', () => {
   })
 
   beforeEach(() => {
+    useSettingsStore.setState(state => ({ ai: { ...state.ai, webSearchEnabled: true } }))
     useAgentDiagnosticsStore.getState().setEnabled(false)
     clearAgentDiagnostics()
     responseQueue.length = 0
@@ -68,6 +79,8 @@ describe('Agent execution budget', () => {
   })
 
   afterEach(() => {
+    setAgentScopeContext(null)
+    useEditorStore.setState({ tabs: [] })
     vi.useRealTimers()
     vi.restoreAllMocks()
     registerTool({
@@ -500,6 +513,12 @@ describe('Agent execution budget', () => {
   })
 
   it('工具预算不会拦截必须生成的修改确认卡片', async () => {
+    const path = 'C:/Temp/anonymous.md'
+    useEditorStore.setState({ tabs: [{ id: 'anonymous', title: 'anonymous', filePath: path, content: '匿名原文', savedContent: '匿名原文', originalContent: '匿名原文', modified: false }] })
+    setAgentScopeContext({
+      contextTags: [{ id: 'anonymous', type: 'file', title: 'anonymous', filePath: path, content: '匿名原文', preview: '匿名原文' }],
+      editTargets: [{ id: 'edit-target-1', type: 'file', title: 'anonymous', filePath: path }],
+    })
     const executePendingEdit = vi.fn(async () => JSON.stringify({
       __pendingEdit: true,
       oldText: '匿名原文',

@@ -1,5 +1,6 @@
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '@/services/requestTimeout'
 import type { SourceReferenceId } from './sourceReferences'
+import type { RouterConfig } from '@/services/agent/routerConfig'
 
 /** 对话协议类型 */
 export type ChatProtocol = 'openai-chat' | 'anthropic-messages' | 'openai-responses'
@@ -22,6 +23,7 @@ export interface EmbeddingConfig {
 }
 
 export interface AiConfig {
+  routing?: Partial<RouterConfig>
   protocol: ChatProtocol
   provider: ProviderId
   baseUrl: string

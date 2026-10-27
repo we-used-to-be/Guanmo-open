@@ -22,7 +22,13 @@ import { ensureSettingsSecretsHydrated } from '@/services/settingsSecrets'
 import { singletonManager, SINGLETON_IDS } from '@/services/singletonPromise'
 import { promoteTask } from '@/services/idleScheduler'
 import { prepareConversationContext, prepareConversationRouting } from '@/services/agent/conversationRequest'
-import { buildAgentRunRequest } from '@/services/agent/requestBuilder'
+import { buildAgentRunRequest, buildEditTargets, buildRoutingAppContext } from '@/services/agent/requestBuilder'
+import { resolveRouterConfig } from '@/services/agent/routerConfig'
+import { resolveSemanticRouting, semanticRoutingTriggers } from '@/services/agent/semanticRouter'
+import { routingModelChat } from '@/services/agent/routingModel'
+import { qualifyCandidates, qualifyTool } from '@/services/agent/toolEligibility'
+import { currentToolEligibilityContext } from '@/services/agent/toolEligibilityContext'
+import { recordRoutingMetric } from '@/services/agent/routingDiagnostics'
 import {
   buildScopedAgentResultPresentation,
   resolveAgentAnswerSources,
@@ -310,7 +316,9 @@ export function useAiChat() {
       const hasRecentEditContext = Boolean(latestVisibleAssistant?.editConfirmation)
 
       // 统一路由决策（一次性生成，消除 useAiChat 与 executor 的重复判断）
-      const routingDecision = prepareConversationRouting({
+      const routerConfig = resolveRouterConfig(ai.routing)
+      const routingStartedAt = routerConfig.diagnostics ? performance.now() : 0
+      let routingDecision = prepareConversationRouting({
         content,
         contextTags,
         forceAgent,
@@ -318,6 +326,39 @@ export function useAiChat() {
         agentTaskContext,
         hasRecentEditContext,
         messages,
+      })
+
+      const routingContext = buildRoutingAppContext(contextTags, hasRecentEditContext)
+      const triggers = semanticRoutingTriggers(content, routingDecision, routingContext, routerConfig,
+        messages.some(message => !message.hidden && message.role !== 'system'))
+      let semanticStatus: Awaited<ReturnType<typeof resolveSemanticRouting>>['status'] | undefined
+      if (triggers.length > 0) {
+        initAgent() // One-time registration; never initialize on an ordinary Direct request.
+        const semantic = await resolveSemanticRouting({
+          query: content, original: routingDecision, context: routingContext,
+          config: routerConfig, signal: requestController.signal,
+          chat: request => routingModelChat(routerConfig.model, request),
+        })
+        if (!isCurrentRequest()) return
+        routingDecision = semantic.decision
+        semanticStatus = semantic.status
+      }
+      if (routingDecision.mode === 'agent' || routingDecision.shouldLookupMemory) {
+        initAgent()
+        const qualificationContext = currentToolEligibilityContext(content, {
+          contextTags: contextTags || [], editTargets: buildEditTargets(contextTags),
+        })
+        const qualified = qualifyCandidates(routingDecision.candidateTools, qualificationContext)
+        routingDecision = {
+          ...routingDecision, candidateTools: qualified.available, needsInputTools: qualified.needsInput, blockedTools: qualified.blocked,
+          shouldLookupMemory: routingDecision.shouldLookupMemory
+            && qualifyTool('search_memory', qualificationContext) === 'available',
+        }
+      }
+      if (routerConfig.diagnostics) recordRoutingMetric({
+        source: routingDecision.selectionSource || 'rules', mode: routingDecision.mode,
+        durationMs: performance.now() - routingStartedAt, trigger: triggers,
+        status: semanticStatus, candidateCount: routingDecision.candidateTools.length,
       })
 
       const selectionRequestKind = routingDecision.selectionRequestKind
@@ -659,8 +700,8 @@ export function useAiChat() {
             requestController.signal.aborted ? 'cancelled' : diagnosticStatus,
             { reason: diagnosticReason, toolCalls: diagnosticToolCalls, stepCount: diagnosticStepCount },
           )
-          setAgentScopeContext(null)
           if (activeRequestRef.current?.id === requestId) {
+            setAgentScopeContext(null)
             activeRequestRef.current = null
             cancelRef.current = () => {}
             setStreaming(false)
@@ -679,7 +720,9 @@ export function useAiChat() {
       let directRagRegistry: SourceReferenceRegistry = { entries: [] }
 
       // --- 轻量 RAG：仅在规则放行时检索已添加的 ContextTag 文件 ---
-      const shouldRag = shouldTriggerScopedRag(content.trim(), contextTags || [])
+      const shouldRag = routingDecision.selectionSource === 'semantic'
+        ? routingDecision.shouldLookupKnowledge
+        : shouldTriggerScopedRag(content.trim(), contextTags || [])
 
       if (shouldRag) {
         updateRequestMessage('正在检索本地知识库...')

@@ -289,6 +289,8 @@ export function makeRoutingDecision(
   }
 
   return {
+    ruleScores: intentResult.scores,
+    selectionSource: 'rules',
     mode,
     reasonCodes,
     candidates: mergedCandidates,
