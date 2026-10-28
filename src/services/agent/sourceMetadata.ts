@@ -6,6 +6,7 @@ import type {
 import type { ContextTag } from '@/types/contextTag'
 import type { AgentResult, AgentStep } from './types'
 import { stripToolCallJson } from './toolCallParser'
+import { decodeAgentStepEvent } from './session'
 import { createContextMeta } from '@/services/aiChatMessages'
 import { parseSourceReferences, type SourceReferenceRegistry } from '@/services/ai/sourceReferences'
 
@@ -60,6 +61,17 @@ export function extractKnowledgeSourcesFromSteps(steps: AgentStep[]): ChatMessag
 }
 
 export function buildAgentResultPresentation(result: AgentResult, tagCount: number) {
+  const observations = result.steps.filter(step => step.type === 'observation')
+  const pending = observations.map(decodeAgentStepEvent)
+  const fallbackAnswer = pending.some(event => event.type === 'observation' && event.pendingEdit)
+    ? '已生成修改确认卡片，请在下方确认。'
+    : pending.some(event => event.type === 'observation' && event.pendingAction)
+      ? '已生成行动确认卡片，请在下方确认。'
+      : observations.some(step => step.externalMcp?.status === 'success')
+        ? 'MCP 工具已返回外部数据。'
+        : result.steps.some(step => step.externalMcp)
+          ? 'MCP 工具未成功返回，请查看调用记录。'
+          : '模型未返回有效回答。'
   const candidateSources = result.sources?.length
     ? result.sources
     : result.sourceRegistry
@@ -77,9 +89,7 @@ export function buildAgentResultPresentation(result: AgentResult, tagCount: numb
         (step) => step.type === 'action' && step.toolName === 'web_search'
       ),
     }),
-    answer: stripToolCallJson(result.answer) || (result.steps.some(step => step.externalMcp)
-      ? 'MCP 工具已返回外部数据。'
-      : '已生成修改确认卡片，请在下方确认。'),
+    answer: stripToolCallJson(result.answer) || fallbackAnswer,
   }
 }
 

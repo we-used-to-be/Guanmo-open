@@ -145,8 +145,26 @@ describe('Agent MCP branch', () => {
     pending.resolve({ content: [] })
     const result = await running
     expect(result.reason).toBe('error')
-    expect(result.answer).toContain('MCP_DUPLICATE_CALL')
+    expect(result.answer).toContain('已阻止模型重复调用 MCP，未再次执行')
+    expect(result.answer).toContain('此前调用已成功返回')
+    expect(result.steps.some(step => step.content.includes('MCP_DUPLICATE_CALL'))).toBe(true)
+    expect(result.toolCalls).toBe(2)
     expect(mocks.confirm).toHaveBeenCalledTimes(2)
+  })
+
+  it('preserves the first echo result when the model requests an identical call again', async () => {
+    const echo = JSON.stringify({ calls: 1, pid: 100, descendantPid: 101 })
+    mocks.confirm.mockResolvedValueOnce({ content: [{ type: 'text', text: echo }] })
+    mocks.chat.mockResolvedValueOnce(response('', [{ name: 'mcp_anon_0', args }]))
+      .mockResolvedValueOnce(response('', [{ name: 'mcp_anon_0', args }]))
+    const result = await runAgent({ query: '只调用一次', mcpTools: [tool], streamEnabled: false })
+    expect(result.answer).toContain('此前调用已成功返回')
+    expect(result.answer).toContain(JSON.stringify(echo).slice(1, -1))
+    expect(result.answer).not.toContain('调用失败、被拒绝或已取消')
+    expect(result.toolCalls).toBe(1)
+    expect(mocks.prepare).toHaveBeenCalledTimes(1)
+    expect(mocks.confirm).toHaveBeenCalledTimes(1)
+    expect(mocks.chat).toHaveBeenCalledTimes(2)
   })
 
   it('allows distinct arguments for the same tool only through separate native confirmations', async () => {

@@ -23,6 +23,32 @@ const selectionTag: ContextTag = {
 }
 
 describe('AI chat orchestration helpers', () => {
+  it.each(['', '{"tool":"echo","args":{}}'])('does not invent a confirmation card for an empty visible answer: %s', answer => {
+    expect(buildAgentResultPresentation({ answer, steps: [], toolCalls: 0, reason: 'completed' }, 0).answer)
+      .toBe('模型未返回有效回答。')
+  })
+
+  it('announces an edit card only for a decoded pending edit', () => {
+    const presentation = buildAgentResultPresentation({
+      answer: '', toolCalls: 1, reason: 'completed',
+      steps: [{ type: 'observation', timestamp: 1, content: JSON.stringify({
+        __pendingEdit: true, oldText: 'before', newText: 'after', tabId: 'anon', tabTitle: 'anonymous.md',
+      }) }],
+    }, 0)
+    expect(presentation.answer).toBe('已生成修改确认卡片，请在下方确认。')
+  })
+
+  it.each(['success', 'error', 'outcome_unknown'] as const)('reports the actual MCP outcome: %s', status => {
+    const presentation = buildAgentResultPresentation({
+      answer: '', toolCalls: 1, reason: 'completed',
+      steps: [{ type: 'observation', timestamp: 1, content: '{"__pendingEdit":true}',
+        externalMcp: { serverId: 'anonymous', remoteName: 'echo', status } }],
+    }, 0)
+    expect(presentation.answer).toBe(status === 'success'
+      ? 'MCP 工具已返回外部数据。'
+      : 'MCP 工具未成功返回，请查看调用记录。')
+  })
+
   it('registers only model-visible Agent sources with stable IDs across tool calls', () => {
     const first = prepareAgentToolResultForModel(
       createSourceReferenceRegistry(),
