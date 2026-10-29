@@ -56,4 +56,10 @@ describe('记忆策略', () => {
     expect(relevant).toBeGreaterThan(0.3)
     expect(relevant).toBeGreaterThan(unrelated)
   })
+
+  it('different structured subjects are not silently collapsed by lexical similarity', () => {
+    const first = memory({ status: 'candidate', subject: '项目甲', factKey: 'database', content: '项目甲默认使用 SQLite 数据库' })
+    const second = memory({ status: 'candidate', subject: '项目乙', factKey: 'database', content: '项目乙默认使用 SQLite 数据库' })
+    expect(resolveMemoryCandidateDecision([first], second)).toEqual({ action: 'create' })
+  })
 })

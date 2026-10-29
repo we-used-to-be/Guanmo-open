@@ -213,13 +213,14 @@ export function decodePendingAction(value: unknown): PendingActionPayload | unde
 
 export function createActionProposal(
   pending: PendingActionPayload,
-  options: { id: string; messageId?: string; now?: number },
+  options: { id: string; messageId?: string; now?: number; memoryScopeKey?: string | null },
 ): ActionProposal {
   const now = options.now ?? Date.now()
   return {
     id: options.id,
     messageId: options.messageId,
     ...pending,
+    ...(pending.kind === 'save_memory' && options.memoryScopeKey !== undefined ? { memoryScopeKey: options.memoryScopeKey } : {}),
     createdAt: now,
     expiresAt: now + ACTION_PROPOSAL_TTL_MS,
     updatedAt: now,
@@ -231,6 +232,8 @@ export function decodeActionProposal(value: unknown): ActionProposal | undefined
   if (!isRecord(value)) return undefined
   const pending = decodePendingAction({ ...value, __pendingAction: true })
   if (!pending) return undefined
+  if (value.memoryScopeKey !== undefined && value.memoryScopeKey !== null
+    && (typeof value.memoryScopeKey !== 'string' || value.memoryScopeKey.length > 4000)) throw new Error('记忆作用域无效')
   const statuses: ActionProposal['status'][] = ['pending', 'executing', 'completed', 'rejected', 'expired', 'failed']
   if (
     typeof value.id !== 'string'
@@ -251,6 +254,7 @@ export function decodeActionProposal(value: unknown): ActionProposal | undefined
     id: value.id,
     messageId: typeof value.messageId === 'string' ? value.messageId : undefined,
     ...pending,
+    ...(pending.kind === 'save_memory' && value.memoryScopeKey !== undefined ? { memoryScopeKey: value.memoryScopeKey as string | null } : {}),
     createdAt: value.createdAt,
     expiresAt: value.expiresAt,
     updatedAt: value.updatedAt,

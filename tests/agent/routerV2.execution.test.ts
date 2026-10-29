@@ -7,6 +7,7 @@ const stream = vi.fn<(request: ChatRequest) => AsyncIterable<StreamChunk>>()
 const chat = vi.fn(async (_request: ChatRequest) => ({ id: 'anonymous', content: '请补充目标', role: 'assistant' as const }))
 vi.mock('@/services/ai/aiClient', () => ({ getAiClient: () => ({ streamChat: stream, chat }), isAiReady: () => true }))
 vi.mock('@/hooks/useTauri', async importOriginal => ({ ...await importOriginal<typeof import('@/hooks/useTauri')>(), isTauri: () => true }))
+vi.mock('@/services/database/db', async importOriginal => ({ ...await importOriginal<typeof import('@/services/database/db')>(), isDatabaseReady: () => true }))
 
 describe('Router V2 execution boundary', () => {
   let executor: typeof import('@/services/agent/executor')
@@ -77,5 +78,19 @@ describe('Router V2 execution boundary', () => {
     expect(request.tools).toEqual([])
     expect(request.messages[0].content).not.toContain('UNRELATED_SCHEMA_SENTINEL')
     expect(request.messages[0].content).toContain('缺少本轮授权')
+  })
+
+  it('reuses successful or empty prefetch inside one run without reexecuting the same memory query', async () => {
+    const execute = vi.fn(async () => 'should not execute')
+    registerTool({ name: 'search_memory', description: 'anonymous memory', parameters: [{ name: 'query', type: 'string', required: true, description: 'query' }], execute })
+    let calls = 0
+    stream.mockImplementation(async function* () {
+      if (++calls === 1) yield { content: '', done: true, toolCallDeltas: [{ index: 0, name: 'search_memory', arguments: '{"query":"我的偏好"}' }] }
+      else yield { content: '没有找到已保存偏好', done: true }
+    })
+    const result = await executor.runAgent({ query: '我的偏好', candidateToolNames: ['search_memory'], hasPrefetchedMemoryLookup: true,
+      prefetchedMemory: { query: '我的偏好', result: '未找到相关记忆。', topK: 10 }, config: { maxSteps: 2 } })
+    expect(execute).not.toHaveBeenCalled()
+    expect(result.steps.some(step => step.content.includes('未找到相关记忆'))).toBe(true)
   })
 })

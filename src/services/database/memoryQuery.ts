@@ -1,4 +1,5 @@
 export interface MemoryQueryFilters {
+  ids?: readonly string[]
   category?: string
   categories?: readonly string[]
   statuses?: readonly string[]
@@ -47,6 +48,7 @@ function buildMemoryConditions(filters: MemoryQueryFilters): {
     addValues('category', filters.categories)
   }
   if (filters.statuses) addValues('status', filters.statuses)
+  if (filters.ids) addValues('id', filters.ids)
 
   if (filters.scopeType === 'global') {
     conditions.push("COALESCE(scope_type, 'global') = 'global'")

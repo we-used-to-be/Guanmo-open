@@ -3,6 +3,7 @@ import { useChatStore } from '@/stores/chatStore'
 import { useReadingArtifactsStore } from '@/stores/readingArtifactsStore'
 import { saveAssistantMessageAsMarkdown } from '@/services/assistantMessageExport'
 import { upsertExplicitMemory } from '@/services/memory/memoryService'
+import { normalizeMemoryScopeKey } from '@/services/memory/memoryPolicy'
 import { selectPrimaryWorkspacePath, useAppStore } from '@/stores/appStore'
 import type { ReadingArtifactType } from '@/services/database/readingArtifacts'
 import { createReadingReminder } from '@/services/readingReminders'
@@ -30,10 +31,16 @@ function payloadString(proposal: ActionProposal, field: string): string {
 }
 
 registerActionExecutor('save_memory', async (proposal) => {
+  const category = payloadString(proposal, 'category')
+  const workspace = selectPrimaryWorkspacePath(useAppStore.getState())
+  if (category === 'project' && (proposal.memoryScopeKey === undefined
+    || proposal.memoryScopeKey !== normalizeMemoryScopeKey('project', workspace))) {
+    throw new Error('项目作用域已变化或旧提案缺少作用域，请重新生成保存确认卡')
+  }
   await upsertExplicitMemory(
     payloadString(proposal, 'content'),
-    payloadString(proposal, 'category'),
-    { workspacePath: selectPrimaryWorkspacePath(useAppStore.getState()) },
+    category,
+    { workspacePath: proposal.memoryScopeKey ?? workspace },
   )
   return { status: 'completed' }
 })
@@ -124,7 +131,7 @@ export async function confirmActionProposalCommand(id: string): Promise<void> {
     useChatStore.getState().updateMessageActionProposal(completed.messageId, completed)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    const errorCategory: ActionProposal['errorCategory'] = /来源消息已变化/.test(message)
+    const errorCategory: ActionProposal['errorCategory'] = /来源消息已变化|项目作用域已变化/.test(message)
       ? 'target_changed'
       : /尚未注册|功能开发中/.test(message)
         ? 'unsupported'

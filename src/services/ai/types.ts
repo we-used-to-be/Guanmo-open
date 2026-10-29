@@ -156,6 +156,8 @@ export interface ActionProposal {
   reversibleDescription: string
   riskDescription: string
   payload: Record<string, unknown>
+  /** Host-captured workspace for memory confirmation; never supplied by the model. */
+  memoryScopeKey?: string | null
   createdAt: number
   expiresAt: number
   updatedAt: number

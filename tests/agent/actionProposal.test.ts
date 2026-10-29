@@ -4,6 +4,7 @@ import {
   buildPendingActionResult,
   createActionProposal,
   decodePendingAction,
+  decodeActionProposal,
 } from '@/services/agent/actionProposal'
 import { decodeAgentStepEvent } from '@/services/agent/session'
 import { getTool } from '@/services/agent/toolRegistry'
@@ -47,6 +48,17 @@ describe('Agent 行动安全底座', () => {
       messages: [],
       error: null,
     })
+  })
+
+  it('preserves host-captured memory scope while rejecting old or changed project targets', async () => {
+    const pending = decodePendingAction(JSON.parse(buildPendingActionResult('save_memory',
+      { content: '项目使用 SQLite', category: 'project' },
+      { title: '保存长期记忆', target: '本地记忆', preview: '项目使用 SQLite' })))!
+    const scoped = createActionProposal(pending, { id: 'scope-test', memoryScopeKey: 'd:/anonymous/original' })
+    expect(decodeActionProposal(scoped)?.memoryScopeKey).toBe('d:/anonymous/original')
+    await expect(executeRegisteredAction({ ...scoped, status: 'executing' })).rejects.toThrow('项目作用域已变化')
+    const legacy = createActionProposal(pending, { id: 'legacy-scope-test' })
+    await expect(executeRegisteredAction({ ...legacy, status: 'executing' })).rejects.toThrow('旧提案缺少作用域')
   })
 
   it('行动提案消息通过 chatStore action 写入', () => {

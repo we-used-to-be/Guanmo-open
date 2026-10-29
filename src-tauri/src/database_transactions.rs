@@ -529,14 +529,32 @@ pub async fn persist_document_transaction(
     run_persist_document(&pool, request).await
 }
 
+// Same non-cryptographic UTF-16 version hash as memoryPolicy.contentHash.
+fn memory_content_version_hash(content: &str) -> String {
+    let mut hash = 2_166_136_261_u32;
+    for unit in content.encode_utf16() {
+        hash = (hash ^ u32::from(unit)).wrapping_mul(16_777_619);
+    }
+    format!("{hash:x}")
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MemoryReplacementSnapshot {
+    id: String,
+    content_hash: String,
+    updated_at: i64,
+}
+
 async fn run_confirm_memory_candidate(pool: &SqlitePool, id: &str) -> Result<bool, String> {
     let mut transaction = pool.begin().await.map_err(|error| error.to_string())?;
-    let candidate =
-        sqlx::query("SELECT supersedes_id FROM memories WHERE id = ? AND status = 'candidate'")
-            .bind(id)
-            .fetch_optional(&mut *transaction)
-            .await
-            .map_err(|error| error.to_string())?;
+    let candidate = sqlx::query(
+        "SELECT supersedes_id, evidence FROM memories WHERE id = ? AND status = 'candidate'",
+    )
+    .bind(id)
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(|error| error.to_string())?;
     let Some(candidate) = candidate else {
         transaction
             .rollback()
@@ -548,14 +566,70 @@ async fn run_confirm_memory_candidate(pool: &SqlitePool, id: &str) -> Result<boo
         .try_get("supersedes_id")
         .map_err(|error| error.to_string())?;
     if let Some(supersedes_id) = supersedes_id {
-        sqlx::query(
+        let evidence: Option<String> = candidate
+            .try_get("evidence")
+            .map_err(|error| error.to_string())?;
+        let evidence = evidence
+            .as_deref()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok());
+        if let Some(snapshot) = evidence
+            .as_ref()
+            .filter(|value| value.get("version").and_then(|v| v.as_i64()) == Some(1))
+            .and_then(|value| value.get("replacement"))
+        {
+            let snapshot = serde_json::from_value::<MemoryReplacementSnapshot>(snapshot.clone());
+            let current = sqlx::query(
+                "SELECT content, updated_at FROM memories WHERE id = ? AND status = 'active'",
+            )
+            .bind(&supersedes_id)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|error| error.to_string())?;
+            let valid = if let (Ok(snapshot), Some(current)) = (snapshot, current) {
+                let content: String = current
+                    .try_get("content")
+                    .map_err(|error| error.to_string())?;
+                let updated_at: i64 = current
+                    .try_get("updated_at")
+                    .map_err(|error| error.to_string())?;
+                let updated_at = if updated_at > 0 && updated_at < 1_000_000_000_000 {
+                    updated_at * 1000
+                } else {
+                    updated_at
+                };
+                snapshot.id == supersedes_id
+                    && snapshot.updated_at == updated_at
+                    && snapshot.content_hash == memory_content_version_hash(&content)
+            } else {
+                false
+            };
+            if !valid {
+                transaction
+                    .rollback()
+                    .await
+                    .map_err(|error| error.to_string())?;
+                return Ok(false);
+            }
+        }
+        let replaced = sqlx::query(
             "UPDATE memories SET status = 'superseded', updated_at = unixepoch() * 1000 \
-             WHERE id = ? AND status = 'active'",
+             WHERE id = ? AND status = 'active' \
+             AND COALESCE(scope_type, 'global') = (SELECT COALESCE(scope_type, 'global') FROM memories WHERE id = ?) \
+             AND COALESCE(scope_key, '') = (SELECT COALESCE(scope_key, '') FROM memories WHERE id = ?)",
         )
         .bind(supersedes_id)
+        .bind(id)
+        .bind(id)
         .execute(&mut *transaction)
         .await
         .map_err(|error| error.to_string())?;
+        if replaced.rows_affected() != 1 {
+            transaction
+                .rollback()
+                .await
+                .map_err(|error| error.to_string())?;
+            return Ok(false);
+        }
     }
     let result = sqlx::query(
         "UPDATE memories SET status = 'active', source = 'user_explicit', \
@@ -1669,6 +1743,80 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(active_status, "active");
+    }
+
+    #[tokio::test]
+    async fn candidate_confirmation_rejects_stale_replacement() {
+        let pool = test_pool().await;
+        for (id, status, supersedes_id) in [
+            ("old", "superseded", None),
+            ("current", "active", None),
+            ("stale", "candidate", Some("old")),
+        ] {
+            sqlx::query("INSERT INTO memories (id, content, category, source, locked, status, scope_type, confidence, supersedes_id, created_at, updated_at) VALUES (?, '匿名事实', 'preference', 'auto_extracted', 0, ?, 'global', 1, ?, 1, 1)")
+                .bind(id).bind(status).bind(supersedes_id).execute(&pool).await.unwrap();
+        }
+        assert!(!run_confirm_memory_candidate(&pool, "stale").await.unwrap());
+        let active: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM memories WHERE status = 'active'")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(active, vec!["current"]);
+        let status: String = sqlx::query_scalar("SELECT status FROM memories WHERE id = 'stale'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "candidate");
+    }
+
+    #[tokio::test]
+    async fn candidate_confirmation_rejects_cross_scope_replacement() {
+        let pool = test_pool().await;
+        for (id, status, scope_key, supersedes_id) in [
+            ("other", "active", "d:/anonymous/b", None),
+            ("candidate", "candidate", "d:/anonymous/a", Some("other")),
+        ] {
+            sqlx::query("INSERT INTO memories (id, content, category, source, locked, status, scope_type, scope_key, confidence, supersedes_id, created_at, updated_at) VALUES (?, '匿名项目事实', 'project', 'auto_extracted', 0, ?, 'project', ?, 1, ?, 1, 1)")
+                .bind(id).bind(status).bind(scope_key).bind(supersedes_id).execute(&pool).await.unwrap();
+        }
+        assert!(!run_confirm_memory_candidate(&pool, "candidate")
+            .await
+            .unwrap());
+        let status: String = sqlx::query_scalar("SELECT status FROM memories WHERE id = 'other'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "active");
+    }
+
+    #[tokio::test]
+    async fn candidate_confirmation_checks_replacement_content_version() {
+        // Fixture computed by memoryPolicy.contentHash, including a UTF-16 surrogate pair.
+        assert_eq!(memory_content_version_hash("匿名旧事实😀"), "78cb990a");
+        for (current_content, expected) in [("匿名旧事实😀", true), ("用户刚修改的事实", false)]
+        {
+            let pool = test_pool().await;
+            sqlx::query("INSERT INTO memories (id, content, category, source, locked, status, scope_type, confidence, created_at, updated_at) VALUES ('old', ?, 'preference', 'manual_created', 0, 'active', 'global', 1, 1, 1)")
+                .bind(current_content).execute(&pool).await.unwrap();
+            let evidence = serde_json::json!({
+                "version": 1, "replacement": { "id": "old", "contentHash": "78cb990a", "updatedAt": 1000 }
+            }).to_string();
+            sqlx::query("INSERT INTO memories (id, content, category, source, locked, status, scope_type, confidence, supersedes_id, evidence, created_at, updated_at) VALUES ('candidate', '匿名新事实', 'preference', 'auto_extracted', 0, 'candidate', 'global', 1, 'old', ?, 1, 1)")
+                .bind(evidence).execute(&pool).await.unwrap();
+            assert_eq!(
+                run_confirm_memory_candidate(&pool, "candidate")
+                    .await
+                    .unwrap(),
+                expected
+            );
+            let old_status: String =
+                sqlx::query_scalar("SELECT status FROM memories WHERE id = 'old'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(old_status, if expected { "superseded" } else { "active" });
+        }
     }
 
     #[tokio::test]

@@ -840,6 +840,7 @@ async function runAgentInternal({
   currentEditTargetCount = 0,
   candidateToolNames,
   hasPrefetchedMemoryLookup = false,
+  prefetchedMemory,
   signal,
   temperature,
   onStep,
@@ -980,6 +981,14 @@ async function runAgentInternal({
   const calledToolNames: string[] = []
   const selectionContextReadLevels = new Map<string, 1 | 2>()
   const readResultCache = new Map<string, Promise<ToolExecutionResult>>()
+  if (prefetchedMemory && !prefetchedMemory.categories?.length) {
+    const result: ToolExecutionResult = { result: prefetchedMemory.result, rawResult: prefetchedMemory.result, status: 'success' }
+    readResultCache.set(buildToolCallKey('search_memory', { query: prefetchedMemory.query, topK: prefetchedMemory.topK }), Promise.resolve(result))
+    if (prefetchedMemory.topK >= 5) {
+      readResultCache.set(buildToolCallKey('search_memory', { query: prefetchedMemory.query }), Promise.resolve(result))
+      readResultCache.set(buildToolCallKey('search_memory', { query: prefetchedMemory.query, topK: 5 }), Promise.resolve(result))
+    }
+  }
   const remainingDeadlineMs = () => Math.max(0, deadlineAt - Date.now())
   const sourceMetadata = () => ({
     sources: sourceRegistry.entries.map((entry) => entry.source),

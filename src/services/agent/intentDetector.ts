@@ -10,6 +10,7 @@
  */
 
 import { classifyMemoryRetrievalIntent } from '@/services/memory/memoryService'
+import { isExplicitMemoryWriteIntent } from '@/services/memory/memoryPolicy'
 
 // 能力类型
 export type Capability =
@@ -225,6 +226,9 @@ function scoreCapability(
   const patterns = REGEX_PATTERNS[capability]
   const signals: string[] = []
   let score = 0
+  if (capability === 'memory' && classifyMemoryRetrievalIntent(query) === 'none' && !shouldAllowMemoryWrite(query)) {
+    return { capability, score: 0, isRequired: false, signals }
+  }
 
   // 弱信号匹配（宽松）
   for (const keyword of config.weak) {
@@ -452,7 +456,7 @@ export function shouldUseAgentMode(
  * 判断是否允许记忆写入
  */
 export function shouldAllowMemoryWrite(query: string): boolean {
-  return /(记住|记下来|添加(?:到|进|为)?(?:长期)?记忆|保存(?:到|进|为)?(?:长期)?记忆|以后记得|remember\s)/i.test(query.trim())
+  return isExplicitMemoryWriteIntent(query)
 }
 
 /**

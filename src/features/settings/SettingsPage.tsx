@@ -1,5 +1,6 @@
 import { DesktopApiKeyControl } from './DesktopApiKeyControl'
 import { resolveRouterConfig } from '@/services/agent/routerConfig'
+import { memoryEvidenceText } from '@/services/memory/memoryEvidence'
 import { hasApiCredential, embeddingConnection } from '@/services/apiConnection'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Button, Collapse, Divider, Footer, Icon, Input, Modal, Select, Switch, Table, Tabs } from 'animal-island-ui'
@@ -1935,7 +1936,7 @@ export function MemorySettings() {
       const confirmed = await confirmSettingsMemoryCandidate(id)
       if (!confirmed) {
         refresh()
-        toast.error('候选记忆确认失败：数据库中没有可确认的候选记录')
+        toast.error('候选记忆或待替代事实已变化，请刷新后重新核实')
         return
       }
       if (candidate) {
@@ -2236,7 +2237,7 @@ export function MemorySettings() {
                     )}
                     {memory.evidence && memory.evidence !== memory.content && (
                       <p className="mt-1 text-caption text-gm-text-tertiary">
-                        依据：{memory.evidence}
+                        依据：{memoryEvidenceText(memory.evidence)}
                       </p>
                     )}
                   </div>

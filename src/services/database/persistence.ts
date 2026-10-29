@@ -625,15 +625,21 @@ export interface Memory {
   updatedAt: number
 }
 
-export async function persistMemory(memory: Memory): Promise<void> {
-  if (!isDatabaseReady()) return
+export interface MemorySourceGuard { id: string; content: string }
+
+export async function persistMemory(memory: Memory, insertOnly = false, source?: MemorySourceGuard): Promise<boolean> {
+  if (!isDatabaseReady()) return false
   const db = getDatabase()
-  await db.execute(
-    `INSERT OR REPLACE INTO memories (
+  const result = await db.execute(
+    `INSERT OR ${insertOnly ? 'IGNORE' : 'REPLACE'} INTO memories (
        id, content, category, source, locked, status, scope_type, scope_key,
        subject, fact_key, fact_value, confidence, evidence, supersedes_id,
        embedding, embedding_model, content_hash, created_at, updated_at
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
+     ) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+       WHERE ($20 IS NULL OR EXISTS (SELECT 1 FROM chat_messages WHERE id = $20 AND role = 'user' AND content = $21))
+       AND ($22 = 0 OR NOT EXISTS (SELECT 1 FROM memories existing WHERE existing.status = 'active'
+         AND existing.category = $3 AND COALESCE(existing.scope_type, 'global') = $7 AND COALESCE(existing.scope_key, '') = COALESCE($8, '')
+         AND lower(trim(existing.subject)) = lower(trim($9)) AND lower(trim(existing.fact_key)) = lower(trim($10)) AND existing.id <> $1))`,
     [
       memory.id,
       memory.content,
@@ -654,8 +660,65 @@ export async function persistMemory(memory: Memory): Promise<void> {
       memory.contentHash || null,
       memory.createdAt,
       memory.updatedAt,
+      source?.id || null,
+      source?.content || null,
+      memory.status === 'active' && memory.source === 'auto_extracted' ? 1 : 0,
     ]
   )
+  return result.rowsAffected === 1
+}
+
+/** Optimistic single-row update: background work cannot overwrite manual edits or recreate a deleted row. */
+export async function updateMemoryIfUnchanged(memory: Memory, expected: Memory, source?: MemorySourceGuard): Promise<boolean> {
+  if (!isDatabaseReady()) return false
+  const result = await getDatabase().execute(
+    `UPDATE memories SET content = $1, subject = $2, fact_key = $3, fact_value = $4,
+       confidence = $5, evidence = $6, supersedes_id = $7, embedding = $8,
+       embedding_model = $9, content_hash = $10, updated_at = $11, status = $21
+     WHERE id = $12 AND content = $13 AND status = $14 AND source = $15
+       AND locked = 0 AND CASE WHEN updated_at > 0 AND updated_at < 1000000000000 THEN updated_at * 1000 ELSE updated_at END = $16
+       AND COALESCE(scope_type, 'global') = $17 AND COALESCE(scope_key, '') = $18
+       AND ($19 IS NULL OR EXISTS (SELECT 1 FROM chat_messages WHERE id = $19 AND role = 'user' AND content = $20))
+       AND ($21 <> 'active' OR NOT EXISTS (SELECT 1 FROM memories existing WHERE existing.status = 'active'
+         AND existing.category = $22 AND COALESCE(existing.scope_type, 'global') = $17 AND COALESCE(existing.scope_key, '') = $18
+         AND lower(trim(existing.subject)) = lower(trim($2)) AND lower(trim(existing.fact_key)) = lower(trim($3)) AND existing.id <> $12))`,
+    [memory.content, memory.subject || null, memory.factKey || null, memory.factValue || null,
+      memory.confidence ?? 0.7, memory.evidence || null, memory.supersedesId || null,
+      memory.embedding ? JSON.stringify(memory.embedding) : null, memory.embeddingModel || null,
+      memory.contentHash || null, memory.updatedAt, expected.id, expected.content,
+      expected.status, expected.source, expected.updatedAt, expected.scopeType || 'global', expected.scopeKey || '', source?.id || null, source?.content || null,
+      memory.status, memory.category],
+  )
+  return result.rowsAffected === 1
+}
+
+export async function removeMemoryIfUnchanged(expected: Memory, source?: MemorySourceGuard): Promise<boolean> {
+  if (!isDatabaseReady()) return false
+  const result = await getDatabase().execute(
+    `DELETE FROM memories WHERE id = $1 AND content = $2
+       AND CASE WHEN updated_at > 0 AND updated_at < 1000000000000 THEN updated_at * 1000 ELSE updated_at END = $3
+       AND source = 'auto_extracted' AND status = 'candidate' AND locked = 0
+       AND COALESCE(scope_type, 'global') = $4 AND COALESCE(scope_key, '') = $5
+       AND ($6 IS NULL OR EXISTS (SELECT 1 FROM chat_messages WHERE id = $6 AND role = 'user' AND content = $7))`,
+    [expected.id, expected.content, expected.updatedAt, expected.scopeType || 'global', expected.scopeKey || '', source?.id || null, source?.content || null],
+  )
+  return result.rowsAffected === 1
+}
+
+/** A cache fill is deliberately not a business-data upsert. */
+export async function persistMemoryEmbedding(
+  memory: Pick<Memory, 'id' | 'content' | 'contentHash'>,
+  embedding: number[],
+  model: string | null,
+  nextHash: string,
+): Promise<boolean> {
+  if (!isDatabaseReady() || !embedding.length || !embedding.every(Number.isFinite)) return false
+  const result = await getDatabase().execute(
+    `UPDATE memories SET embedding = $1, embedding_model = $2, content_hash = $3
+       WHERE id = $4 AND content = $5 AND COALESCE(content_hash, '') = $6 AND status = 'active'`,
+    [JSON.stringify(embedding), model, nextHash, memory.id, memory.content, memory.contentHash || ''],
+  )
+  return result.rowsAffected === 1
 }
 
 export interface LoadMemoryOptions extends Omit<MemoryQueryFilters, 'statuses'> {
@@ -757,6 +820,20 @@ export async function loadMemoryEmbeddings(ids: readonly string[]): Promise<Map<
     embeddingModel: row.embedding_model || null,
     contentHash: row.content_hash || null,
   }]))
+}
+
+export async function loadMemorySourceMessages(references: readonly { id: string; sessionId: string }[]): Promise<Array<{ id: string; content: string; created_at: number }>> {
+  if (!isDatabaseReady() || references.length === 0) return []
+  const selected = references.slice(0, 2)
+  const params = selected.flatMap(reference => [reference.id, reference.sessionId])
+  const conditions = selected.map((_, index) => `(id = $${index * 2 + 1} AND session_id = $${index * 2 + 2})`).join(' OR ')
+  return getDatabase().select(
+    `SELECT id, created_at, substr(CASE WHEN json_valid(metadata) THEN
+       CASE WHEN json_type(metadata, '$.displayContent') = 'text' THEN json_extract(metadata, '$.displayContent')
+         WHEN json_type(metadata, '$.tags') IS NOT NULL THEN '' ELSE content END
+       ELSE content END, 1, 1600) AS content
+     FROM chat_messages WHERE role = 'user' AND (${conditions}) LIMIT 2`, params,
+  )
 }
 
 export async function updateMemoryContent(id: string, content: string): Promise<void> {

@@ -35,6 +35,13 @@ describe('Router V2 uncertainty gate', () => {
   it('does not classify a low score alone', () => {
     expect(semanticRoutingTriggers('知识', makeRoutingDecision('知识', {}), {}, config)).toEqual([])
   })
+
+  it('does not classify a history request already resolved by the shared memory rules', () => {
+    const query = '继续沿用之前的格式'
+    const decision = makeRoutingDecision(query, {})
+    expect(decision.shouldLookupMemory).toBe(true)
+    expect(semanticRoutingTriggers(query, decision, {}, config)).toEqual([])
+  })
   it('detects an implicit lookup even when all original scores are zero', () => {
     expect(semanticRoutingTriggers('这个说法靠谱吗？', original(), {}, config)).toContain('implicit_lookup')
   })
@@ -79,6 +86,13 @@ describe('One semantic result, no rule competition', () => {
     const result = await resolveSemanticRouting({ query: '有出处吗？', original: rules, context: {}, config,
       chat: vi.fn().mockResolvedValue(response({ intent: 'no_tool', toolCategories: [], needsMemory: false, confidence: 0.8 })) })
     expect(result).toMatchObject({ status: 'no_tool', decision: { mode: 'direct', candidateTools: [], shouldLookupMemory: false } })
+  })
+
+  it('allows memory prefetch independently of no_tool without adding a tool loop', () => {
+    const value = { intent: 'no_tool', toolCategories: [], needsMemory: true, confidence: 0.8 }
+    const parsed = parseSemanticRoute(JSON.stringify(value), config)
+    expect(parsed).not.toBeNull()
+    expect(applySemanticRoute(original(), parsed!)).toMatchObject({ mode: 'direct', candidateTools: [], shouldLookupMemory: true })
   })
   it('outputs memory and tools in one call, without forcing execution', () => {
     const result = applySemanticRoute(original(), { intent: 'tools', toolCategories: ['knowledge'], needsMemory: true, confidence: 0.5 })

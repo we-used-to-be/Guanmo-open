@@ -55,6 +55,16 @@ describe('Router V2 real chat orchestration', () => {
     expect(mocks.answer).toHaveBeenCalledTimes(1)
     expect(result.current.error).toBeNull()
   })
+
+  it('uses an explicit matching current user fact without recalling historical memory', async () => {
+    useChatStore.setState({ messages: [{ id: 'current-user', role: 'user', content: '称呼我小林', timestamp: Date.now() }] })
+    const { result } = renderHook(() => useAiChat())
+    await act(async () => { await result.current.sendMessage('我的称呼是什么？') })
+    expect(mocks.memory).not.toHaveBeenCalled()
+    expect(mocks.classify).not.toHaveBeenCalled()
+    expect(mocks.agent).not.toHaveBeenCalled()
+    expect(mocks.answer).toHaveBeenCalledTimes(1)
+  })
   it('explicit tool routing does not call a classifier', async () => {
     const { result } = renderHook(() => useAiChat())
     await act(async () => { await result.current.sendMessage('搜索知识库里的算法资料') })
@@ -69,6 +79,16 @@ describe('Router V2 real chat orchestration', () => {
     expect(mocks.classify).toHaveBeenCalledTimes(1)
     expect(mocks.agent).not.toHaveBeenCalled()
     expect(mocks.memory).not.toHaveBeenCalled()
+    expect(mocks.answer).toHaveBeenCalledTimes(1)
+  })
+
+  it('semantic no_tool can prefetch memory and still stream Direct exactly once', async () => {
+    mocks.classify.mockResolvedValue({ id: 'route', role: 'assistant', content: '{"intent":"no_tool","toolCategories":[],"needsMemory":true,"confidence":0.9}' })
+    const { result } = renderHook(() => useAiChat())
+    await act(async () => { await result.current.sendMessage('这个说法靠谱吗？') })
+    expect(mocks.classify).toHaveBeenCalledTimes(1)
+    expect(mocks.memory).toHaveBeenCalledTimes(1)
+    expect(mocks.agent).not.toHaveBeenCalled()
     expect(mocks.answer).toHaveBeenCalledTimes(1)
   })
   it('one semantic call chooses both knowledge and memory', async () => {

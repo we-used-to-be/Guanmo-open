@@ -6,7 +6,7 @@ import { selectPrimaryWorkspacePath, useAppStore } from '@/stores/appStore'
 import { getAiClient, getEmbeddingClient, getEmbeddingConfig, initAiClient, initEmbeddingClient, isAiReady, isEmbeddingReady, isLocalApi } from '@/services/ai/aiClient'
 import { SYSTEM_TEMPERATURE, type ChatMessage } from '@/services/ai/types'
 import { initAgent, runAgent } from '@/services/agent'
-import type { AgentStep, AgentTaskContext } from '@/services/agent/types'
+import type { AgentRunRequest, AgentStep, AgentTaskContext } from '@/services/agent/types'
 import type { SourceReferenceRegistry } from '@/services/ai/sourceReferences'
 import { createAgentTaskContext, decodeAgentStepEvent, decodeKnowledgeSearchOutcome } from '@/services/agent/session'
 import { createActionProposal } from '@/services/agent/actionProposal'
@@ -16,7 +16,9 @@ import { setAgentScopeContext } from '@/services/aiScope'
 import { resolveDirectRagSources, searchScopedKnowledge, shouldTriggerScopedRag, streamFinalAnswer } from '@/services/aiChatFlow'
 import { buildAgentFinalAnswerMessages, buildChatMessageTags, buildMessagesForModel, buildSupplementalAiContext, countRagSourcesInContext, createContextMeta, createUserChatMessage, prepareChatHistoryForModel, resolveAiAnswerMode } from '@/services/aiChatMessages'
 import { hideLikelyToolJsonPrefix, stripToolCallJson } from '@/services/agent/toolCallParser'
-import { buildMemoryContext, isPersonalizedRewriteMemoryIntent, processMemoryCandidateExtraction, searchMemories } from '@/services/memory/memoryService'
+import { buildMemoryContext, isPersonalizedRewriteMemoryIntent, loadMemorySourceContext, searchMemories } from '@/services/memory/memoryService'
+import { scheduleMemoryExtraction } from '@/services/memory/memoryExtractionQueue'
+import { normalizeMemoryScopeKey } from '@/services/memory/memoryPolicy'
 import type { ManualCapability } from '@/components/ai/ManualToolToggle'
 import { ensureSettingsSecretsHydrated } from '@/services/settingsSecrets'
 import { singletonManager, SINGLETON_IDS } from '@/services/singletonPromise'
@@ -261,6 +263,7 @@ export function useAiChat() {
       }
 
       const initialUserMessage = createUserChatMessage(content, '', buildChatMessageTags(contextTags))
+      const memorySourceSessionId = useChatStore.getState().currentSessionId
       if (hasTags) initialUserMessage.displayContent = content.trim()
       addMessage(initialUserMessage)
       addMessage({
@@ -294,6 +297,12 @@ export function useAiChat() {
       if (!isCurrentRequest()) return
       const { tagContext, tagMetadata } = preparedContext
       const userMsg = { ...preparedContext.userMessage, id: initialUserMessage.id, timestamp: initialUserMessage.timestamp }
+      const persistAndQueueMemory = async () => {
+        if (useChatStore.getState().currentSessionId !== memorySourceSessionId) return
+        await useChatStore.getState().saveCurrentSession()
+        await scheduleMemoryExtraction({ ...initialUserMessage, content: content.trim(), sessionId: memorySourceSessionId },
+          memorySourceSessionId, workspacePath, { chat: request => routingModelChat(resolveRouterConfig(ai.routing).model, request) })
+      }
       updateMessageContent(initialUserMessage.id!, userMsg.content)
       updateRequestMessage('正在准备 AI 请求...')
       setRagStatus('idle')
@@ -370,6 +379,7 @@ export function useAiChat() {
       // --- 记忆预检索 ---
       let memoryContext = ''
       let memoryLookupAttempted = false
+      let prefetchedMemory: AgentRunRequest['prefetchedMemory']
       const memoryIntent = routingDecision.memoryIntent
       const personalizedRewriteMemory = isPersonalizedRewriteMemoryIntent(content.trim())
       const shouldLookupMemory = routingDecision.shouldLookupMemory
@@ -405,8 +415,12 @@ export function useAiChat() {
             signal: requestController.signal,
           })
           if (!isCurrentRequest()) return
-          memoryContext = buildMemoryContext(memories)
-          memoryLookupAttempted = memoryIntent === 'strong' || Boolean(memoryContext)
+          const sourceDetails = await loadMemorySourceContext(memories, content)
+          if (!isCurrentRequest()) return
+          memoryContext = buildMemoryContext(memories, sourceDetails ? 600 : 250, sourceDetails)
+          memoryLookupAttempted = true
+          prefetchedMemory = { query: content.trim(), result: memoryContext || '未找到相关记忆。',
+            topK: memoryIntent === 'strong' ? 10 : 3, categories: personalizedRewriteMemory ? ['preference', 'instruction'] : undefined }
           if (memoryIntent === 'strong' && !memoryContext) {
             memoryContext = '系统已按需检索长期记忆：未找到相关长期记忆。'
           }
@@ -420,13 +434,11 @@ export function useAiChat() {
         } catch (err) {
           console.warn('[Memory] retrieval failed:', err)
           if (!isCurrentRequest()) return
-          if (memoryIntent === 'strong') {
-            memoryContext = '系统已按需检索长期记忆：未找到相关长期记忆。'
-            memoryLookupAttempted = true
-          }
+          memoryContext = '长期记忆检索失败；这不代表没有相关记忆。仅依据本轮已提供的信息回答，不得编造个人历史。'
+          memoryLookupAttempted = true
           addAgentStep({
             type: 'observation',
-            content: '未检索到相关长期记忆',
+            content: '长期记忆检索失败，已降级继续回答',
             timestamp: Date.now(),
           })
         }
@@ -551,6 +563,7 @@ export function useAiChat() {
               const proposal = createActionProposal(event.pendingAction, {
                 id: `action-${Date.now()}-${pendingActionCount}`,
                 messageId: targetMessageId,
+                memoryScopeKey: normalizeMemoryScopeKey('project', workspacePath),
               })
               useChatStore.getState().updateMessageActionProposal(targetMessageId, proposal)
             }
@@ -567,6 +580,7 @@ export function useAiChat() {
             routingDecision,
             hasRecentEditContext,
             hasPrefetchedMemoryLookup: memoryLookupAttempted,
+            prefetchedMemory,
             signal: requestController.signal,
             temperature: SYSTEM_TEMPERATURE.agentPlanning,
             streamEnabled: ai.streamEnabled,
@@ -583,7 +597,7 @@ export function useAiChat() {
         const { editTargets, originalRequest: contextOriginalRequest } = agentRequest
 
         try {
-          setAgentScopeContext({ contextTags: contextTags || [], editTargets })
+          setAgentScopeContext({ contextTags: contextTags || [], editTargets, workspacePath })
           const result = await runAgent({ ...agentRequest.request, diagnosticRunId: agentDiagnosticRunId })
           diagnosticReason = result.reason
           diagnosticToolCalls = result.toolCalls
@@ -665,15 +679,7 @@ export function useAiChat() {
           addTimelineItem({ type: 'done', label: '生成回答完成' })
           // 异步提取候选记忆（Agent 模式）
           if (isCurrentRequest()) {
-            const allMsgs = useChatStore.getState().messages
-            const agentClient = getAiClient()
-            processMemoryCandidateExtraction(allMsgs, agentClient, SYSTEM_TEMPERATURE.memoryExtract, { triggerReason: 'agent_completed', workspacePath }).catch((err) =>
-              console.warn('[Memory] extraction failed:', err)
-            )
-            // 自动保存会话到数据库
-            useChatStore.getState().saveCurrentSession().catch((err) =>
-              console.warn('[Chat] auto-save failed:', err)
-            )
+            persistAndQueueMemory().catch(() => console.warn('[Chat] session or memory queue persistence failed'))
           }
         } catch (err) {
           diagnosticStatus = 'error'
@@ -860,14 +866,7 @@ export function useAiChat() {
         }
         // 异步提取候选记忆（不阻塞用户）
         if (isCurrentRequest()) {
-          const allMsgs = useChatStore.getState().messages
-          processMemoryCandidateExtraction(allMsgs, client, SYSTEM_TEMPERATURE.memoryExtract, { triggerReason: 'normal_completed', workspacePath }).catch((err) =>
-            console.warn('[Memory] extraction failed:', err)
-          )
-          // 自动保存会话到数据库
-          useChatStore.getState().saveCurrentSession().catch((err) =>
-            console.warn('[Chat] auto-save failed:', err)
-          )
+          persistAndQueueMemory().catch(() => console.warn('[Chat] session or memory queue persistence failed'))
         }
       } catch (err) {
         directDiagnosticStatus = 'error'

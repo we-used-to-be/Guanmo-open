@@ -1,12 +1,14 @@
 import type { ChatMessage } from '@/services/ai/types'
-import type { Memory } from '@/services/database/persistence'
+import type { Memory, MemorySourceGuard } from '@/services/database/persistence'
 import {
   persistMemory,
-  loadAllMemories,
   loadMemories,
   loadMemoryEmbeddings,
-  removeMemory,
-  removeOldestAutoMemories,
+  updateMemoryIfUnchanged,
+  removeMemoryIfUnchanged,
+  persistMemoryEmbedding,
+  loadMemorySourceMessages,
+  loadMemoryCount,
 } from '@/services/database/persistence'
 import {
   classifyMemoryRetrievalIntent,
@@ -22,21 +24,61 @@ import {
   resolveMemoryCandidateDecision,
   shouldExtractMemoryCandidate,
   validateMemoryCandidate,
+  containsSensitiveMemoryText,
+  shouldActivateAutomaticMemory,
+  findActiveFactConflict,
+  areMemoryFactsEquivalent,
 } from './memoryPolicy'
 import type { MemoryCandidateInput, MemoryScopeType } from './memoryPolicy'
+import { decodeMemoryEvidence, encodeMemoryEvidence, withMemoryReplacement } from './memoryEvidence'
+import { idleScheduler } from '@/services/idleScheduler'
 
 export { classifyMemoryRetrievalIntent } from './memoryPolicy'
 export { isPersonalizedRewriteMemoryIntent } from './memoryPolicy'
 export type { MemoryRetrievalIntent } from './memoryPolicy'
 
 const AUTO_CATEGORIES = ['preference', 'project', 'learning', 'profile', 'instruction'] as const
-const MAX_MEMORIES = 200
+const MAX_CANDIDATES = 200
+export class MemoryCandidateCapacityError extends Error {
+  constructor() { super('memory_candidate_capacity') }
+}
 const LIGHT_MEMORY_TOP_K = 3
 const STRONG_MEMORY_TOP_K = 10
 const LIGHT_EMBEDDING_CANDIDATE_LIMIT = 12
 const STRONG_EMBEDDING_CANDIDATE_LIMIT = 40
 const LIGHT_MEMORY_THRESHOLD = 0.3
 const STRONG_MEMORY_THRESHOLD = 0.2
+const pendingVectorFills = new Set<string>()
+
+function scheduleMemoryVectorFill(memories: Memory[], options: MemorySearchOptions) {
+  if (!options.batchEmbedding || options.signal?.aborted) return
+  const pending = memories.filter(memory => !hasReusableEmbedding(memory, options.embeddingModel)
+    && !pendingVectorFills.has(`${memory.id}:${contentHash(memory.content)}:${options.embeddingModel || ''}`)).slice(0, 8)
+  if (!pending.length) return
+  const keys = pending.map(memory => `${memory.id}:${contentHash(memory.content)}:${options.embeddingModel || ''}`)
+  keys.forEach(key => pendingVectorFills.add(key))
+  idleScheduler.enqueueOptional(async () => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 20_000)
+    try {
+      if (options.signal?.aborted) return
+      const current = await loadMemories({ ids: pending.map(memory => memory.id), statuses: ['active'], includeEmbedding: false })
+      const eligible = pending.filter(memory => current.some(row => row.id === memory.id
+        && row.content === memory.content && row.contentHash === memory.contentHash))
+      if (!eligible.length || controller.signal.aborted) return
+      const generated = await Promise.race([
+        options.batchEmbedding!(eligible.map(memory => memory.content), controller.signal),
+        new Promise<never>((_, reject) => controller.signal.addEventListener('abort', () => reject(new Error('memory_fill_timeout')), { once: true })),
+      ])
+      if (controller.signal.aborted) return
+      for (let index = 0; index < eligible.length; index++) {
+        const vector = generated[index]
+        if (Array.isArray(vector)) await persistMemoryEmbedding(eligible[index], vector, options.embeddingModel || null, contentHash(eligible[index].content))
+      }
+    } catch { console.info('[Memory] vector cache fill deferred', { count: pending.length }) }
+    finally { clearTimeout(timer); keys.forEach(key => pendingVectorFills.delete(key)) }
+  }, 70, '长期记忆向量缓存')
+}
 const CATEGORY_PRIORITY: Record<string, number> = {
   project_memory: 0,
   project: 0,
@@ -53,11 +95,22 @@ const CATEGORY_PRIORITY: Record<string, number> = {
 interface ExtractedMemory extends MemoryCandidateInput {
   action: 'add' | 'update' | 'delete'
   id?: string
+  sourceId?: string
 }
 
-interface ExtractionOptions {
+export interface ExtractionOptions {
   triggerReason?: string
   workspacePath?: string | null
+  signal?: AbortSignal
+  sourceId?: string
+  isValid?: () => boolean
+  isSourceValid?: () => Promise<boolean>
+  throwOnFailure?: boolean
+  sourceContents?: Readonly<Record<string, string>>
+}
+
+interface ExtractionClient {
+  chat(req: { messages: ChatMessage[]; temperature?: number; signal?: AbortSignal; maxTokens?: number; reasoningMode?: 'off' | 'on' }): Promise<{ content: string }>
 }
 
 type MemoryRetrievalMode = 'light' | 'strong'
@@ -101,9 +154,8 @@ function sortMemoryScores<T extends { memory: Memory; similarity: number }>(
     const scopeRank = (memory: Memory) => (
       requestedScopeKey && memory.scopeType === 'project' && memory.scopeKey === requestedScopeKey ? 0 : 1
     )
-    const scopeDiff = scopeRank(a.memory) - scopeRank(b.memory)
-    if (scopeDiff !== 0) return scopeDiff
-    const similarityDiff = b.similarity - a.similarity
+    const similarityDiff = (b.similarity + (scopeRank(b.memory) === 0 ? 0.04 : 0))
+      - (a.similarity + (scopeRank(a.memory) === 0 ? 0.04 : 0))
     if (similarityDiff !== 0) return similarityDiff
     const priorityDiff = categoryPriority(a.memory.category) - categoryPriority(b.memory.category)
     if (priorityDiff !== 0) return priorityDiff
@@ -145,11 +197,12 @@ function shouldAttemptMemoryCandidateExtraction(messages: ChatMessage[]): boolea
 }
 
 function buildExtractPrompt(existingMemories: Memory[]): string {
-  const existingBlock = existingMemories.length > 0
-    ? `\n\n当前已有记忆（用于避免重复）：\n${existingMemories.map((item) => `- [${item.id}] ${item.content}`).join('\n')}`
+  const safeExisting = existingMemories.filter(memory => !containsSensitiveMemoryText([memory.content, memory.factKey, memory.factValue].filter(Boolean).join(' ')))
+  const existingBlock = safeExisting.length > 0
+    ? `\n\n当前作用域已有记忆（用于复用事实身份和避免重复；锁定/手动记录不可自动修改）：\n${safeExisting.map(item => JSON.stringify({ id: item.id, content: item.content, category: item.category, status: item.status, source: item.source, locked: item.locked, subject: item.subject, factKey: item.factKey, factValue: item.factValue })).join('\n')}`
     : ''
 
-  return `你是一个长期记忆候选提取器。你的任务是从用户消息中找出“适合跨会话长期保留、但仍需要用户确认”的候选记忆。
+  return `你是一个长期记忆提取器。你的任务是从用户消息中找出适合跨会话长期保留的事实，由应用校验后决定自动生效或等待确认。
 
 只允许提取：
 - 用户明确表达的稳定偏好、习惯、称呼、语言或格式要求
@@ -177,29 +230,41 @@ function buildExtractPrompt(existingMemories: Memory[]): string {
 - profile: 稳定身份、背景信息
 - instruction: 长期指令、协作规则、输出格式
 
+已确定的重要事件、项目决策或学习里程碑可标为 kind=episodic，保留具体决定和时间背景；不得从助手建议推断用户已决定。其他事实 kind=semantic。
+支持 add/update/delete/noop；update/delete 只允许目录内的自动未锁候选，不能删除已确认或手动事实；拿不准使用 noop。
 请只输出 JSON 数组，每项格式：
-{"action":"add","content":"记忆内容","category":"preference|project|learning|profile|instruction","subject":"user|项目名","factKey":"稳定属性名","factValue":"属性值","confidence":0.0}
+{"action":"add","content":"记忆内容","category":"preference|project|learning|profile|instruction","kind":"semantic|episodic","sourceId":"用户消息ID","subject":"user|项目名","factKey":"稳定属性名","factValue":"用户原文中的短值","confidence":0.0}
 
 subject/factKey/factValue 只能来自用户原文可直接支持的事实；无法结构化时可省略。confidence 表示用户表达的明确程度，不得表示模型猜测。
+同一事实必须沿用已有 subject/factKey/category；已确认事实的新值只能提出 add 替代候选，不得直接 update/delete。新事实若结构完整、非敏感且明确，将由应用自动生效；任何冲突仍等待确认。
 
 拿不准时输出空数组 []。不要输出任何解释。${existingBlock}`
 }
 
 export async function extractMemories(
   messages: ChatMessage[],
-  client: { chat: (req: { messages: ChatMessage[]; temperature?: number }) => Promise<{ content: string }> },
-  temperature?: number
+  client: ExtractionClient,
+  temperature?: number,
+  options?: ExtractionOptions,
 ): Promise<ExtractedMemory[]> {
   const recentMessages = messages
     .filter((message) => message.role === 'user' && !message.hidden)
-    .slice(-1)
+    .slice(-3)
   if (recentMessages.length < 1) return []
 
-  const existingMemories = await loadAllMemories(undefined, ['active', 'candidate'])
+  if (options?.signal?.aborted || options?.isValid?.() === false) return []
+  const existingMemories = await loadMemories({
+    statuses: ['active', 'candidate'], includeEmbedding: false,
+    scopeType: options?.workspacePath ? 'project' : 'global', scopeKey: normalizeMemoryScopeKey('project', options?.workspacePath),
+    limit: 40,
+  })
   const systemPrompt = buildExtractPrompt(existingMemories)
   const chatMessages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
-    ...recentMessages,
+    ...recentMessages.map(message => ({ role: 'user' as const, content: JSON.stringify({
+      sourceId: message.id || options?.sourceId || '',
+      text: (message.displayContent || message.content).slice(0, 6000),
+    }) })),
     {
       role: 'user',
       content: '请基于以上用户消息提取长期记忆候选。只输出 JSON 数组。',
@@ -207,18 +272,23 @@ export async function extractMemories(
   ]
 
   try {
-    const response = await client.chat({ messages: chatMessages, temperature })
+    const response = await client.chat({ messages: chatMessages, temperature, signal: options?.signal, maxTokens: 800, reasoningMode: 'off' })
+    if (options?.signal?.aborted || options?.isValid?.() === false) return []
     const text = response.content.trim()
     const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/)
     const jsonText = fenced ? fenced[1].trim() : text
     const start = jsonText.indexOf('[')
     const end = jsonText.lastIndexOf(']')
-    if (start < 0 || end < 0) return []
+    if (start < 0 || end < 0) throw new Error('invalid_memory_extraction')
 
     const parsed = JSON.parse(jsonText.slice(start, end + 1))
-    if (!Array.isArray(parsed)) return []
+    if (!Array.isArray(parsed)) throw new Error('invalid_memory_extraction')
 
-    return parsed
+    return parsed.map((item: unknown) => {
+      if (typeof item !== 'object' || item === null) return item
+      const record = item as Record<string, unknown>
+      return { ...record, action: typeof record.action === 'string' ? record.action.toLowerCase() : '' }
+    })
       .filter((item: unknown): item is ExtractedMemory => {
         if (typeof item !== 'object' || item === null) return false
         const record = item as ExtractedMemory
@@ -227,17 +297,19 @@ export async function extractMemories(
           && typeof record.content === 'string'
           && typeof record.category === 'string'
           && AUTO_CATEGORIES.includes(record.category as (typeof AUTO_CATEGORIES)[number])
+          && (record.kind === undefined || record.kind === 'semantic' || record.kind === 'episodic')
         )
       })
-      .slice(0, 3)
+      .slice(0, 6)
   } catch (err) {
-    console.warn('[Memory] extractMemories parse failed:', err)
+    if (options?.throwOnFailure) throw err
+    console.warn('[Memory] extraction request or parse failed')
     return []
   }
 }
 
 function hasMaterialMemoryChange(existing: Memory, next: Memory): boolean {
-  return existing.content !== next.content
+  return existing.content !== next.content || existing.status !== next.status
     || (existing.subject || null) !== (next.subject || null)
     || (existing.factKey || null) !== (next.factKey || null)
     || (existing.factValue || null) !== (next.factValue || null)
@@ -251,9 +323,22 @@ function replaceMemorySnapshot(memories: Memory[], next: Memory): void {
   if (index >= 0) memories[index] = next
 }
 
+async function persistAutomaticRecord(memory: Memory, expected?: Memory, source?: MemorySourceGuard): Promise<Memory | null> {
+  const write = (next: Memory) => expected ? updateMemoryIfUnchanged(next, expected, source) : persistMemory(next, true, source)
+  if (await write(memory)) return memory
+  if (memory.status !== 'active') return null
+  const latest = await loadMemories({ statuses: ['active'], category: memory.category, includeEmbedding: false,
+    scopeType: memory.scopeType || 'global', scopeKey: memory.scopeKey, includeGlobalForProject: false })
+  const conflict = findActiveFactConflict(latest, memory)
+  if (!conflict || areMemoryFactsEquivalent(conflict, memory)) return null
+  const candidate: Memory = { ...memory, status: 'candidate', supersedesId: conflict.id,
+    evidence: withMemoryReplacement(memory.evidence || '', conflict) }
+  return await write(candidate) ? candidate : null
+}
+
 export async function processMemoryCandidateExtraction(
   messages: ChatMessage[],
-  client: { chat: (req: { messages: ChatMessage[]; temperature?: number }) => Promise<{ content: string }> },
+  client: ExtractionClient,
   temperature?: number,
   options?: ExtractionOptions
 ): Promise<number> {
@@ -263,11 +348,18 @@ export async function processMemoryCandidateExtraction(
     return 0
   }
 
-  const extracted = await extractMemories(messages, client, temperature)
+  const pendingCount = await loadMemoryCount({ statuses: ['candidate'],
+    scopeType: options?.workspacePath ? 'project' : 'global', scopeKey: normalizeMemoryScopeKey('project', options?.workspacePath) })
+  if (pendingCount >= MAX_CANDIDATES) {
+    if (options?.throwOnFailure) throw new MemoryCandidateCapacityError()
+    return 0
+  }
+
+  const extracted = await extractMemories(messages, client, temperature, options)
+  if (options?.signal?.aborted || options?.isValid?.() === false) return 0
   const userEvidence = [...messages]
     .reverse()
     .find((message) => message.role === 'user' && !message.hidden)
-  const evidence = (userEvidence?.displayContent || userEvidence?.content || '').trim()
   console.info('[Memory] extraction triggered', {
     triggerReason,
     visibleUserMessages: messages.filter((msg) => msg.role === 'user' && !msg.hidden).length,
@@ -275,12 +367,31 @@ export async function processMemoryCandidateExtraction(
   })
   if (extracted.length === 0) return 0
 
-  const allMemories = await loadAllMemories(undefined, ['active', 'candidate'])
+  const allMemories = await loadMemories({
+    statuses: ['active', 'candidate', 'ignored', 'archived'], includeEmbedding: false,
+    scopeType: options?.workspacePath ? 'project' : 'global', scopeKey: normalizeMemoryScopeKey('project', options?.workspacePath),
+  })
   let saved = 0
 
   for (const rawItem of extracted) {
     try {
-      const item = normalizeMemoryCandidate(rawItem)
+      if (options?.signal?.aborted || options?.isValid?.() === false) break
+      if (options?.isSourceValid && !await options.isSourceValid()) break
+      let item = normalizeMemoryCandidate(rawItem)
+      const source = rawItem.sourceId
+        ? messages.find(message => message.role === 'user' && !message.hidden && message.id === rawItem.sourceId)
+        : messages.filter(message => message.role === 'user' && !message.hidden).length === 1 ? userEvidence : undefined
+      if (!source) continue
+      const sourceText = (source.displayContent || source.content).trim()
+      if (containsSensitiveMemoryText(sourceText) || !shouldExtractMemoryCandidate(sourceText)) continue
+      if (item.factValue && !sourceText.toLowerCase().includes(item.factValue.toLowerCase())) continue
+      const evidence = encodeMemoryEvidence(source, item.kind)
+      const sourceGuard = source.id && options?.sourceContents?.[source.id] !== undefined
+        ? { id: source.id, content: options.sourceContents[source.id] } : undefined
+      const sourceIdentity = source.id || options?.sourceId
+      const candidateId = sourceIdentity
+        ? `mem-auto-${sourceIdentity}-${Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(item.content)))).map(byte => byte.toString(16).padStart(2, '0')).join('')}`
+        : `mem-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
       const validation = validateMemoryCandidate(item)
       if (!validation.valid) {
         console.info('[Memory] candidate rejected', {
@@ -290,10 +401,20 @@ export async function processMemoryCandidateExtraction(
         })
         continue
       }
+      const activeUpdate = item.action === 'update' && item.id ? allMemories.find(memory => memory.id === item.id && memory.status === 'active') : undefined
+      if (activeUpdate) {
+        const scope = inferMemoryScope(item.category, options?.workspacePath)
+        if (activeUpdate.category !== item.category || (activeUpdate.scopeType || 'global') !== scope.scopeType || (activeUpdate.scopeKey || null) !== scope.scopeKey) continue
+        item = { ...item, action: 'add', subject: activeUpdate.subject || item.subject || undefined, factKey: activeUpdate.factKey || item.factKey || undefined }
+      }
+      const canActivate = shouldActivateAutomaticMemory(item, sourceText)
 
       if (item.action === 'add') {
         const category = normalizeMemoryCategory(item.category)
         const itemScope = inferMemoryScope(category, options?.workspacePath)
+        if (allMemories.some(memory => ['ignored', 'archived'].includes(memory.status)
+          && memory.scopeType === itemScope.scopeType && memory.scopeKey === itemScope.scopeKey
+          && lexicalMemorySimilarity(memory.content, item.content) >= 0.86)) continue
         const candidateRecord = {
           id: 'incoming-candidate',
           content: item.content,
@@ -324,6 +445,7 @@ export async function processMemoryCandidateExtraction(
           const contentChanged = mergedContent !== mergeable.content
           const merged: Memory = {
             ...mergeable,
+            status: canActivate && !decision.supersedes && !mergeable.supersedesId ? 'active' : 'candidate',
             content: mergedContent,
             subject: item.subject || mergeable.subject || null,
             factKey: item.factKey || mergeable.factKey || null,
@@ -331,7 +453,7 @@ export async function processMemoryCandidateExtraction(
               ? item.factValue || mergeable.factValue || null
               : item.factValue || null,
             confidence: Math.max(item.confidence ?? 0.7, mergeable.confidence ?? 0.7),
-            evidence,
+            evidence: decision.supersedes ? withMemoryReplacement(evidence, decision.supersedes) : evidence,
             supersedesId: decision.supersedes?.id || mergeable.supersedesId,
             embedding: contentChanged ? null : mergeable.embedding,
             embeddingModel: contentChanged ? null : mergeable.embeddingModel,
@@ -345,8 +467,9 @@ export async function processMemoryCandidateExtraction(
             })
             continue
           }
-          await persistMemory(merged)
-          replaceMemorySnapshot(allMemories, merged)
+          const stored = await persistAutomaticRecord(merged, mergeable, sourceGuard)
+          if (!stored) continue
+          replaceMemorySnapshot(allMemories, stored)
           saved += 1
           continue
         }
@@ -354,7 +477,7 @@ export async function processMemoryCandidateExtraction(
         if (decision.action === 'replace') {
           const sameFact = decision.target
           const replacement: Memory = {
-            id: `mem-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            id: candidateId,
             content: item.content,
             category,
             source: 'auto_extracted',
@@ -366,32 +489,25 @@ export async function processMemoryCandidateExtraction(
             factKey: item.factKey || null,
             factValue: item.factValue || null,
             confidence: item.confidence ?? 0.7,
-            evidence,
+            evidence: withMemoryReplacement(evidence, sameFact),
             supersedesId: sameFact.id,
             contentHash: contentHash(item.content),
             createdAt: Date.now(),
             updatedAt: Date.now(),
           }
-          await persistMemory(replacement)
+          if (!await persistMemory(replacement, true, sourceGuard)) continue
           allMemories.push(replacement)
           saved += 1
           continue
         }
 
-        if (allMemories.length >= MAX_MEMORIES) {
-          await removeOldestAutoMemories(10)
-          const refreshed = await loadAllMemories(undefined, ['active', 'candidate'])
-          allMemories.length = 0
-          allMemories.push(...refreshed)
-        }
-
         const memory: Memory = {
-          id: `mem-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          id: candidateId,
           content: item.content,
           category,
           source: 'auto_extracted',
           locked: false,
-          status: 'candidate',
+          status: canActivate ? 'active' : 'candidate',
           ...itemScope,
           subject: item.subject || null,
           factKey: item.factKey || null,
@@ -402,15 +518,18 @@ export async function processMemoryCandidateExtraction(
           createdAt: Date.now(),
           updatedAt: Date.now(),
         }
-        await persistMemory(memory)
-        allMemories.push(memory)
+        const stored = await persistAutomaticRecord(memory, undefined, sourceGuard)
+        if (!stored) continue
+        allMemories.push(stored)
         saved += 1
         continue
       }
 
       if (item.action === 'update' && item.id) {
         const existing = allMemories.find((memory) => memory.id === item.id)
-        if (existing && existing.source === 'auto_extracted' && existing.status === 'candidate' && !existing.locked) {
+        const scope = inferMemoryScope(item.category, options?.workspacePath)
+        if (existing && existing.source === 'auto_extracted' && existing.status === 'candidate' && !existing.locked
+          && (existing.scopeType || 'global') === scope.scopeType && (existing.scopeKey || null) === scope.scopeKey) {
           const contentChanged = existing.content !== item.content
           const updated: Memory = {
             ...existing,
@@ -426,7 +545,7 @@ export async function processMemoryCandidateExtraction(
             updatedAt: Date.now(),
           }
           if (!hasMaterialMemoryChange(existing, updated)) continue
-          await persistMemory(updated)
+          if (!await updateMemoryIfUnchanged(updated, existing, sourceGuard)) continue
           replaceMemorySnapshot(allMemories, updated)
           saved += 1
         }
@@ -435,13 +554,15 @@ export async function processMemoryCandidateExtraction(
 
       if (item.action === 'delete' && item.id) {
         const existing = allMemories.find((memory) => memory.id === item.id)
-        if (existing && existing.source === 'auto_extracted' && existing.status === 'candidate' && !existing.locked) {
-          await removeMemory(item.id)
-          saved += 1
+        const scope = inferMemoryScope(item.category, options?.workspacePath)
+        if (existing && existing.source === 'auto_extracted' && existing.status === 'candidate' && !existing.locked
+          && (existing.scopeType || 'global') === scope.scopeType && (existing.scopeKey || null) === scope.scopeKey) {
+          if (await removeMemoryIfUnchanged(existing, sourceGuard)) saved += 1
         }
       }
     } catch (err) {
-      console.warn('[Memory] candidate persistence failed:', err)
+      if (options?.throwOnFailure) throw err
+      console.warn('[Memory] candidate persistence failed')
     }
   }
 
@@ -469,10 +590,13 @@ export async function upsertExplicitMemory(
 ): Promise<ExplicitMemoryUpsertResult> {
   const normalizedContent = content.trim()
   const normalizedCategory = normalizeMemoryCategory(category)
-  const allMemories = await loadAllMemories(undefined, ['active', 'candidate'])
-  const similar = findSimilarMemory(normalizedContent, normalizedCategory, allMemories, 0.68)
   const now = Date.now()
   const scope = inferMemoryScope(normalizedCategory, options?.workspacePath)
+  const allMemories = await loadMemories({
+    statuses: ['active', 'candidate'], includeEmbedding: false, category: normalizedCategory,
+    scopeType: scope.scopeType, scopeKey: scope.scopeKey, includeGlobalForProject: false,
+  })
+  const similar = findSimilarMemory(normalizedContent, normalizedCategory, allMemories, 0.68)
 
   if (similar) {
     const memory: Memory = {
@@ -492,7 +616,7 @@ export async function upsertExplicitMemory(
       contentHash: contentHash(normalizedContent),
       updatedAt: now,
     }
-    await persistMemory(memory)
+    if (!await persistMemory(memory)) throw new Error('记忆未写入，数据库尚未就绪')
     return { memory, action: 'updated' }
   }
 
@@ -513,7 +637,7 @@ export async function upsertExplicitMemory(
     createdAt: now,
     updatedAt: now,
   }
-  await persistMemory(memory)
+  if (!await persistMemory(memory)) throw new Error('记忆未写入，数据库尚未就绪')
   return { memory, action: 'created' }
 }
 
@@ -543,26 +667,23 @@ export async function searchMemories(
   ).filter((memory) => isMemoryVisibleInScope(
     memory,
     options.scopeType === 'project' ? options.scopeKey : null
-  ))
+  )).filter(memory => !containsSensitiveMemoryText([memory.content, memory.factKey, memory.factValue].filter(Boolean).join(' '))
+    || /地址|住址|手机|电话|邮箱|证件|密码|密钥|过敏|诊断|敏感/.test(query))
   if (allMemories.length === 0) return []
 
   const mode = options.mode || 'light'
   const topK = options.topK ?? (mode === 'strong' ? STRONG_MEMORY_TOP_K : LIGHT_MEMORY_TOP_K)
   const threshold = options.threshold ?? (mode === 'strong' ? STRONG_MEMORY_THRESHOLD : LIGHT_MEMORY_THRESHOLD)
-  let queryEmbedding: number[] | null = null
-
-  if (options.embedding) {
-    try {
-      queryEmbedding = await options.embedding(query, options.signal)
-    } catch (err) {
-      console.warn('[Memory] query embedding failed, falling back to lexical similarity:', err)
-    }
-  }
-
   const lexicalScored = allMemories.map((memory) => ({
     memory,
     similarity: Math.min(1, lexicalMemorySimilarity(query, memory.content) + (
       [memory.subject, memory.factKey, memory.factValue].some((value) => value && query.includes(value)) ? 0.2 : 0
+    ) + (
+      /偏好|习惯|风格|语气|语言|称呼|格式/.test(query) && ['preference', 'instruction'].includes(memory.category) ? 0.22 : 0
+    ) + (
+      /背景|身份|专业|职业/.test(query) && memory.category === 'profile' ? 0.22 : 0
+    ) + (
+      /之前|上次|当时|决定|决策/.test(query) && decodeMemoryEvidence(memory.evidence)?.kind === 'episodic' ? 0.18 : 0
     )),
   }))
   const lexicalMatches = sortMemoryScores(lexicalScored.filter((item) => item.similarity > 0), requestedScopeKey)
@@ -574,7 +695,8 @@ export async function searchMemories(
     ).slice(0, mode === 'strong' ? STRONG_EMBEDDING_CANDIDATE_LIMIT : LIGHT_EMBEDDING_CANDIDATE_LIMIT)
     : lexicalScored
 
-  if (queryEmbedding && candidates.length > 0) {
+  if (options.signal?.aborted) return []
+  if (options.embedding && candidates.length > 0) {
     const storedEmbeddings = await loadMemoryEmbeddings(candidates.map(({ memory }) => memory.id))
     for (const { memory } of candidates) {
       const stored = storedEmbeddings.get(memory.id)
@@ -582,59 +704,36 @@ export async function searchMemories(
     }
   }
 
-  // 使用batchEmbedding批量获取embedding，减少HTTP请求
-  if (queryEmbedding && options.batchEmbedding && candidates.length > 0) {
+  let queryEmbedding: number[] | null = null
+  if (options.embedding && candidates.some(({ memory }) => hasReusableEmbedding(memory, options.embeddingModel))) {
+    const controller = new AbortController()
+    const stop = () => controller.abort()
+    options.signal?.addEventListener('abort', stop, { once: true })
+    const timer = setTimeout(stop, 1200)
     try {
-      const uncached = candidates.filter(({ memory }) => !hasReusableEmbedding(memory, options.embeddingModel))
-      if (uncached.length > 0) {
-        const generated = await options.batchEmbedding(uncached.map(({ memory }) => memory.content), options.signal)
-        await Promise.all(uncached.map(({ memory }, index) => {
-          memory.embedding = generated[index]
-          memory.embeddingModel = options.embeddingModel || null
-          memory.contentHash = contentHash(memory.content)
-          return persistMemory(memory)
-        }))
-      }
-
-      const scored: Array<{ memory: Memory; similarity: number }> = []
-      for (let i = 0; i < candidates.length; i++) {
-        const similarity = cosineSimilarity(queryEmbedding, candidates[i].memory.embedding || [])
-        if (similarity >= threshold && (!legacyTopKOnly || similarity > 0)) {
-          scored.push({ memory: candidates[i].memory, similarity })
-        }
-      }
-
-      return sortMemoryScores(scored, requestedScopeKey)
-        .slice(0, topK)
-        .map((item) => item.memory)
-    } catch (err) {
-      console.warn('[Memory] batch embedding failed, falling back to single embedding:', err)
+      queryEmbedding = await Promise.race([
+        options.embedding(query, controller.signal),
+        new Promise<never>((_, reject) => controller.signal.addEventListener('abort', () => reject(new Error('memory_embedding_timeout')), { once: true })),
+      ])
+    } catch {
+      console.info('[Memory] using lexical retrieval')
+    } finally {
+      clearTimeout(timer)
+      options.signal?.removeEventListener('abort', stop)
     }
   }
-
-  // 降级：逐条调用embedding
+  if (options.signal?.aborted) return []
+  scheduleMemoryVectorFill(candidates.map(candidate => candidate.memory), options)
   const scored: Array<{ memory: Memory; similarity: number }> = []
   for (const candidate of candidates) {
-    let similarity = candidate.similarity
-    if (queryEmbedding && options.embedding) {
-      try {
-        const memoryEmbedding = hasReusableEmbedding(candidate.memory, options.embeddingModel)
-          ? candidate.memory.embedding as number[]
-          : await options.embedding(candidate.memory.content, options.signal)
-        if (!hasReusableEmbedding(candidate.memory, options.embeddingModel)) {
-          candidate.memory.embedding = memoryEmbedding
-          candidate.memory.embeddingModel = options.embeddingModel || null
-          candidate.memory.contentHash = contentHash(candidate.memory.content)
-          await persistMemory(candidate.memory)
-        }
-        similarity = cosineSimilarity(queryEmbedding, memoryEmbedding)
-      } catch (err) {
-        console.warn('[Memory] memory embedding failed, using lexical similarity:', err)
-      }
-    }
-
+    const semantic = queryEmbedding && hasReusableEmbedding(candidate.memory, options.embeddingModel)
+      ? cosineSimilarity(queryEmbedding, candidate.memory.embedding || []) : 0
+    const similarity = Math.max(candidate.similarity, semantic * 0.75 + candidate.similarity * 0.25)
     if (similarity >= threshold && (!legacyTopKOnly || similarity > 0)) {
-      scored.push({ memory: candidate.memory, similarity })
+      const importance = candidate.memory.source === 'auto_extracted' ? 0 : 0.02
+      const ageDays = Math.max(0, Date.now() - candidate.memory.updatedAt) / 86400_000
+      const recency = 0.02 / (1 + ageDays / 90)
+      scored.push({ memory: candidate.memory, similarity: similarity + importance + recency })
     }
   }
 
@@ -643,10 +742,13 @@ export async function searchMemories(
     .map((item) => item.memory)
 }
 
-export function buildMemoryContext(memories: Memory[]): string {
+/** Byte-based estimate, not provider tokenizer usage. Default targets roughly 250 tokens. */
+export function buildMemoryContext(memories: Memory[], maxTokens = 250, sourceDetails = ''): string {
   if (memories.length === 0) return ''
-
-  const parts = memories.map((memory, index) => {
+  const byteLimit = Math.max(0, Math.min(1000, Number.isFinite(maxTokens) ? maxTokens : 250)) * 3
+  const encoder = new TextEncoder()
+  let context = '【长期记忆】\n'
+  for (const [index, memory] of filterInjectableMemories(memories).entries()) {
     const categoryLabel = {
       profile_memory: '用户画像',
       project_memory: '项目',
@@ -659,15 +761,43 @@ export function buildMemoryContext(memories: Memory[]): string {
       context: '上下文',
       general: '其他',
     }[memory.category] || memory.category
-    return [
+    const evidence = decodeMemoryEvidence(memory.evidence)
+    const recordedAt = evidence?.recordedAt ?? evidence?.occurredAt
+    let part = [
       `[记忆 ${index + 1}]`,
       `分类：${categoryLabel}`,
       `作用域：${memory.scopeType === 'project' ? '当前项目' : '全局'}`,
-      ...(memory.subject && memory.factKey ? [`事实：${memory.subject}.${memory.factKey} = ${memory.factValue || memory.content}`] : []),
-      ...((memory.evidence && memory.evidence !== memory.content) ? [`依据：${memory.evidence}`] : []),
+      ...(evidence?.kind === 'episodic' && recordedAt ? [`记录时间：${new Date(recordedAt).toISOString()}`] : []),
       `内容：${memory.content}`,
     ].join('\n')
-  })
+    if (encoder.encode(context + part + '\n\n').length > byteLimit) {
+      let truncated = ''
+      for (const character of part) {
+        if (encoder.encode(context + truncated + character + '…\n\n').length > byteLimit) break
+        truncated += character
+      }
+      if (!truncated.includes('内容：') || truncated.endsWith('内容：')) break
+      part = truncated + '…'
+    }
+    context += part + '\n\n'
+  }
+  if (context === '【长期记忆】\n') return ''
+  if (sourceDetails) {
+    for (const character of '\n【原始用户记录，按来源 ID 补查】\n' + sourceDetails) {
+      if (encoder.encode(context + character).length > byteLimit) break
+      context += character
+    }
+  }
+  return context.trimEnd()
+}
 
-  return `【长期记忆】\n${parts.join('\n\n')}`
+export async function loadMemorySourceContext(memories: Memory[], query: string): Promise<string> {
+  if (!/原话|原始|细节|为什么|原因|来源|经过/.test(query)) return ''
+  const references = filterInjectableMemories(memories).flatMap(memory => {
+    const evidence = decodeMemoryEvidence(memory.evidence)
+    return evidence?.sessionId ? [{ id: evidence.sourceId, sessionId: evidence.sessionId }] : []
+  })
+  const rows = await loadMemorySourceMessages(references)
+  return rows.filter(row => row.content && !containsSensitiveMemoryText(row.content))
+    .map(row => `用户原话（${row.id}）：${row.content}`).join('\n')
 }

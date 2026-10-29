@@ -14,6 +14,7 @@ export interface AgentEditTarget {
 interface AgentScopeContext {
   contextTags: ContextTag[]
   editTargets?: AgentEditTarget[]
+  workspacePath?: string | null
 }
 
 let activeAgentScopeContext: AgentScopeContext | null = null

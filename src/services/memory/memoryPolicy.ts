@@ -23,6 +23,18 @@ export interface MemoryCandidateInput {
   factKey?: string
   factValue?: string
   confidence?: number
+  kind?: 'semantic' | 'episodic'
+}
+
+export function containsSensitiveMemoryText(text: string): boolean {
+  return /(?:密码|口令|验证码|密钥|私钥|助记词|身份证|银行卡|信用卡|病历|诊断|过敏|住址|家庭地址|电话号码|手机号|api[_ -]?key|password|secret|token\s*[:=])|\b(?:sk-[a-z0-9_-]{10,}|1[3-9]\d{9}|\d{17}[\dXx])\b/i.test(text)
+}
+
+export function isExplicitMemoryWriteIntent(text: string): boolean {
+  if (/(?:不要|别|无需|不必|不用|禁止).{0,8}(?:记住|记下|记忆|保存)|(?:不|别)要?存入/.test(text)) return false
+  if (/^(?:翻译|改写|解释|总结|分析|引用|虚构|假设|举例)/.test(text.trim())) return false
+  if (/(?:你还?|还|是否|有没有).{0,5}记住|记住.{0,20}(?:了吗|过吗|了没|没有[?？]?$)/.test(text)) return false
+  return /(?:记住|记下来|添加(?:到|进|为)?(?:长期)?记忆|保存(?:到|进|为)?(?:长期)?记忆|以后记得|remember\s)/i.test(text.trim())
 }
 
 export interface MemoryCandidateRecord extends MemoryPolicyRecord {
@@ -47,6 +59,7 @@ export function isPersonalizedRewriteMemoryIntent(query: string): boolean {
   const normalized = query.trim().toLowerCase()
   if (!/(?:翻译|改写|润色|重写)/.test(normalized)) return false
   return [
+    /(?:翻译|改写|润色|重写).{0,8}我(?:平时|常用|喜欢|偏好).{0,8}(?:风格|语气|表达|格式)/,
     /(?:按|按照|沿用|继续(?:使用|采用)?).{0,12}(?:我的|之前|上次|原来|原先|平时|常用).{0,8}(?:风格|语气|措辞|表达|格式|方式|习惯|偏好|约定)/,
     /(?:照旧|老规矩|像平时一样)/,
     /(?:用|采用).{0,8}我(?:平时|常用|惯用|喜欢|偏好).{0,8}(?:风格|语气|措辞|表达|格式|方式)/,
@@ -56,7 +69,16 @@ export function isPersonalizedRewriteMemoryIntent(query: string): boolean {
 export function classifyMemoryRetrievalIntent(query: string): MemoryRetrievalIntent {
   const normalized = query.trim().toLowerCase()
   if (!normalized) return 'none'
+  if (/(?:不要|不用|无需|不必|别).{0,8}(?:查|检索|搜索|回忆|翻).{0,8}(?:记忆|历史)|(?:不要|别).{0,4}按我的/.test(normalized)) return 'none'
+  // A reference explicitly tied to this turn is short-term context, not a reason to scan personal history.
+  if (/(?:刚才|刚刚|刚说|刚贴|本轮|这轮|本次聊天|上一条|上条消息|上文|上面给|当前这份|眼前这份)/.test(normalized)
+    && !/(?:长期记忆|跨会话|检索记忆|旧记忆)/.test(normalized)) return 'none'
+  if (/^(?:请|帮我)?(?:翻译|改写|总结|解释|分析|引用|虚构|假设|举例).{0,16}[:：“「"‘]/.test(normalized)) return 'none'
   if (isPersonalizedRewriteMemoryIntent(normalized)) return 'weak'
+  if (/^(?:翻译|解释|分析|引用|虚构|假设|举例)/.test(normalized)
+    || /(?:什么是|原理|概念|登录选项|表结构|模拟用户|词性)/.test(normalized)) return 'none'
+  if (/(?:查询|检索|查看|搜索|调取|回忆).{0,16}(?:我的|本项目|当前项目|已保存|之前|上次|旧项目|旧记忆)/.test(normalized)) return 'strong'
+  if (/(?:根据|结合|参考|考虑|按照?|依|用|沿用|基于).{0,8}我(?:的|平时|之前|喜欢|常用).{0,12}(?:偏好|习惯|风格|文风|背景|目标|进度|经历|语气|表达|格式|专业|限制|约定|语言|边界|身份|方式)/.test(normalized)) return 'weak'
 
   const transformationTask = [
     /(?:帮我|请|把).{0,120}(?:翻译|改写|润色|重写)(?:成|为|一下)?/,
@@ -71,6 +93,17 @@ export function classifyMemoryRetrievalIntent(query: string): MemoryRetrievalInt
   ]
   if (strongSignals.some((signal) => normalized.includes(signal))) return 'strong'
   if (/(?:查询|搜索|检索|查看|调取).*记忆|你还?记得.*我/.test(normalized)) return 'strong'
+  if (/(?:还?记(?:得|的)|回忆|记着).{0,12}(?:我|俺|我们|咱)|(?:我|俺).{0,12}(?:身份|背景|专业|职业|学习进度|长期目标).{0,8}(?:是什么|是啥|来着|呢|吗)/.test(normalized)) return 'strong'
+  if (/(?:已保存|已记住|已经记住|保存过|记忆中|记忆里|存过).{0,20}(?:个人|偏好|背景|习惯|约定|项目|路线|目标|规则|时间|结论|技术栈)/.test(normalized)) return 'strong'
+  const history = /(?:之前|以前|上次|上回|当初|当时|原先|原来|曾经)/.test(normalized)
+  const personal = /(?:我|我们|咱|俺|项目|工程)/.test(normalized)
+  const fact = /(?:决定|决策|约定|规则|方案|格式|风格|习惯|偏好|背景|身份|技术栈|数据库|框架|专业|职业|住|学习|目标|部署|称呼|边界|发布|备份|打包|规范|目录职责|时间安排|经历|架构|选择|选定|记录|安排)/.test(normalized)
+  if (history && personal && /(?:为什么|怎么|哪|什么|啥).{0,8}(?:选|采用|放弃)|(?:记的|记住的|说过的)/.test(normalized)) return 'strong'
+  if (personal && fact && /(?:说过|提过|告诉过)/.test(normalized)) return 'strong'
+  if (history && fact && (personal || /(?:定的|确定|记录|保存|决定|结论|原因|约定|选)/.test(normalized))) return 'strong'
+  if (/我.{0,16}(?:偏好|习惯|喜欢|格式|饮食|称呼|学习|进度).{0,16}(?:什么|啥|再说|知道|禁忌)/.test(normalized)) return 'strong'
+  if (/(?:旧|原来的|之前的).{0,10}(?:风格|偏好|约定|规则|地址|记忆).{0,16}(?:是什么|还有|吗|来着|查看)|(?:你|还).{0,5}记(?:得|着).{0,10}(?:旧|原来|之前)/.test(normalized)) return 'strong'
+  if (/(?:老规[矩距]|老样子|按惯例|按我那套|照咱原先|咱上回|按之前约好|上次那事|之前那约定)/.test(normalized)) return 'weak'
 
   const weakSignals = [
     '照旧', '老规矩', '还是按原来', '继续沿用', '像平时一样', '按常用方式',
@@ -91,6 +124,19 @@ export function inferMemoryScope(category: string, workspacePath?: string | null
     return { scopeType: 'project', scopeKey: normalizeMemoryScopeKey('project', workspacePath) }
   }
   return { scopeType: 'global', scopeKey: null }
+}
+
+/** Only concrete, matching user assertions can satisfy a personal fact from the current conversation. */
+export function isMemorySatisfiedByCurrentContext(query: string, userTexts: readonly string[]): boolean {
+  if (/全部|所有|长期记忆|跨会话|历史记录|之前保存|旧记忆/.test(query)) return false
+  const attributes: Array<[RegExp, RegExp]> = [
+    [/称呼|叫我什么/, /(?:叫我|称呼我|我的称呼是)[^，。！？\n]{1,20}/],
+    [/语言|中文还是英文/, /(?:使用|用|喜欢|偏好)[^，。！？\n]{0,15}(?:中文|英文|英语|汉语)/],
+    [/专业/, /我的专业是[^，。！？\n]{2,30}/],
+    [/数据库/, /(?:本项目|项目)(?:使用|采用|选定)[^，。！？\n]{0,10}(?:SQLite|MySQL|PostgreSQL)/i],
+  ]
+  return attributes.some(([question, statement]) => question.test(query)
+    && userTexts.slice(-2).some(text => !/翻译|假设|虚构|示例|```/.test(text) && statement.test(text)))
 }
 
 export function isMemoryVisibleInScope(
@@ -119,8 +165,8 @@ export function findActiveFactConflict<T extends MemoryPolicyRecord>(
   return memories.find((memory) => (
     memory.status === 'active'
     && (!fact.category || memory.category === fact.category)
-    && memory.subject === fact.subject
-    && memory.factKey === fact.factKey
+    && normalizeFactPart(memory.subject) === normalizeFactPart(fact.subject)
+    && normalizeFactPart(memory.factKey) === normalizeFactPart(fact.factKey)
     && (memory.scopeType || 'global') === (fact.scopeType || 'global')
     && (memory.scopeKey || null) === (fact.scopeKey || null)
   ))
@@ -240,6 +286,7 @@ export function findSimilarMemoryRecord<T extends MemoryCandidateRecord>(
       statuses.includes(memory.status)
       && memory.category === candidate.category
       && sameMemoryScope(memory, candidate)
+      && (!hasStructuredIdentity(memory) || !hasStructuredIdentity(candidate) || isSameMemoryFactIdentity(memory, candidate))
     ))
     .map((memory) => ({ memory, similarity: lexicalMemorySimilarity(memory.content, candidate.content) }))
     .filter(({ similarity }) => similarity >= threshold)
@@ -324,6 +371,7 @@ export function normalizeMemoryCandidate<T extends MemoryCandidateInput>(candida
 
 export function validateMemoryCandidate(candidate: MemoryCandidateInput): MemoryCandidateValidationResult {
   const content = candidate.content.trim()
+  if (containsSensitiveMemoryText(content)) return { valid: false, reason: 'sensitive' }
   const contentLength = Array.from(content).length
   if (contentLength < 6) return { valid: false, reason: 'too_short' }
   if (contentLength > 80) return { valid: false, reason: 'too_long' }
@@ -333,7 +381,7 @@ export function validateMemoryCandidate(candidate: MemoryCandidateInput): Memory
   if (/^(用户表示|根据(?:对话|用户消息)|从对话中得知)/.test(content)) {
     return { valid: false, reason: 'unstable_restatement' }
   }
-  if (/(这轮|本轮|今天|现在|待会|马上|稍后|刚才|接下来|这一版|当前任务|临时|暂时)/.test(content)) {
+  if (candidate.kind !== 'episodic' && /(这轮|本轮|今天|现在|待会|马上|稍后|刚才|接下来|这一版|当前任务|临时|暂时)/.test(content)) {
     return { valid: false, reason: 'one_off_task' }
   }
   if (/(翻译|改写|润色|重写|仿写|编写|生成|创作|虚构|假设|举例|示例|角色扮演|总结|概括|解释代码|分析代码)/.test(content)) {
@@ -355,7 +403,15 @@ export function validateMemoryCandidate(candidate: MemoryCandidateInput): Memory
 export function shouldExtractMemoryCandidate(userText: string): boolean {
   const text = userText.trim()
   if (!text) return false
-  const explicitSave = /(?:记住|记下来|保存为长期记忆|以后记得|以后都|之后都)/.test(text)
+  if (/^(?:引用|原文|文章|文档|书中|摘录|示例|小说|角色)(?:里|中|写|说|提到|内容|记录|[：:\s])|^[“「"]/.test(text)) return false
+  if (/^(?:请|帮我|麻烦|能否)?(?:翻译|改写|润色|重写|总结|概括|解释|分析|生成|编写|仿写|创作|虚构|假设|举例)/.test(text)) return false
+  if (containsSensitiveMemoryText(text) || /(?:不要|别|无需|不必|不用|禁止).{0,8}(?:记住|记下|记忆|保存)/.test(text)) return false
+  const explicitSave = isExplicitMemoryWriteIntent(text) || /(?:以后都|之后都)/.test(text)
+  const assertion = /我(?:喜欢|偏好|习惯)(?!什么|哪|啥|吗)[^?？]{2,}|我的(?:习惯|风格|背景|身份|专业|称呼)是(?!什么|哪|啥|否)[^?？]{2,}/.test(text)
+  if (!explicitSave && !assertion && /[?？]|(?:是什么|有哪些|什么来着|还记得|还记住|怎么约定|怎么决定)/.test(text)) return false
+  const event = /(?:我们|项目|团队|我).{0,40}(?:决定|确定|定下|选定|达成|完成|毕业|入职|迁移到|改用)/.test(text)
+    && !/(?:假设|虚构|示例|如果|打算|准备|可能|计划)/.test(text)
+  if (!explicitSave && event && !/(?:```|翻译|改写|角色扮演)/.test(text)) return true
   if (!explicitSave && /(?:今天|现在|这次|这轮|本轮|当前任务|临时|暂时|待会|稍后|马上)/.test(text)) {
     return false
   }
@@ -369,7 +425,20 @@ export function shouldExtractMemoryCandidate(userText: string): boolean {
     /(?:项目约定|项目规则|长期项目|目录职责|工程边界|技术栈)/,
     /(?:我正在学|我开始学|我学完了|学习进度|学习路线)/,
     /(?:我的背景|我的身份|我是.+(?:工程师|学生|设计师|作者|开发者))/,
+    /我的(?:长期目标|专业|职业|称呼|学习方向)(?:是|为)/,
   ].some((pattern) => pattern.test(text))
+}
+
+/** Confidence alone never activates a fact: identity, literal evidence and conservative source admission are mandatory. */
+export function shouldActivateAutomaticMemory(candidate: MemoryCandidateInput, sourceText: string): boolean {
+  if (!validateMemoryCandidate(candidate).valid || !shouldExtractMemoryCandidate(sourceText)
+    || !candidate.subject || !candidate.factKey || !candidate.factValue
+    || !Number.isFinite(candidate.confidence) || (candidate.confidence ?? 0) < 0.85
+    || !sourceText.toLowerCase().includes(candidate.factValue.toLowerCase())) return false
+  const genericSubject = /^(?:user|用户|project|项目)$/i.test(candidate.subject)
+  if (!genericSubject && !sourceText.toLowerCase().includes(candidate.subject.toLowerCase())) return false
+  const negative = /不(?:再|要|允许|使用|采用|喜欢|是)|禁止|避免|只允许|不得/
+  return negative.test(sourceText) === negative.test(candidate.content)
 }
 
 export function hasReusableEmbedding(

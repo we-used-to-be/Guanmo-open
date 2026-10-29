@@ -97,6 +97,7 @@ export interface AgentRunRequest {
   currentEditTargetCount?: number
   candidateToolNames?: readonly string[]
   hasPrefetchedMemoryLookup?: boolean
+  prefetchedMemory?: { query: string; result: string; topK: number; categories?: readonly string[] }
   signal?: AbortSignal
   temperature?: number
   onStep?: (step: AgentStep) => void

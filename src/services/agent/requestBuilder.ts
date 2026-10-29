@@ -67,6 +67,7 @@ export function buildAgentRunRequest(options: {
   routingDecision: RoutingDecision
   hasRecentEditContext: boolean
   hasPrefetchedMemoryLookup: boolean
+  prefetchedMemory?: AgentRunRequest['prefetchedMemory']
   signal: AbortSignal
   temperature: number
   onStep: (step: AgentStep) => void
@@ -106,6 +107,7 @@ export function buildAgentRunRequest(options: {
       currentEditTargetCount,
       candidateToolNames: options.routingDecision.candidateTools,
       hasPrefetchedMemoryLookup: options.hasPrefetchedMemoryLookup,
+      prefetchedMemory: options.prefetchedMemory,
       signal: options.signal,
       temperature: options.temperature,
       onStep: options.onStep,

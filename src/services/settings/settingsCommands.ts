@@ -64,6 +64,6 @@ export function ignoreSettingsMemoryCandidate(id: string): Promise<void> {
   return updateMemoryStatus(id, 'ignored')
 }
 
-export function persistSettingsMemory(memory: Memory): Promise<void> {
-  return persistMemory(memory)
+export async function persistSettingsMemory(memory: Memory): Promise<void> {
+  if (!await persistMemory(memory)) throw new Error('记忆尚未写入，请等待数据库就绪后重试')
 }
