@@ -46,6 +46,10 @@ const LIGHT_MEMORY_TOP_K = 3
 const STRONG_MEMORY_TOP_K = 10
 const LIGHT_EMBEDDING_CANDIDATE_LIMIT = 12
 const STRONG_EMBEDDING_CANDIDATE_LIMIT = 40
+// Read only a bounded, recent cache window; never generate memory vectors on the request path.
+const LIGHT_SEMANTIC_CACHE_LIMIT = 256
+const STRONG_SEMANTIC_CACHE_LIMIT = 1024
+const SEMANTIC_ONLY_THRESHOLD = 0.7
 const LIGHT_MEMORY_THRESHOLD = 0.3
 const STRONG_MEMORY_THRESHOLD = 0.2
 const pendingVectorFills = new Set<string>()
@@ -674,6 +678,8 @@ export async function searchMemories(
   const mode = options.mode || 'light'
   const topK = options.topK ?? (mode === 'strong' ? STRONG_MEMORY_TOP_K : LIGHT_MEMORY_TOP_K)
   const threshold = options.threshold ?? (mode === 'strong' ? STRONG_MEMORY_THRESHOLD : LIGHT_MEMORY_THRESHOLD)
+  // BGE Chinese scores are lower than the generic gate; calibrated against real provider vectors.
+  const semanticOnlyThreshold = options.embeddingModel === 'BAAI/bge-large-zh-v1.5' ? 0.4 : SEMANTIC_ONLY_THRESHOLD
   const lexicalScored = allMemories.map((memory) => ({
     memory,
     similarity: Math.min(1, lexicalMemorySimilarity(query, memory.content) + (
@@ -687,25 +693,48 @@ export async function searchMemories(
     )),
   }))
   const lexicalMatches = sortMemoryScores(lexicalScored.filter((item) => item.similarity > 0), requestedScopeKey)
-  const candidates = options.embedding
-    ? (
-      lexicalMatches.length > 0
-        ? lexicalMatches
-        : (mode === 'strong' ? sortMemoryScores([...lexicalScored], requestedScopeKey) : [])
-    ).slice(0, mode === 'strong' ? STRONG_EMBEDDING_CANDIDATE_LIMIT : LIGHT_EMBEDDING_CANDIDATE_LIMIT)
-    : lexicalScored
+  const lexicalCandidates = lexicalMatches.slice(0,
+    mode === 'strong' ? STRONG_EMBEDDING_CANDIDATE_LIMIT : LIGHT_EMBEDDING_CANDIDATE_LIMIT)
+  const lexicalCandidateIds = new Set(lexicalCandidates.map(({ memory }) => memory.id))
+  const vectorFillCandidates = mode === 'strong' && lexicalMatches.length === 0
+    ? sortMemoryScores([...lexicalScored], requestedScopeKey).slice(0, STRONG_EMBEDDING_CANDIDATE_LIMIT)
+    : lexicalCandidates
+  const semanticCandidates = options.embedding ? lexicalScored.filter(({ memory }) =>
+    memory.contentHash === contentHash(memory.content)
+    && memory.embeddingModel === (options.embeddingModel || null)
+  ).slice(0, mode === 'strong' ? STRONG_SEMANTIC_CACHE_LIMIT : LIGHT_SEMANTIC_CACHE_LIMIT) : []
+  const vectorCandidates = [...new Map([...vectorFillCandidates, ...semanticCandidates]
+    .map(candidate => [candidate.memory.id, candidate])).values()]
 
   if (options.signal?.aborted) return []
-  if (options.embedding && candidates.length > 0) {
-    const storedEmbeddings = await loadMemoryEmbeddings(candidates.map(({ memory }) => memory.id))
-    for (const { memory } of candidates) {
-      const stored = storedEmbeddings.get(memory.id)
-      if (stored) Object.assign(memory, stored)
+  if (options.embedding) {
+    try {
+      for (let offset = 0; offset < vectorCandidates.length; offset += 64 * 4) {
+        if (options.signal?.aborted) return []
+        const batches = []
+        for (let start = offset; start < Math.min(offset + 64 * 4, vectorCandidates.length); start += 64) {
+          batches.push(vectorCandidates.slice(start, start + 64))
+        }
+        const storedBatches = await Promise.all(batches.map(batch =>
+          loadMemoryEmbeddings(batch.map(({ memory }) => memory.id))))
+        if (options.signal?.aborted) return []
+        for (const [index, batch] of batches.entries()) {
+          for (const { memory } of batch) {
+            const stored = storedBatches[index].get(memory.id)
+            if (stored) Object.assign(memory, stored)
+          }
+        }
+      }
+    } catch {
+      console.info('[Memory] vector cache unavailable; using lexical retrieval')
+      // A partial cache read must not trigger a provider call after a cache failure.
+      for (const { memory } of vectorCandidates) memory.embedding = null
     }
   }
 
+  if (options.signal?.aborted) return []
   let queryEmbedding: number[] | null = null
-  if (options.embedding && candidates.some(({ memory }) => hasReusableEmbedding(memory, options.embeddingModel))) {
+  if (options.embedding && vectorCandidates.some(({ memory }) => hasReusableEmbedding(memory, options.embeddingModel))) {
     const controller = new AbortController()
     const stop = () => controller.abort()
     options.signal?.addEventListener('abort', stop, { once: true })
@@ -723,12 +752,14 @@ export async function searchMemories(
     }
   }
   if (options.signal?.aborted) return []
-  scheduleMemoryVectorFill(candidates.map(candidate => candidate.memory), options)
+  scheduleMemoryVectorFill(vectorFillCandidates.map(candidate => candidate.memory), options)
   const scored: Array<{ memory: Memory; similarity: number }> = []
-  for (const candidate of candidates) {
+  for (const candidate of lexicalScored) {
     const semantic = queryEmbedding && hasReusableEmbedding(candidate.memory, options.embeddingModel)
       ? cosineSimilarity(queryEmbedding, candidate.memory.embedding || []) : 0
-    const similarity = Math.max(candidate.similarity, semantic * 0.75 + candidate.similarity * 0.25)
+    const admittedSemantic = lexicalCandidateIds.has(candidate.memory.id) || semantic >= semanticOnlyThreshold
+      ? semantic : 0
+    const similarity = Math.max(candidate.similarity, admittedSemantic * 0.75 + candidate.similarity * 0.25)
     if (similarity >= threshold && (!legacyTopKOnly || similarity > 0)) {
       const importance = candidate.memory.source === 'auto_extracted' ? 0 : 0.02
       const ageDays = Math.max(0, Date.now() - candidate.memory.updatedAt) / 86400_000

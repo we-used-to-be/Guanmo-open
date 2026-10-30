@@ -49,6 +49,8 @@ const memoryService = readFileSync('src/services/memory/memoryService.ts', 'utf8
 assert.doesNotMatch(persistence, /SELECT \* FROM memories/, '记忆查询不得 SELECT *')
 assert.match(memoryService, /loadMemories\(\{[\s\S]*statuses: \['active'\][\s\S]*scopeType[\s\S]*categories/, '检索过滤必须下推 SQLite')
 assert.match(memoryService, /scopeKey: options\.scopeType === 'project' \? requestedScopeKey : null/, '项目路径必须规范化后再传入 SQLite')
-assert.match(memoryService, /loadMemoryEmbeddings\(candidates\.map/, '只允许为候选集加载 embedding')
+assert.match(memoryService, /loadMemoryEmbeddings\(batch\.map/, '只允许为过滤后的候选批次加载 embedding')
+assert.match(memoryService, /vectorCandidates\.slice\(start, start \+ 64\)/, '向量二次读取每批最多 64 条')
+assert.match(memoryService, /offset \+= 64 \* 4/, '每组向量读取最多并发 4 批')
 
 console.log('memory query checks passed')

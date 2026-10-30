@@ -78,6 +78,35 @@ describe('memory writes against isolated SQLite', () => {
     expect((await searchMemories('中文回答', { embedding: async () => { throw new Error('offline') }, embeddingModel: 'anonymous-model' })).map(memory => memory.id)).toEqual(['cached'])
   })
 
+  it('warms strong zero-lexical cold recall only at idle and reuses the filled vectors', async () => {
+    for (let index = 0; index < 45; index++) await persistMemory(record({ id: `cold-${index}`, status: 'active', content: '优先启动速度与资源效率' }))
+    const embedding = vi.fn(async () => [1, 0])
+    const batchEmbedding = vi.fn(async (texts: string[]) => texts.map(() => [1, 0]))
+    const options = { mode: 'strong' as const, embedding, batchEmbedding, embeddingModel: 'anonymous-model' }
+    expect(await searchMemories('应用为何拒绝常驻作业？', options)).toEqual([])
+    expect(embedding).not.toHaveBeenCalled()
+    expect(batchEmbedding).not.toHaveBeenCalled()
+    expect(idleTasks).toHaveLength(1)
+    await idleTasks[0]()
+    expect(batchEmbedding).toHaveBeenCalledTimes(1)
+    expect(batchEmbedding.mock.calls[0][0]).toHaveLength(8)
+    expect(await searchMemories('应用为何拒绝常驻作业？', options)).toHaveLength(8)
+    expect(embedding).toHaveBeenCalledTimes(1)
+    // Later uncached rows can fill at idle, but the eight reusable rows must not be regenerated.
+    expect(batchEmbedding).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not fill a zero-lexical cold fallback after its request is cancelled', async () => {
+    await persistMemory(record({ status: 'active', content: '优先启动速度与资源效率' }))
+    const controller = new AbortController()
+    const batchEmbedding = vi.fn(async () => [[1, 0]])
+    await searchMemories('应用为何拒绝常驻作业？', { mode: 'strong', embedding: async () => [1, 0], batchEmbedding, embeddingModel: 'anonymous-model', signal: controller.signal })
+    expect(idleTasks).toHaveLength(1)
+    controller.abort()
+    await idleTasks[0]()
+    expect(batchEmbedding).not.toHaveBeenCalled()
+  })
+
   it('limits injection independently of long evidence and excludes unconfirmed facts', () => {
     const records = Array.from({ length: 10 }, (_, index) => record({ id: String(index), status: 'active', content: '默认使用中文回答所有技术问题', evidence: '很长的原始记录'.repeat(2000) }))
     const context = buildMemoryContext([...records, record({ status: 'candidate', content: '不应注入的候选' })])
