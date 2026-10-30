@@ -269,16 +269,18 @@ export function makeRoutingDecision(
 
   // 统计不同弱关键词数量（同一词触发多个 capability 只算一个）
   const weakKeywords = new Set<string>()
+  const weakCapabilities = new Set<Capability>()
   for (const s of intentResult.scores) {
     if (s.score > 0 && !s.isRequired) {
       for (const sig of s.signals) {
         if (sig.startsWith('weak:')) {
           weakKeywords.add(sig.slice(5))
+          weakCapabilities.add(s.capability)
         }
       }
     }
   }
-  const hasWeakCombo = weakKeywords.size >= 2
+  const hasWeakCombo = weakKeywords.size >= 2 && weakCapabilities.size >= 2
 
   const { mode, reasonCodes } = computeAgentMode(
     mergedCandidates,

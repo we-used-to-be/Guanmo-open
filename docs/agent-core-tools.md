@@ -6,6 +6,10 @@
 
 不提供 Direct 写入、联网、读取当前文档全文或 MCP，不自动升级 Agent。现有文件/记忆/成果写入仍走 Agent 和原确认链。
 
+Agent 的非写入、非整篇文件总结、非限定选区/章节读取任务，也会在原候选之外加入经过同一资格检查的两个核心检索工具，避免落入 Agent 后反而失去只读检索机会。此行为不改变普通聊天核心检索开关的含义：该开关仍只控制 Direct。
+
+“看看库里面有没有回溯内容”按范围＋查询动作进入知识库读取；“看看内容”不再因同一文件能力下的两个弱词进入 Agent。明确的 required 读取任务不能只返回一句行动说明就结束：未调用则最多自动补调一批，成功为空可正常回答，失败、拒绝或缺少工具则说明限制。语义候选没有 required 时不强制查询。
+
 执行链：`useAiChat → streamDirectChat → streamChatResponse → executeTool → 无工具续答`。复用工具注册、资格、参数校验、取消、超时、结果裁剪和来源注册，没有新数据库或 Rust command。
 
 ## 配置与回滚
@@ -29,7 +33,7 @@
 ## 验证命令
 
 ```powershell
-npx vitest run tests/agent/directChat.test.ts tests/agent/directChat.performance.test.ts tests/agent/routerV2.chat.test.tsx tests/agent/routerV2.execution.test.ts tests/agent/routerV2.test.ts tests/agent/aiChatFlowContext.test.ts tests/agent/contextOverflowRecovery.test.ts tests/agent/agentStreamPrerequisite.test.ts tests/agent/aiChatOrchestration.test.ts tests/agent/modelContextBudget.test.ts --maxWorkers=1
+npx vitest run tests/agent/agentReadFallback.test.ts tests/agent/directChat.test.ts tests/agent/directChat.performance.test.ts tests/agent/routerV2.chat.test.tsx tests/agent/routerV2.execution.test.ts tests/agent/routerV2.test.ts tests/agent/aiChatFlowContext.test.ts tests/agent/contextOverflowRecovery.test.ts tests/agent/agentStreamPrerequisite.test.ts tests/agent/aiChatOrchestration.test.ts tests/agent/modelContextBudget.test.ts --maxWorkers=1
 npm run typecheck
 npm run test:smoke
 npm run build:desktop
@@ -76,3 +80,11 @@ getDirectChatMetrics()
 上下文恢复旧测试在 HEAD 原代码下同样有7项失败，原因是缺少 Router V2 所需宿主与授权目标夹具；本轮仅补齐该相关测试夹具，20项全部通过，未放宽生产权限。最终构建前一次进程曾在压缩阶段异常退出且无代码错误信息，单独重跑通过；未据此归因于源码或断言具体环境原因。
 
 建议后续使用 L3 强模型调用 `ai-code-review`，聚焦本次 Direct 执行边界、取消、作用域、原生消息续答和去重，复用上述验证，不扩展到无关用户修改。本轮未提交、推送或创建发布。
+
+## 知识库口语路由与缺失读取修复验证
+
+- 状态文案已单独提交为 `27c22af`；本节记录后续路由与完成校验修复的验证结果。
+- 最终定向回归：`agentReadFallback`、`routerV2.chat`、`directChat`、`routerV2.execution`、`agentStreamPrerequisite` 共70项通过；覆盖资格候选同步及实际检索工具的任务续接。此前路由矩阵、路由单测、上下文恢复等定向组合247项通过。
+- TypeScript、修改范围 ESLint、`git diff --check` 通过。
+- Core Smoke 首次运行8项通过、1项预览标题等待超时；单独复查 `CoreSmoke.test.tsx` 3项通过，超时未复现。未修改既有预览代码，也不将首轮命令记为通过。
+- 新鲜 Windows 桌面产物、真实模型检索及延迟仍为 **NOT TESTED**。

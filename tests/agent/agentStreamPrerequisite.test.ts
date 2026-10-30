@@ -2,6 +2,8 @@ import { afterEach, expect, it, vi } from 'vitest'
 import type { AiProvider, ChatRequest, ChatResponse, StreamChunk } from '@/services/ai/types'
 import { makeRoutingDecision } from '@/services/agent/routingService'
 import { setAgentScopeContext } from '@/services/aiScope'
+import { initAgent, runAgent } from '@/services/agent/executor'
+import { registerTool } from '@/services/agent/toolRegistry'
 
 vi.mock('@/hooks/useTauri', async importOriginal => ({
   ...await importOriginal<typeof import('@/hooks/useTauri')>(), isTauri: () => true,
@@ -29,8 +31,6 @@ vi.mock('@/services/ai/aiClient', () => ({ getAiClient: () => client, isAiReady:
 afterEach(() => setAgentScopeContext(null))
 
 it('补读必需选区上下文前不流出模型的临时答复', async () => {
-  const { initAgent, runAgent } = await import('@/services/agent/executor')
-  const { registerTool } = await import('@/services/agent/toolRegistry')
   initAgent()
   const query = '结合前后文检索知识库相关内容'
   const decision = makeRoutingDecision(query, { hasSelection: true, hasContextTags: true })

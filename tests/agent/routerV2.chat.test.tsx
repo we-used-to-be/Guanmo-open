@@ -8,13 +8,14 @@ import { useAiChat } from '@/hooks/useAiChat'
 import { getAgentScopeContext } from '@/services/aiScope'
 import { getDirectChatMetrics } from '@/services/agent/directChat'
 import type { Memory } from '@/services/database/persistence'
+import type { AgentResult, AgentRunRequest } from '@/services/agent/types'
 
 const mocks = vi.hoisted(() => ({
   classify: vi.fn<(request: ChatRequest) => Promise<ChatResponse>>(),
   answer: vi.fn(),
   memory: vi.fn<() => Promise<Memory[]>>(async () => []),
   knowledge: vi.fn<typeof import('@/services/rag/pipeline').searchRelevant>(async () => []),
-  agent: vi.fn(async () => ({ answer: 'anonymous agent answer', steps: [], toolCalls: 0, reason: 'completed' })),
+  agent: vi.fn<(request: AgentRunRequest) => Promise<AgentResult>>(async () => ({ answer: 'anonymous agent answer', steps: [], toolCalls: 0, reason: 'completed' })),
   chunks: [] as StreamChunk[][],
 }))
 const client = {
@@ -55,6 +56,23 @@ beforeEach(() => {
 })
 
 describe('Router V2 real chat orchestration', () => {
+  it('retains qualified fallback reads in the route and subsequent task continuation', async () => {
+    mocks.agent.mockResolvedValueOnce({ answer: 'anonymous lookup result', toolCalls: 1, reason: 'completed', steps: [
+      { type: 'action', toolName: 'search_knowledge', content: 'search', timestamp: 1 },
+      { type: 'observation', toolName: 'search_knowledge', content: 'anonymous result', timestamp: 2 },
+    ] })
+    const { result } = renderHook(() => useAiChat())
+    await act(async () => { await result.current.sendMessage('看看内容', true) })
+    expect(mocks.agent.mock.calls[0][0].routingDecision?.candidateTools).toEqual(['search_memory', 'search_knowledge'])
+    expect(useChatStore.getState().agentTaskContext).toMatchObject({
+      originalRequest: '看看内容', usedToolNames: ['search_knowledge'],
+    })
+    await act(async () => { await result.current.sendMessage('继续') })
+    expect(mocks.agent).toHaveBeenCalledTimes(2)
+    expect(mocks.agent.mock.calls[1][0].routingDecision?.candidateTools).toContain('search_knowledge')
+    expect(mocks.agent.mock.calls[1][0].routingDecision?.inheritedOriginalRequest).toBe('看看内容')
+  })
+
   it('keeps pending knowledge status after memory completes and shows index progress before final generation', async () => {
     let finishMemory!: (value: Memory[]) => void
     let finishKnowledge!: (value: []) => void

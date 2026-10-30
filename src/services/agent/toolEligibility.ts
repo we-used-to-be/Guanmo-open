@@ -1,4 +1,5 @@
 import { getTool } from './toolRegistry'
+import type { RoutingDecision } from './types'
 
 export type ToolEligibility = 'available' | 'needs_input' | 'blocked'
 
@@ -64,4 +65,32 @@ export function qualifyCandidates<T extends string>(names: readonly T[], context
     else blocked.push(name)
   }
   return { available, needsInput, blocked }
+}
+
+export const CORE_READ_TOOLS = ['search_memory', 'search_knowledge'] as const
+
+/** Keep the route snapshot and execution fallback on the same qualified tool set. */
+export function qualifyAgentCoreReadTools(decision: RoutingDecision | undefined, query: string, context: ToolEligibilityContext) {
+  return decision?.mode === 'agent' && !decision.isDocumentRewrite && !decision.isFileSummary
+    && !decision.requiresEditConfirmation && decision.selectionRequestKind !== 'fast'
+    && decision.readingScope !== 'section' && !decision.candidateTools.includes('read_selection_context')
+    ? qualifyCoreReadTools(query, context) : []
+}
+
+export function allowsCoreReadQuery(name: string, query: string, userIntent: string): boolean {
+  const sensitive = /地址|住址|手机|电话|邮箱|证件|密码|密钥|过敏|诊断|敏感/
+  return name !== 'search_memory' || !sensitive.test(query) || sensitive.test(userIntent)
+}
+
+/** Shared fallback selection does not grant access or force a lookup. */
+export function qualifyCoreReadTools(query: string, context: ToolEligibilityContext) {
+  return qualifyCandidates(CORE_READ_TOOLS, context).available.filter(name => {
+    const tool = getTool(name)
+    if (tool?.effect !== 'read' || tool.confirmationPolicy !== 'never') return false
+    if (/(?:不要|不用|无需|不必|禁止|别).{0,6}(?:检索|搜索|查询|查找|调取|回忆)/.test(query)) return false
+    const refused = name === 'search_memory'
+      ? /(?:不要|不用|无需|不必|禁止|别).{0,12}(?:记忆|历史)|(?:不要|别).{0,4}按我的/
+      : /(?:不要|不用|无需|不必|禁止|别).{0,12}(?:知识库|本地资料|本地文档|检索|搜索)/
+    return !refused.test(query)
+  })
 }

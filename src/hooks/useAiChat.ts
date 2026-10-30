@@ -28,7 +28,7 @@ import { buildAgentRunRequest, buildEditTargets, buildRoutingAppContext } from '
 import { resolveRouterConfig } from '@/services/agent/routerConfig'
 import { resolveSemanticRouting, semanticRoutingTriggers } from '@/services/agent/semanticRouter'
 import { routingModelChat } from '@/services/agent/routingModel'
-import { qualifyCandidates, qualifyTool } from '@/services/agent/toolEligibility'
+import { qualifyAgentCoreReadTools, qualifyCandidates, qualifyTool } from '@/services/agent/toolEligibility'
 import { currentToolEligibilityContext } from '@/services/agent/toolEligibilityContext'
 import { recordRoutingMetric } from '@/services/agent/routingDiagnostics'
 import { recordDirectChatMetric, streamDirectChat } from '@/services/agent/directChat'
@@ -363,7 +363,10 @@ export function useAiChat() {
         const qualificationContext = currentToolEligibilityContext(content, {
           contextTags: contextTags || [], editTargets: buildEditTargets(contextTags),
         })
-        const qualified = qualifyCandidates(routingDecision.candidateTools, qualificationContext)
+        const qualified = qualifyCandidates([
+          ...routingDecision.candidateTools,
+          ...qualifyAgentCoreReadTools(routingDecision, content, qualificationContext),
+        ], qualificationContext)
         routingDecision = {
           ...routingDecision, candidateTools: qualified.available, needsInputTools: qualified.needsInput, blockedTools: qualified.blocked,
           shouldLookupMemory: routingDecision.shouldLookupMemory

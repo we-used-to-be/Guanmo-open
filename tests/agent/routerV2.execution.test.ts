@@ -2,6 +2,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import type { ChatRequest, StreamChunk } from '@/services/ai/types'
 import { getAgentScopeContext, setAgentScopeContext } from '@/services/aiScope'
 import { useSettingsStore } from '@/stores/settingsStore'
+import * as executor from '@/services/agent/executor'
+import { registerTool } from '@/services/agent/toolRegistry'
 
 const stream = vi.fn<(request: ChatRequest) => AsyncIterable<StreamChunk>>()
 const chat = vi.fn(async (_request: ChatRequest) => ({ id: 'anonymous', content: '请补充目标', role: 'assistant' as const }))
@@ -10,13 +12,7 @@ vi.mock('@/hooks/useTauri', async importOriginal => ({ ...await importOriginal<t
 vi.mock('@/services/database/db', async importOriginal => ({ ...await importOriginal<typeof import('@/services/database/db')>(), isDatabaseReady: () => true }))
 
 describe('Router V2 execution boundary', () => {
-  let executor: typeof import('@/services/agent/executor')
-  let registerTool: typeof import('@/services/agent/toolRegistry').registerTool
-  beforeAll(async () => {
-    executor = await import('@/services/agent/executor')
-    executor.initAgent()
-    registerTool = (await import('@/services/agent/toolRegistry')).registerTool
-  })
+  beforeAll(() => executor.initAgent())
 
   it('retains prefetched memory sources even when Agent does not search again', async () => {
     const memory = { kind: 'memory' as const, memoryId: 'anonymous-memory', content: '偏好简洁回答' }
@@ -124,12 +120,11 @@ describe('Router V2 execution boundary', () => {
 
   it('never exposes unavailable tools or full-registry descriptions when candidates become empty', async () => {
     registerTool({ name: 'replace_current_tab_text', description: 'UNRELATED_SCHEMA_SENTINEL', parameters: [], execute: async () => '' })
-    await executor.runAgent({ query: 'anonymous', candidateToolNames: ['replace_current_tab_text'] })
-    expect(chat).toHaveBeenCalledTimes(1)
-    const request = chat.mock.calls[0][0] as ChatRequest
-    expect(request.tools).toEqual([])
-    expect(request.messages[0].content).not.toContain('UNRELATED_SCHEMA_SENTINEL')
-    expect(request.messages[0].content).toContain('缺少本轮授权')
+    const result = await executor.runAgent({ query: 'anonymous', candidateToolNames: ['replace_current_tab_text'] })
+    expect(chat).not.toHaveBeenCalled()
+    expect(result.reason).toBe('error')
+    expect(result.answer).toContain('缺少已授权的文件或选区')
+    expect(result.answer).not.toContain('UNRELATED_SCHEMA_SENTINEL')
   })
 
   it('reuses successful or empty prefetch inside one run without reexecuting the same memory query', async () => {
