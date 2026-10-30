@@ -204,8 +204,19 @@ export interface ChatTool {
   }
 }
 
+/** Request-only protocol messages; never persisted as chat history. */
+export type ModelMessage = ChatMessage | {
+  role: 'assistant'
+  content: string
+  tool_calls: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>
+} | {
+  role: 'tool'
+  content: string
+  tool_call_id: string
+}
+
 export interface ChatRequest {
-  messages: ChatMessage[]
+  messages: ModelMessage[]
   stream?: boolean
   temperature?: number
   maxTokens?: number
@@ -231,6 +242,7 @@ export interface ChatResponse {
 export interface StreamChunk {
   content: string
   done: boolean
+  usage?: ChatResponse['usage']
   toolCallDeltas?: Array<{
     index: number
     id?: string

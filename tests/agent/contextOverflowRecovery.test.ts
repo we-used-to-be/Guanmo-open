@@ -1,10 +1,12 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AiProvider, ChatMessage, ChatRequest, ChatResponse, StreamChunk } from '@/services/ai/types'
+import type { AiProvider, ChatMessage, ChatRequest, ChatResponse, ModelMessage, StreamChunk } from '@/services/ai/types'
+import { setAgentScopeContext } from '@/services/aiScope'
+import { useEditorStore } from '@/stores/editorStore'
 import { streamFinalAnswer } from '@/services/aiChatFlow'
 import { buildAgentFinalAnswerMessages, buildMessagesForModel } from '@/services/aiChatMessages'
 import { AiError, AiNetworkError } from '@/services/ai/errors'
 
-const requests: ChatMessage[][] = []
+const requests: ModelMessage[][] = []
 const responses: Array<ChatResponse | Error | StreamChunk[]> = []
 const chat = vi.fn(async (request: ChatRequest) => {
   requests.push(request.messages.slice())
@@ -20,6 +22,8 @@ const streamChat = vi.fn(async function* (request: ChatRequest) {
 })
 const client = { chat, streamChat } as unknown as AiProvider
 vi.mock('@/services/ai/aiClient', () => ({ getAiClient: () => client, isAiReady: () => true }))
+vi.mock('@/hooks/useTauri', async importOriginal => ({ ...await importOriginal<typeof import('@/hooks/useTauri')>(), isTauri: () => true }))
+vi.mock('@/services/database/db', async importOriginal => ({ ...await importOriginal<typeof import('@/services/database/db')>(), isDatabaseReady: () => true }))
 
 const history: ChatMessage[] = [
   { role: 'user', content: 'old question 1' }, { role: 'assistant', content: 'old answer 1' },
@@ -43,7 +47,7 @@ describe('context overflow recovery at production entry points', () => {
     responses.length = 0
     vi.clearAllMocks()
   })
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => { setAgentScopeContext(null); vi.restoreAllMocks() })
 
   it('keeps normal requests intact with no extra call', async () => {
     responses.push(answer)
@@ -177,6 +181,12 @@ describe('context overflow recovery at production entry points', () => {
   })
 
   it('keeps the current edit target and emits a pending confirmation once after recovery', async () => {
+    const filePath = 'C:/Temp/anonymous.md'
+    useEditorStore.setState({ tabs: [{ id: 'anonymous-tab', title: 'anonymous', filePath, content: 'anonymous original',
+      savedContent: 'anonymous original', originalContent: 'anonymous original', modified: false }] })
+    setAgentScopeContext({ contextTags: [{ id: 'tag', type: 'selection', title: 'anonymous', filePath,
+      content: 'anonymous original', preview: 'anonymous', selectionFrom: 0, selectionTo: 18 }],
+    editTargets: [{ id: 'authorized-target', type: 'selection', title: 'anonymous', filePath, selectionFrom: 0, selectionTo: 18 }] })
     const { registerTool, getTool } = await import('@/services/agent/toolRegistry')
     const original = getTool('replace_current_tab_text')!
     const pendingEdit = vi.fn(async () => JSON.stringify({ __pendingEdit: true, oldText: 'anonymous original', newText: 'anonymous edit' }))

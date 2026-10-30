@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatRequest, StreamChunk } from '@/services/ai/types'
-import { setAgentScopeContext } from '@/services/aiScope'
+import { getAgentScopeContext, setAgentScopeContext } from '@/services/aiScope'
 import { useSettingsStore } from '@/stores/settingsStore'
 
 const stream = vi.fn<(request: ChatRequest) => AsyncIterable<StreamChunk>>()
@@ -22,6 +22,26 @@ describe('Router V2 execution boundary', () => {
     useSettingsStore.setState(state => ({ ai: { ...state.ai, webSearchEnabled: true } }))
   })
   afterEach(() => setAgentScopeContext(null))
+
+  it('passes a captured Direct memory scope without borrowing or changing the active Agent scope', async () => {
+    const execute = vi.fn(async () => 'anonymous memory')
+    registerTool({ name: 'search_memory', description: 'anonymous', parameters: [{ name: 'query', type: 'string', required: true, description: 'query' }], execute })
+    setAgentScopeContext({ contextTags: [], workspacePath: 'C:/Temp/agent-workspace' })
+    const scope = getAgentScopeContext()
+    const result = await executor.executeTool('search_memory', { query: 'anonymous' }, 1000, 'anonymous', undefined, undefined, undefined,
+      { workspacePath: 'C:/Temp/direct-workspace' })
+    expect(result.status).toBe('success')
+    expect(execute.mock.calls[0][1].workspacePath).toBe('C:/Temp/direct-workspace')
+    expect(getAgentScopeContext()).toBe(scope)
+  })
+
+  it('enforces the Direct read whitelist inside the shared executor', async () => {
+    const execute = vi.fn(async () => 'must not execute')
+    registerTool({ name: 'get_current_time', description: 'anonymous', parameters: [], execute })
+    const result = await executor.executeTool('get_current_time', {}, 1000, 'anonymous', undefined, undefined, undefined, { workspacePath: null })
+    expect(result.status).toBe('tool_error')
+    expect(execute).not.toHaveBeenCalled()
+  })
 
   it('rechecks tool availability after schema exposure and before execution', async () => {
     let available = true

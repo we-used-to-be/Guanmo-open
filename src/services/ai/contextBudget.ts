@@ -1,4 +1,4 @@
-import type { ChatMessage } from './types'
+import type { ChatMessage, ModelMessage } from './types'
 
 export function estimateModelTokens(text: string): number {
   let ascii = 0
@@ -28,13 +28,13 @@ export function isModelContextOverflowError(error: unknown): boolean {
 }
 
 // 请求副本的对象身份标记；不改变消息字段、Provider payload 或持久化格式。
-const currentTurnStarts = new WeakSet<ChatMessage>()
+const currentTurnStarts = new WeakSet<ModelMessage>()
 
-export function markCurrentTurnStart(message: ChatMessage): void {
+export function markCurrentTurnStart(message: ModelMessage): void {
   currentTurnStarts.add(message)
 }
 
-export function compactOverflowMessages(messages: ChatMessage[]): ChatMessage[] {
+export function compactOverflowMessages<T extends ModelMessage>(messages: T[]): T[] {
   let start = messages.findIndex(message => currentTurnStarts.has(message))
   if (start < 0) {
     start = messages.length - 1
@@ -70,10 +70,10 @@ export function compactOverflowMessages(messages: ChatMessage[]): ChatMessage[] 
   return messages.filter((_, index) => !removed.has(index))
 }
 
-export async function withContextOverflowRecovery<T>(
-  messages: ChatMessage[],
-  send: (messages: ChatMessage[]) => Promise<T>,
-  options: { isCancelled: () => boolean; onRetry?: (messages: ChatMessage[]) => void },
+export async function withContextOverflowRecovery<T, M extends ModelMessage>(
+  messages: M[],
+  send: (messages: M[]) => Promise<T>,
+  options: { isCancelled: () => boolean; onRetry?: (messages: M[]) => void },
 ): Promise<T> {
   try {
     return await send(messages)

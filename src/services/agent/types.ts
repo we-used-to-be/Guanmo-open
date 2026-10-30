@@ -42,6 +42,8 @@ export type AgentProgressStage =
 export interface ToolExecutionContext {
   signal?: AbortSignal
   onProgress?: (stage: AgentProgressStage) => void
+  /** Host-captured scope for request-local read execution. Undefined retains Agent behavior. */
+  workspacePath?: string | null
 }
 
 export interface AgentStep {

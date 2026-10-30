@@ -1,4 +1,4 @@
-import type { AiProvider, ChatMessage, ChatMessageSource } from '@/services/ai/types'
+import type { AiProvider, ChatMessageSource, ChatResponse, ChatTool, ModelMessage } from '@/services/ai/types'
 import { buildContextResult, searchRelevant } from '@/services/rag/pipeline'
 import type { SearchResult } from '@/services/rag/types'
 import type { ContextTag } from '@/types/contextTag'
@@ -128,6 +128,7 @@ export interface ScopedKnowledgeResult {
   sources: ReturnType<typeof toRagSources>
   sourceRegistry: SourceReferenceRegistry
   searchedFilePaths?: string[]
+  includedChunks?: Array<{ id: string; contentHash?: string | null }>
   emptyReason?: string
   coverage: ReturnType<typeof buildContextResult>['coverage']
 }
@@ -190,6 +191,7 @@ export async function searchScopedKnowledge(
     sources,
     sourceRegistry: createSourceReferenceRegistry(toLocalChatMessageSources(sources)),
     searchedFilePaths: scopeFilePaths,
+    includedChunks: includedResults.map(result => ({ id: result.chunk.id, contentHash: result.chunk.contentHash })),
     emptyReason: contextResult.text ? undefined : '检索结果均超出上下文预算',
     coverage: contextResult.coverage,
   }
@@ -217,9 +219,9 @@ export function shouldTriggerScopedRag(query: string, contextTags: ContextTag[])
   return patterns.some((pattern) => pattern.test(text))
 }
 
-export async function streamFinalAnswer(options: {
+export interface StreamAnswerOptions {
   client: AiProvider
-  messages: ChatMessage[]
+  messages: ModelMessage[]
   streamEnabled: boolean
   onUpdate: (content: string) => void
   isCancelled: () => boolean
@@ -227,19 +229,29 @@ export async function streamFinalAnswer(options: {
   signal?: AbortSignal
   temperature?: number
   reasoningMode?: 'off' | 'on'
-}): Promise<void> {
+  tools?: ChatTool[]
+  onUsage?: (usage: NonNullable<ChatResponse['usage']>) => void
+  onRequest?: () => void
+}
+
+/** Shared text streaming, native tool-call collection and one context-overflow retry. */
+export async function streamChatResponse(options: StreamAnswerOptions): Promise<ChatResponse> {
   const filter = options.filterToolJson ?? false
   let hasPublishedContent = false
 
-  const sendOnce = async (messages: ChatMessage[]) => {
+  const sendOnce = async (messages: ModelMessage[]): Promise<ChatResponse> => {
+    options.onRequest?.()
     if (options.streamEnabled) {
       const stream = options.client.streamChat({
         messages,
         signal: options.signal,
         temperature: options.temperature,
         reasoningMode: options.reasoningMode,
+        ...(options.tools?.length ? { tools: options.tools, toolChoice: 'auto' as const } : {}),
       })
       let accumulated = ''
+      const calls = new Map<number, { id?: string; name: string; arguments: string }>()
+      let usage: ChatResponse['usage']
       const transform = (content: string) => filter ? hideLikelyToolJsonPrefix(content) : content
       const flusher = createStreamContentFlusher((content) => {
         hasPublishedContent = hasPublishedContent || Boolean(content)
@@ -248,14 +260,28 @@ export async function streamFinalAnswer(options: {
       try {
         for await (const chunk of stream) {
           if (options.isCancelled() || options.signal?.aborted) break
+          if (chunk.usage) {
+            usage = chunk.usage
+          }
+          for (const delta of chunk.toolCallDeltas || []) {
+            const call = calls.get(delta.index) || { name: '', arguments: '' }
+            calls.set(delta.index, { id: delta.id || call.id, name: call.name + (delta.name || ''), arguments: call.arguments + (delta.arguments || '') })
+          }
           accumulated += chunk.content
-          flusher.schedule(accumulated)
+          // A tool action is provisional; do not keep its text as the final answer.
+          if (!options.tools?.length || !calls.size) flusher.schedule(accumulated)
           if (chunk.done) break
         }
       } finally {
         flusher.flush()
       }
-      return
+      if (usage) options.onUsage?.(usage)
+      return { id: '', role: 'assistant', content: accumulated, usage,
+        toolCalls: [...calls.values()].map(call => {
+          let args: Record<string, unknown> = {}
+          try { args = JSON.parse(call.arguments) } catch { /* validated before dispatch */ }
+          return { id: call.id, name: call.name, args }
+        }) }
     }
 
     const response = await options.client.chat({
@@ -263,17 +289,24 @@ export async function streamFinalAnswer(options: {
       signal: options.signal,
       temperature: options.temperature,
       reasoningMode: options.reasoningMode,
+      ...(options.tools?.length ? { tools: options.tools, toolChoice: 'auto' as const } : {}),
     })
+    if (response.usage) options.onUsage?.(response.usage)
     if (!options.isCancelled() && !options.signal?.aborted) {
-      options.onUpdate(filter ? hideLikelyToolJsonPrefix(response.content) : response.content)
+      if (!options.tools?.length || !response.toolCalls?.length) options.onUpdate(filter ? hideLikelyToolJsonPrefix(response.content) : response.content)
     }
+    return response
   }
 
-  await withContextOverflowRecovery(options.messages, sendOnce, {
+  return withContextOverflowRecovery(options.messages, sendOnce, {
     isCancelled: () => options.isCancelled() || Boolean(options.signal?.aborted),
     onRetry: () => {
       if (hasPublishedContent) options.onUpdate('')
       hasPublishedContent = false
     },
   })
+}
+
+export async function streamFinalAnswer(options: StreamAnswerOptions): Promise<void> {
+  await streamChatResponse(options)
 }

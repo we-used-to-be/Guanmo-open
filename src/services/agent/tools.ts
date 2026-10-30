@@ -952,7 +952,7 @@ export function registerBuiltinTools() {
       const batchEmbedding = isEmbeddingReady()
         ? async (texts: string[], signal?: AbortSignal) => getEmbeddingClient().batchEmbedding(texts, signal)
         : undefined
-      const workspacePath = memoryWorkspacePath()
+      const workspacePath = context?.workspacePath === undefined ? memoryWorkspacePath() : context.workspacePath
       const memories = await searchMemories(args.query as string, {
         mode: 'strong',
         topK,

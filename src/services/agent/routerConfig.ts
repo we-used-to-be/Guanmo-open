@@ -1,6 +1,7 @@
 /** All semantic routing budgets live here. Old settings without this field use these defaults. */
 export interface RouterConfig {
   enabled: boolean
+  coreToolsEnabled: boolean
   model: string
   timeoutMs: number
   conflictMinScore: number
@@ -13,6 +14,7 @@ export interface RouterConfig {
 
 export const DEFAULT_ROUTER_CONFIG: Readonly<RouterConfig> = Object.freeze({
   enabled: true,
+  coreToolsEnabled: true,
   model: '',
   timeoutMs: 1200,
   conflictMinScore: 2,
@@ -32,6 +34,7 @@ export function resolveRouterConfig(value?: Partial<RouterConfig>): RouterConfig
   }
   return {
     enabled: typeof value?.enabled === 'boolean' ? value.enabled : DEFAULT_ROUTER_CONFIG.enabled,
+    coreToolsEnabled: typeof value?.coreToolsEnabled === 'boolean' ? value.coreToolsEnabled : DEFAULT_ROUTER_CONFIG.coreToolsEnabled,
     model: typeof value?.model === 'string' ? value.model.trim().slice(0, 128) : '',
     timeoutMs: bounded('timeoutMs', 100, 3000),
     conflictMinScore: bounded('conflictMinScore', 1, 10),

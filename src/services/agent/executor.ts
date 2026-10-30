@@ -295,7 +295,7 @@ function buildFinalAnswerMessages(messages: ChatMessage[], finalInstruction?: st
   ]
 }
 
-interface ToolExecutionResult {
+export interface ToolExecutionResult {
   result: string
   rawResult: string
   status: 'success' | 'timeout' | 'cancelled' | 'tool_error'
@@ -564,7 +564,7 @@ export function prepareAgentToolResultForModel(
 /**
  * 执行单个工具调用
  */
-async function executeTool(
+export async function executeTool(
   name: string,
   args: Record<string, unknown>,
   timeout: number,
@@ -572,6 +572,7 @@ async function executeTool(
   signal?: AbortSignal,
   onProgress?: (stage: AgentProgressStage) => void,
   diagnosticRunId?: string,
+  readScope?: { workspacePath: string | null },
 ): Promise<ToolExecutionResult> {
   const tool = getTool(name)
   if (!tool) {
@@ -579,7 +580,13 @@ async function executeTool(
     return { result, rawResult: result, status: 'tool_error' }
   }
 
-  const eligibility = qualifyTool(name, currentToolEligibilityContext(userIntent))
+  if (readScope && (!['search_memory', 'search_knowledge'].includes(name)
+    || tool.effect !== 'read' || tool.confirmationPolicy !== 'never')) {
+    const result = '工具调用被拒绝：普通聊天仅允许核心只读检索。'
+    return { result, rawResult: result, status: 'tool_error' }
+  }
+
+  const eligibility = qualifyTool(name, currentToolEligibilityContext(userIntent, readScope ? { contextTags: [] } : undefined))
   if (eligibility !== 'available') {
     const result = eligibility === 'needs_input'
       ? '工具暂不可执行：缺少本轮授权的必要上下文，请用户补充目标。'
@@ -617,7 +624,8 @@ async function executeTool(
   let execution: Awaited<ReturnType<typeof runToolWithTimeout>>
   try {
     execution = await runToolWithTimeout(
-      toolSignal => tool.execute(args, { signal: toolSignal, onProgress }),
+      toolSignal => toolSignal.aborted ? Promise.reject(new DOMException('cancelled', 'AbortError'))
+        : tool.execute(args, { signal: toolSignal, onProgress, ...(readScope ? { workspacePath: readScope.workspacePath } : {}) }),
       timeout,
       signal,
     )

@@ -1,23 +1,25 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ChatRequest, ChatResponse } from '@/services/ai/types'
+import type { ChatRequest, ChatResponse, StreamChunk } from '@/services/ai/types'
 import { DEFAULT_AI_CONFIG } from '@/services/ai/types'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useAiChat } from '@/hooks/useAiChat'
 import { getAgentScopeContext } from '@/services/aiScope'
+import { getDirectChatMetrics } from '@/services/agent/directChat'
 
 const mocks = vi.hoisted(() => ({
   classify: vi.fn<(request: ChatRequest) => Promise<ChatResponse>>(),
   answer: vi.fn(),
   memory: vi.fn(async () => []),
   agent: vi.fn(async () => ({ answer: 'anonymous agent answer', steps: [], toolCalls: 0, reason: 'completed' })),
+  chunks: [] as StreamChunk[][],
 }))
 const client = {
   chat: mocks.classify,
   streamChat: async function* (_request: ChatRequest) {
-    mocks.answer()
-    yield { content: 'anonymous direct answer', done: true }
+    mocks.answer(_request)
+    for (const chunk of mocks.chunks.shift() || [{ content: 'anonymous direct answer', done: true }]) yield chunk
   },
 }
 vi.mock('@/services/ai/aiClient', () => ({
@@ -40,12 +42,59 @@ beforeEach(() => {
   mocks.answer.mockClear()
   mocks.agent.mockClear()
   mocks.memory.mockClear()
+  mocks.chunks.length = 0
   useSettingsStore.setState({ ai: { ...DEFAULT_AI_CONFIG, baseUrl: 'http://127.0.0.1:1234', chatModel: 'anonymous', routing: { enabled: true } } })
   useChatStore.setState({ messages: [], streaming: false, error: null, agentTaskContext: null, agentMode: false,
     saveCurrentSession: vi.fn(async () => {}) })
 })
 
 describe('Router V2 real chat orchestration', () => {
+  it('lets the main model recover an implicit memory need without entering Agent', async () => {
+    useSettingsStore.setState(state => ({ ai: { ...state.ai, routing: { diagnostics: true } } }))
+    mocks.chunks.push([{ content: '', done: true, toolCallDeltas: [{ index: 0, id: 'direct-memory', name: 'search_memory', arguments: '{"query":"偏好"}' }] }])
+    const { result } = renderHook(() => useAiChat())
+    await act(async () => { await result.current.sendMessage('给个建议') })
+    expect(mocks.classify).not.toHaveBeenCalled()
+    expect(mocks.agent).not.toHaveBeenCalled()
+    expect(mocks.memory).toHaveBeenCalledTimes(1)
+    expect(mocks.answer).toHaveBeenCalledTimes(2)
+    expect(mocks.answer.mock.calls[0][0].tools.map((tool: { function: { name: string } }) => tool.function.name)).toEqual(['search_memory', 'search_knowledge'])
+    expect(mocks.answer.mock.calls[1][0].tools).toBeUndefined()
+    expect(mocks.answer.mock.calls[1][0].messages.some((message: { role: string }) => message.role === 'tool')).toBe(true)
+    expect(result.current.error).toBeNull()
+    expect(getDirectChatMetrics().at(-1)?.schemaEstimatedTokens).toBeLessThanOrEqual(600)
+  })
+
+  it('keeps selection-only translation free of core schemas', async () => {
+    const { result } = renderHook(() => useAiChat())
+    await act(async () => { await result.current.sendMessage('翻译成中文', undefined, [{ id: 'selection', type: 'selection',
+      title: 'anonymous', content: 'hello', preview: 'hello', filePath: 'C:/Temp/anonymous.md', selectionFrom: 0, selectionTo: 5 }]) })
+    expect(mocks.classify).not.toHaveBeenCalled()
+    expect(mocks.memory).not.toHaveBeenCalled()
+    expect(mocks.agent).not.toHaveBeenCalled()
+    expect(mocks.answer.mock.calls[0][0].tools).toBeUndefined()
+    expect(mocks.answer.mock.calls[0][0].messages.some((message: { content: string }) => message.content.includes('hello'))).toBe(true)
+  })
+
+  it('restores the original Direct payload when core tools are switched off', async () => {
+    useSettingsStore.setState(state => ({ ai: { ...state.ai, routing: { coreToolsEnabled: false } } }))
+    const { result } = renderHook(() => useAiChat())
+    await act(async () => { await result.current.sendMessage('给个建议') })
+    expect(mocks.answer).toHaveBeenCalledTimes(1)
+    expect(mocks.answer.mock.calls[0][0].tools).toBeUndefined()
+    expect(mocks.memory).not.toHaveBeenCalled()
+  })
+
+  it('does not execute model calls returned after the chat session changes', async () => {
+    mocks.chunks.push([{ content: '', done: true, toolCallDeltas: [{ index: 0, id: 'stale', name: 'search_memory', arguments: '{"query":"偏好"}' }] }])
+    mocks.answer.mockImplementationOnce(() => useChatStore.setState({ currentSessionId: 'another-anonymous-session' }))
+    const { result } = renderHook(() => useAiChat())
+    await act(async () => { await result.current.sendMessage('给个建议') })
+    expect(mocks.answer).toHaveBeenCalledTimes(1)
+    expect(mocks.memory).not.toHaveBeenCalled()
+    expect(mocks.agent).not.toHaveBeenCalled()
+  })
+
   it('ordinary Direct reaches the main stream with no classifier or recall', async () => {
     const { result } = renderHook(() => useAiChat())
     await act(async () => { await result.current.sendMessage('什么是闭包？') })

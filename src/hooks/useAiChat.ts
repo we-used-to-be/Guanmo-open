@@ -31,6 +31,7 @@ import { routingModelChat } from '@/services/agent/routingModel'
 import { qualifyCandidates, qualifyTool } from '@/services/agent/toolEligibility'
 import { currentToolEligibilityContext } from '@/services/agent/toolEligibilityContext'
 import { recordRoutingMetric } from '@/services/agent/routingDiagnostics'
+import { recordDirectChatMetric, streamDirectChat } from '@/services/agent/directChat'
 import {
   buildScopedAgentResultPresentation,
   resolveAgentAnswerSources,
@@ -242,14 +243,19 @@ export function useAiChat() {
       const hasText = content.trim().length > 0
       const hasTags = contextTags && contextTags.length > 0
       if ((!hasText && !hasTags) || useChatStore.getState().streaming) return
+      const requestStartedAt = performance.now()
       setStreaming(true)
       setError(null)
       clearTimeline()
       const requestId = `ai-request-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
       const assistantMessageId = `assistant-${requestId}`
       const requestController = new AbortController()
+      const requestSessionId = useChatStore.getState().currentSessionId
+      const requestWorkspaceKey = normalizeMemoryScopeKey('project', workspacePath)
       activeRequestRef.current = { id: requestId, assistantMessageId, cancelled: false }
       const isCurrentRequest = () => activeRequestRef.current?.id === requestId && !activeRequestRef.current.cancelled
+        && useChatStore.getState().currentSessionId === requestSessionId
+        && normalizeMemoryScopeKey('project', selectPrimaryWorkspacePath(useAppStore.getState())) === requestWorkspaceKey
       const updateRequestMessage = (nextContent: string) => {
         if (isCurrentRequest()) updateMessageContent(assistantMessageId, nextContent)
       }
@@ -724,6 +730,7 @@ export function useAiChat() {
       const client = activeClient
       let ragContext = ''
       let directRagRegistry: SourceReferenceRegistry = { entries: [] }
+      let directKnowledgeChunks: Array<{ id: string; contentHash?: string | null }> = []
 
       // --- 轻量 RAG：仅在规则放行时检索已添加的 ContextTag 文件 ---
       const shouldRag = routingDecision.selectionSource === 'semantic'
@@ -777,6 +784,7 @@ export function useAiChat() {
           } else if (scopedKnowledge.status === 'found') {
             ragContext = scopedKnowledge.context
             directRagRegistry = scopedKnowledge.sourceRegistry
+            directKnowledgeChunks = scopedKnowledge.includedChunks || []
             setRagSources(scopedKnowledge.sources)
             setRagStatus('found')
             addTimelineItem({ type: 'local_search_found', label: '命中本地资料', detail: `${scopedKnowledge.sources.length} 个片段` })
@@ -836,12 +844,40 @@ export function useAiChat() {
       const directDiagnosticRunId = startAgentTrace({ mode: 'direct', metadata: diagnosticMetadata })
       const directAnswerSpanId = startAgentTraceSpan(directDiagnosticRunId, 'final_answer', { streaming: ai.streamEnabled })
       let directDiagnosticStatus: AgentTraceStatus = 'completed'
+      const abortStaleScope = () => { if (!isCurrentRequest()) requestController.abort('scope_changed') }
+      const unsubscribeChatScope = useChatStore.subscribe(abortStaleScope)
+      const unsubscribeWorkspaceScope = useAppStore.subscribe(abortStaleScope)
       try {
         updateRequestMessage('正在生成回答...')
         addTimelineItem({ type: 'answer_streaming', label: '生成回答' })
-        await streamFinalAnswer({
+        await streamDirectChat({
           client,
           messages: finalMessages,
+          query: content.trim(),
+          startedAt: requestStartedAt,
+          enabled: routerConfig.coreToolsEnabled && selectionRequestKind !== 'fast',
+          workspacePath: workspacePath || null,
+          prefetchedMemory,
+          sourceRegistry: directRagRegistry,
+          includedKnowledgeChunks: directKnowledgeChunks,
+          onStep: step => {
+            if (!isCurrentRequest()) return
+            addAgentStep(step)
+            addTimelineItem({ type: step.type === 'action' ? 'local_search_start' : 'local_search_found',
+              label: step.type === 'action' ? getAgentToolLabel(step.toolName || '') : '检索结果已返回' })
+          },
+          onSources: registry => {
+            if (!isCurrentRequest()) return
+            directRagRegistry = registry
+            const sources = registry.entries.map(entry => entry.source)
+            if (!sources.length) return
+            updateMessageSources(assistantMessageId, sources)
+            updateMessageContextMeta(assistantMessageId, createContextMeta({
+              tagCount: tagMetadata.length, ragSourceCount: sources.length, webSearchUsed: false,
+              readingScope: routingDecision.readingScope,
+            }))
+          },
+          onMetric: routerConfig.diagnostics ? recordDirectChatMetric : undefined,
           streamEnabled: ai.streamEnabled,
           onUpdate: updateRequestMessage,
           isCancelled: () => !isCurrentRequest(),
@@ -881,6 +917,8 @@ export function useAiChat() {
           removeMessageById(assistantMessageId)
         }
       } finally {
+        unsubscribeChatScope()
+        unsubscribeWorkspaceScope()
         finishAgentTrace(
           directDiagnosticRunId,
           requestController.signal.aborted ? 'cancelled' : directDiagnosticStatus,

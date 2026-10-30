@@ -1029,6 +1029,9 @@ function AiSettings({ onOpenKnowledgeManager }: { onOpenKnowledgeManager: () => 
           <SliderField label="辅助判断时限（毫秒）" description="超时即沿用原规则结果" value={routing.timeoutMs} min={100} max={3000} step={100} onChange={(timeoutMs) => updateAiConfig({ routing: { ...routing, timeoutMs } })} />
           <SliderField label="类别冲突分差" description="有检索线索且类别分数相近时辅助判断" value={routing.conflictMargin} min={0} max={3} step={1} onChange={(conflictMargin) => updateAiConfig({ routing: { ...routing, conflictMargin } })} />
         </>}
+        <SettingField label="普通聊天核心检索" description="允许模型按需检索长期记忆和知识库；关闭后恢复原有普通聊天流程">
+          <Switch checked={routing.coreToolsEnabled} onChange={(coreToolsEnabled) => updateAiConfig({ routing: { ...routing, coreToolsEnabled } })} />
+        </SettingField>
         <SettingField label="匿名路由诊断" description="仅在本次运行内保留耗时、触发原因和候选数量，不记录对话或文档内容">
           <Switch checked={routing.diagnostics} onChange={(diagnostics) => updateAiConfig({ routing: { ...routing, diagnostics } })} />
         </SettingField>
