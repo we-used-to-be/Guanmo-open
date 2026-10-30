@@ -91,7 +91,13 @@ export interface WebChatMessageSource {
   snippet?: string
 }
 
-export type ChatMessageSource = LocalChatMessageSource | WebChatMessageSource
+export interface MemoryChatMessageSource {
+  kind: 'memory'
+  memoryId: string
+  content: string
+}
+
+export type ChatMessageSource = LocalChatMessageSource | WebChatMessageSource | MemoryChatMessageSource
 
 export interface ReadingArtifactMessageReference {
   key: `mark:${string}` | `ai:${string}`

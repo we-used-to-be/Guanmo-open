@@ -17,6 +17,27 @@ describe('Router V2 execution boundary', () => {
     executor.initAgent()
     registerTool = (await import('@/services/agent/toolRegistry')).registerTool
   })
+
+  it('retains prefetched memory sources even when Agent does not search again', async () => {
+    const memory = { kind: 'memory' as const, memoryId: 'anonymous-memory', content: '偏好简洁回答' }
+    const result = await executor.runAgent({ query: 'anonymous', candidateToolNames: [], streamEnabled: false,
+      prefetchedMemory: { query: 'anonymous', result: memory.content, sources: [memory], topK: 10 } })
+    expect(result.sources).toEqual([memory])
+    expect(result.sourceRegistry?.entries).toEqual([{ id: 'S1', source: memory }])
+  })
+
+  it('returns memory sources retrieved within the Agent tool loop', async () => {
+    const memory = { kind: 'memory' as const, memoryId: 'anonymous-memory', content: '偏好简洁回答' }
+    registerTool({ name: 'search_memory', description: 'anonymous', parameters: [], execute: async () => JSON.stringify({ memories: [memory] }) })
+    let calls = 0
+    stream.mockImplementation(async function* () {
+      if (++calls === 1) yield { content: '', done: true, toolCallDeltas: [{ index: 0, name: 'search_memory', arguments: '{}' }] }
+      else yield { content: '按偏好回答 [S1]', done: true }
+    })
+    const result = await executor.runAgent({ query: '我的偏好', candidateToolNames: ['search_memory'], config: { maxSteps: 2 } })
+    expect(result.sources).toEqual([memory])
+    expect(result.referencedSourceIds).toEqual(['S1'])
+  })
   beforeEach(() => {
     chat.mockClear()
     useSettingsStore.setState(state => ({ ai: { ...state.ai, webSearchEnabled: true } }))
@@ -33,6 +54,17 @@ describe('Router V2 execution boundary', () => {
     expect(result.status).toBe('success')
     expect(execute.mock.calls[0][1].workspacePath).toBe('C:/Temp/direct-workspace')
     expect(getAgentScopeContext()).toBe(scope)
+  })
+
+  it('keeps long structured memory results parseable and snapshots only retained content', async () => {
+    const source = { kind: 'memory', memoryId: 'anonymous-memory', content: '"匿名事实"'.repeat(1000) }
+    registerTool({ name: 'search_memory', description: 'anonymous', parameters: [], execute: async () => JSON.stringify({ memories: [source] }) })
+    const result = await executor.executeTool('search_memory', {}, 1000, 'anonymous')
+    const parsed = JSON.parse(result.result)
+    expect(result.result.length).toBeLessThanOrEqual(3000)
+    expect(parsed.memories[0].content.length).toBeLessThan(source.content.length)
+    const registry = executor.prepareAgentToolResultForModel({ entries: [] }, 'search_memory', result.result).registry
+    expect(registry.entries[0].source).toMatchObject({ content: parsed.memories[0].content })
   })
 
   it('enforces the Direct read whitelist inside the shared executor', async () => {

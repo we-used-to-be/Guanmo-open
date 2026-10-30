@@ -45,6 +45,16 @@ describe('AI 历史记录上滑分页', () => {
     vi.unstubAllGlobals()
   })
 
+  it('shows memory sources as content without a document navigation action', async () => {
+    useChatStore.setState({ messages: [messages[0], { ...messages[1], sources: [
+      { kind: 'memory', memoryId: 'anonymous-memory', content: '默认用中文简洁回答' },
+    ] }] })
+    mount()
+    fireEvent.click(screen.getByRole('button', { name: '来源 · 1' }))
+    const memory = screen.getByText('默认用中文简洁回答')
+    expect(memory.closest('button, a')).toBeNull()
+  })
+
   it('未手动点击时不加载，点击后仅在上滑接近顶部时加载', async () => {
     const container = mount()
     scroll(container, 300)

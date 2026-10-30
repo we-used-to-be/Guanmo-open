@@ -273,6 +273,26 @@ function truncateWebSearchResult(text: string, maxLen: number): string {
 }
 
 function truncateToolResultForModel(toolName: string, text: string, maxLen: number): string {
+  if (toolName === 'search_memory' && text.length > maxLen) {
+    try {
+      const parsed = JSON.parse(text)
+      if (isPlainObject(parsed) && Array.isArray(parsed.memories)) {
+        // 保留合法 JSON，使来源只登记裁剪后真正提供给模型的内容。
+        while (JSON.stringify(parsed).length > maxLen) {
+          if (typeof parsed.sourceDetails === 'string' && parsed.sourceDetails.length) {
+            parsed.sourceDetails = parsed.sourceDetails.slice(0, -100)
+          } else if (parsed.memories.length > 1) {
+            parsed.memories.pop()
+          } else {
+            const memory = parsed.memories[0]
+            if (!isPlainObject(memory) || typeof memory.content !== 'string' || !memory.content.length) break
+            memory.content = Array.from(memory.content).slice(0, -50).join('')
+          }
+        }
+        return JSON.stringify(parsed)
+      }
+    } catch { /* 兼容旧版纯文本结果。 */ }
+  }
   if (toolName === 'search_knowledge') return truncateKnowledgeResult(text, maxLen)
   if (toolName === 'web_search') return truncateWebSearchResult(text, maxLen)
   return truncate(text, maxLen)
@@ -474,6 +494,18 @@ function extractWebSourcesFromResult(result: string): ChatMessageSource[] {
 }
 
 function extractSourcesFromToolResult(toolName: string, result: string): ChatMessageSource[] {
+  if (toolName === 'search_memory') {
+    try {
+      const parsed = JSON.parse(result)
+      if (!isPlainObject(parsed) || !Array.isArray(parsed.memories)) return []
+      return parsed.memories.flatMap((item): ChatMessageSource[] => (
+        isPlainObject(item) && typeof item.memoryId === 'string' && item.memoryId.trim()
+          && typeof item.content === 'string' && item.content.trim()
+          ? [{ kind: 'memory', memoryId: item.memoryId, content: item.content }]
+          : []
+      ))
+    } catch { return [] }
+  }
   if (toolName === 'search_knowledge') return extractKnowledgeSourcesFromResult(result)
   if (toolName === 'read_selection_context') return extractSelectionContextSourcesFromResult(result)
   if (toolName === 'read_context_file') return extractContextFileSourcesFromResult(result)
@@ -504,13 +536,21 @@ function annotateToolResultWithSourceReferences(
   result: string,
   registry: SourceReferenceRegistry,
 ): string {
-  if (!['search_knowledge', 'read_selection_context', 'read_context_file', 'web_search'].includes(toolName)) {
+  if (!['search_memory', 'search_knowledge', 'read_selection_context', 'read_context_file', 'web_search'].includes(toolName)) {
     return result
   }
 
   try {
     const parsed = JSON.parse(result)
     if (!isPlainObject(parsed)) return result
+
+    if (toolName === 'search_memory' && Array.isArray(parsed.memories)) {
+      return JSON.stringify({ ...parsed, memories: parsed.memories.map((item) => {
+        if (!isPlainObject(item)) return item
+        const source = extractSourcesFromToolResult(toolName, JSON.stringify({ memories: [item] }))[0]
+        return withSourceReferenceId(item, source ? findSourceReferenceId(registry, source) : undefined)
+      }) }, null, 2)
+    }
 
     if ((toolName === 'search_knowledge' || toolName === 'web_search') && Array.isArray(parsed.results)) {
       return JSON.stringify({
@@ -984,7 +1024,7 @@ async function runAgentInternal({
   const steps: AgentStep[] = []
   let toolCalls = 0
   let editToolCalls = 0
-  let sourceRegistry = createSourceReferenceRegistry()
+  let sourceRegistry = createSourceReferenceRegistry(prefetchedMemory?.sources)
   let artifactReferences: ReadingArtifactMessageReference[] = []
   const calledToolNames: string[] = []
   const selectionContextReadLevels = new Map<string, 1 | 2>()
@@ -1240,6 +1280,7 @@ async function runAgentInternal({
         steps,
         toolCalls: 0,
         reason: 'completed',
+        ...sourceMetadata(),
       }
     } catch (err) {
       if (signal?.reason === 'deadline' || remainingDeadlineMs() <= 0) return deadlineResult()

@@ -52,6 +52,7 @@ function formatWebSource(source: WebChatMessageSource): string {
 }
 
 function formatSource(source: ChatMessageSource): string {
+  if (source.kind === 'memory') return `- **记忆**：${source.content}`
   return source.kind === 'web' ? formatWebSource(source) : formatLocalSource(source)
 }
 

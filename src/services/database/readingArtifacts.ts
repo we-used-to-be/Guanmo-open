@@ -8,7 +8,7 @@
  * - 删除成果不会改动原文。
  */
 import { getDatabase, isDatabaseReady } from './db'
-import type { ChatMessageSource, ReadingScope } from '@/services/ai/types'
+import type { ChatMessageSource, MemoryChatMessageSource, ReadingScope } from '@/services/ai/types'
 import { parseMarkdownBlocks, type MarkdownBlock } from '@/services/markdownBlocks'
 import { decodeOriginalSelections, type OriginalSelectionSnapshot } from '@/services/originalSelections'
 import { buildReadingArtifactReferences, type SourceReferenceId } from '@/services/ai/sourceReferences'
@@ -218,6 +218,7 @@ export interface WebReadingArtifactReference {
 export type ReadingArtifactReference =
   | LocalReadingArtifactReference
   | WebReadingArtifactReference
+  | MemoryChatMessageSource
 
 /** 把对应用户提问合并进成果结构化元数据，不改动既有类型专属字段。 */
 export function mergeReadingArtifactQuestionMetadata(
@@ -268,7 +269,7 @@ export function mergeReadingArtifactSelectionMetadata(
   return {
     ...structuredContent,
     ...(selections?.length ? { originalSelections: decodeOriginalSelections(selections) } : {}),
-    ...(sources?.length ? { sourceCandidates: sources.map((source) => source.kind === 'web' ? { ...source } : { ...source, ...(source.titlePath ? { titlePath: [...source.titlePath] } : {}) }) } : {}),
+    ...(sources?.length ? { sourceCandidates: sources.map((source) => source.kind === 'web' || source.kind === 'memory' ? { ...source } : { ...source, ...(source.titlePath ? { titlePath: [...source.titlePath] } : {}) }) } : {}),
     ...(referencedSourceIds ? { referencedSourceIds: [...referencedSourceIds] } : {}),
   }
 }
@@ -291,6 +292,11 @@ export function getReadingArtifactReferences(artifact: ReadingArtifact): Reading
 
 function decodeReadingArtifactReference(value: unknown): ReadingArtifactReference | null {
   if (!isPlainObject(value)) return null
+  if (value.kind === 'memory') {
+    return isNonEmptyString(value.memoryId) && isNonEmptyString(value.content)
+      ? { kind: 'memory', memoryId: value.memoryId, content: value.content }
+      : null
+  }
   if (value.kind === 'web') {
     if (!isNonEmptyString(value.title) || !isNonEmptyString(value.url)) return null
     return {

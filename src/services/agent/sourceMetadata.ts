@@ -72,7 +72,7 @@ export function buildAgentResultPresentation(result: AgentResult, tagCount: numb
     referencedSourceIds: resolved.referencedIds,
     contextMeta: createContextMeta({
       tagCount,
-      ragSourceCount: sources.length,
+      ragSourceCount: sources.filter(source => source.kind !== 'memory').length,
       webSearchUsed: result.steps.some(
         (step) => step.type === 'action' && step.toolName === 'web_search'
       ),
@@ -141,7 +141,7 @@ export function buildScopedAgentResultPresentation(
     contextMeta: createContextMeta({
       ...presentation.contextMeta,
       readingScope,
-      sourceCoverage: resolveReadingSourceCoverage(readingScope, result.steps, presentation.sources.length),
+      sourceCoverage: resolveReadingSourceCoverage(readingScope, result.steps, presentation.sources.filter(source => source.kind !== 'memory').length),
     }),
   }
 }

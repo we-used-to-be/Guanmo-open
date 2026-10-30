@@ -828,7 +828,7 @@ export function AiPanel({ fullscreenDragHandleProps, productTourActive = false }
 
     // 批注：必须有本地来源锚点；批注正文为 AI 回答，引用快照取来源标题或行号
     if (type === 'annotation') {
-      const localSource = sources?.find((s): s is LocalChatMessageSource => s.kind !== 'web')
+      const localSource = sources?.find((s): s is LocalChatMessageSource => s.kind !== 'web' && s.kind !== 'memory')
       if (!localSource || !localSource.filePath) {
         toast.error('AI 解读需要绑定本地来源，请先选择带文件来源的回答')
         return
@@ -1769,7 +1769,12 @@ function ArtifactReferences({
       <div className="mb-1.5 text-micro font-bold text-gm-text-tertiary">参考来源</div>
       <div className="space-y-1">
         {references.map((reference, index) => (
-          reference.kind === 'web' ? (
+          reference.kind === 'memory' ? (
+            <div key={`memory-${reference.memoryId}-${index}`} className="rounded-lg px-2 py-1 text-micro leading-relaxed text-gm-text-secondary">
+              <span className="mr-1 rounded border border-gm-border px-1 text-[10px] font-bold text-gm-text-tertiary">记忆</span>
+              <span className="whitespace-pre-wrap break-words">{reference.content}</span>
+            </div>
+          ) : reference.kind === 'web' ? (
             <a
               key={`${reference.url}-${index}`}
               href={reference.url}
@@ -1924,8 +1929,8 @@ export const ChatBubble = memo(function ChatBubble({
   const saveControlsHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [saveMenuOpen, setSaveMenuOpen] = useState(false)
   const [saveControlsVisible, setSaveControlsVisible] = useState(false)
-  // AI 解读需绑定本地来源范围；仅当存在非 web 来源时显示对应入口
-  const hasLocalSource = Boolean(sources?.some((s) => s.kind !== 'web'))
+  // AI 解读需绑定本地文档来源范围。
+  const hasLocalSource = Boolean(sources?.some((s) => s.kind !== 'web' && s.kind !== 'memory'))
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
@@ -2017,7 +2022,7 @@ export const ChatBubble = memo(function ChatBubble({
           ) : (
             <AssistantMarkdown content={content} />
           )}
-          {!isUser && messageSources.length > 0 && onOpenSource && (
+          {!isUser && messageSources.length > 0 && (
             <MessageSources
               sources={messageSources}
               onOpenSource={onOpenSource}
@@ -2212,8 +2217,13 @@ function MessageSources({
       </button>
       {expanded && (
         <div className="mt-2 space-y-1">
-          {onOpenSource && sources.map((source, index) => (
-            source.kind === 'web' ? (
+          {sources.map((source, index) => (
+            source.kind === 'memory' ? (
+              <div key={`memory-${source.memoryId}-${index}`} className="rounded-lg px-2 py-1 text-micro leading-relaxed text-gm-text-secondary">
+                <span className="mr-1 rounded border border-gm-border px-1 text-[10px] font-bold text-gm-text-tertiary">记忆</span>
+                <span className="whitespace-pre-wrap break-words">{source.content}</span>
+              </div>
+            ) : source.kind === 'web' ? (
               <a
                 key={`${source.url}-${index}`}
                 href={source.url}
@@ -2233,7 +2243,8 @@ function MessageSources({
               <button
                 key={`${source.filePath}-${source.startLine}-${source.endLine}-${index}`}
                 type="button"
-                onClick={() => onOpenSource(source)}
+                disabled={!onOpenSource}
+                onClick={() => onOpenSource?.(source)}
                 className="block w-full rounded-lg px-2 py-1 text-left text-micro leading-relaxed text-gm-text-secondary hover:bg-gm-surface hover:text-gm-primary"
                 title={`Open ${source.filePath}:${source.startLine}-${source.endLine}`}
               >

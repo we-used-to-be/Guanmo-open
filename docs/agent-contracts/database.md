@@ -28,6 +28,7 @@
 
 ## AI 阅读成果消息快照
 
+- 记忆来源使用可选的 `kind='memory'`、`memoryId` 与当轮实际注入的 `content`，沿用聊天 metadata 与成果 references JSON 保存；旧消息和成果缺少记忆来源继续兼容。记忆只展示内容，不建立文件锚点或点击跳转，保存后不回查当前记忆内容。
 - 保存回复时仅通过助手 `parentId` 取得对应用户消息的 selection tags，不用相邻消息、当前草稿或当前文件补造历史。
 - `reading_artifacts.structured_content` 可选保存 `originalSelections`（文本、文件、有效行号/偏移、截断及仅预览标识）、完整 `sourceCandidates` 与 `referencedSourceIds`；有文件和有效行号的选区追加到成果 `references`，按文件与行号去重，供来源跳转和按文档查询使用；不插入模型候选 `sourceCandidates`，不改变 `[S1…]` 映射。旧成果缺字段继续兼容；已保存选区快照的成果读取时合并定位来源，不写回或猜测缺失坐标。
 - 快照在异步补全来源哈希前复制，保存后不依赖聊天记录或来源文件仍存在。备份沿用原结构化 JSON，无新表、迁移或版本升级。

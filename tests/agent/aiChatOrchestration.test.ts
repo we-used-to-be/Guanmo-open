@@ -23,6 +23,15 @@ const selectionTag: ContextTag = {
 }
 
 describe('AI chat orchestration helpers', () => {
+  it('registers model-visible memories from tool results and reuses their IDs', () => {
+    const memory = { kind: 'memory' as const, memoryId: 'anonymous-memory', content: '偏好简洁回答' }
+    const first = prepareAgentToolResultForModel(createSourceReferenceRegistry(), 'search_memory', JSON.stringify({ memories: [memory] }))
+    expect(first.registry.entries).toEqual([{ id: 'S1', source: memory }])
+    expect(JSON.parse(first.result).memories[0].referenceId).toBe('[S1]')
+    const second = prepareAgentToolResultForModel(first.registry, 'search_memory', JSON.stringify({ memories: [memory] }))
+    expect(second.registry.entries).toHaveLength(1)
+    expect(prepareAgentToolResultForModel(first.registry, 'search_memory', '未找到相关记忆。').registry).toEqual(first.registry)
+  })
   it('registers only model-visible Agent sources with stable IDs across tool calls', () => {
     const first = prepareAgentToolResultForModel(
       createSourceReferenceRegistry(),

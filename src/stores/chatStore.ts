@@ -553,6 +553,12 @@ function sanitizeMessageSources(value: unknown): ChatMessageSource[] | undefined
 
   const normalized = value.flatMap((item): ChatMessageSource[] => {
     if (!isPlainObject(item)) return []
+    if (item.kind === 'memory') {
+      return typeof item.memoryId === 'string' && item.memoryId.trim()
+        && typeof item.content === 'string' && item.content.trim()
+        ? [{ kind: 'memory', memoryId: item.memoryId, content: item.content }]
+        : []
+    }
     if (item.kind === 'web') {
       if (typeof item.url !== 'string') return []
       const url = normalizeSafeWebSourceUrl(item.url)

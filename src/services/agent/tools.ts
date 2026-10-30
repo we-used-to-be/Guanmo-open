@@ -7,7 +7,8 @@ import { useChatStore } from '@/stores/chatStore'
 import { getAgentScopeContext } from '@/services/aiScope'
 import type { ContextTag } from '@/types/contextTag'
 import type { ChatMessage, ChatMessageTag } from '@/services/ai/types'
-import { searchMemories, buildMemoryContext, loadMemorySourceContext } from '@/services/memory/memoryService'
+import { searchMemories, buildMemoryContextWithSources, loadMemorySourceContext } from '@/services/memory/memoryService'
+import { decodeMemoryEvidence } from '@/services/memory/memoryEvidence'
 import { loadMemories, listEmbeddingJobs } from '@/services/database/persistence'
 import { normalizeMemoryScopeKey } from '@/services/memory/memoryPolicy'
 import { readRememberedMarkdownFileForOpen } from '@/services/markdownFileOpenPolicy'
@@ -964,7 +965,17 @@ export function registerBuiltinTools() {
         signal: context?.signal,
       })
       const sourceDetails = await loadMemorySourceContext(memories, args.query as string)
-      return buildMemoryContext(memories, sourceDetails ? 600 : 250, sourceDetails) || '未找到相关记忆。'
+      const snapshot = buildMemoryContextWithSources(memories, sourceDetails ? 600 : 250, sourceDetails)
+      if (!snapshot.context) return '未找到相关记忆。'
+      const detailIndex = snapshot.context.indexOf('\n【原始用户记录，按来源 ID 补查】')
+      return JSON.stringify({ memories: snapshot.sources.map(source => {
+        const memory = memories.find(item => item.id === source.memoryId)!
+        const evidence = decodeMemoryEvidence(memory.evidence)
+        const recordedAt = evidence?.recordedAt ?? evidence?.occurredAt
+        return { ...source, category: memory.category, scopeType: memory.scopeType,
+          ...(evidence?.kind === 'episodic' && recordedAt ? { recordedAt: new Date(recordedAt).toISOString() } : {}) }
+      }),
+        ...(detailIndex >= 0 ? { sourceDetails: snapshot.context.slice(detailIndex) } : {}) })
     },
   })
 

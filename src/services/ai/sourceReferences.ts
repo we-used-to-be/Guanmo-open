@@ -51,6 +51,13 @@ export function buildReadingArtifactReferences(
       startLine: selection.startLine!, endLine: selection.endLine! }]
   })
   for (const source of [...(sources ?? []), ...selectionSources]) {
+    if (source.kind === 'memory') {
+      const key = `memory:${source.memoryId}`
+      if (!source.memoryId.trim() || !source.content.trim() || seen.has(key)) continue
+      seen.add(key)
+      references.push({ ...source })
+      continue
+    }
     if (source.kind === 'web') {
       const title = source.title.trim()
       const url = source.url.trim()
@@ -101,6 +108,9 @@ export function normalizeSafeWebSourceUrl(url: string): string | null {
 }
 
 function getSourceIdentity(source: ChatMessageSource): string | null {
+  if (source.kind === 'memory') {
+    return source.memoryId.trim() && source.content.trim() ? `memory:${source.memoryId}` : null
+  }
   if (source.kind === 'web') {
     const url = normalizeSafeWebSourceUrl(source.url)
     return url ? `web:${url}` : null
@@ -114,7 +124,7 @@ function getSourceIdentity(source: ChatMessageSource): string | null {
 }
 
 function cloneSource(source: ChatMessageSource): ChatMessageSource {
-  if (source.kind === 'web') return { ...source }
+  if (source.kind === 'web' || source.kind === 'memory') return { ...source }
   return {
     ...source,
     ...(source.titlePath ? { titlePath: [...source.titlePath] } : {}),
@@ -215,6 +225,7 @@ export function resolveStoredSourceReferences(
   }
 
   return selected.length > 0
-    ? { sources: selected, hasValidReferences: true }
+    ? { sources: [...selected, ...candidates.filter(source => source.kind === 'memory'
+      && !selected.some(item => item.kind === 'memory' && item.memoryId === source.memoryId))], hasValidReferences: true }
     : { sources: candidates, hasValidReferences: false }
 }

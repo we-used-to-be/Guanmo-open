@@ -42,6 +42,14 @@ function baseRow(overrides: Partial<ReadingArtifactRow> = {}): ReadingArtifactRo
 }
 
 describe('decodeReadingArtifact', () => {
+  it('round-trips memory references as independent content snapshots without document anchors', () => {
+    const memory = { kind: 'memory' as const, memoryId: 'anonymous-memory', content: '默认中文回答' }
+    const references = buildReadingArtifactReferences([memory, { ...memory }])
+    expect(references).toEqual([memory])
+    const artifact = decodeReadingArtifact(baseRow({ structured_content: JSON.stringify(mergeReadingArtifactReferencesMetadata(null, references)) }))
+    memory.content = '后续已修改'
+    expect(getReadingArtifactReferences(artifact)).toEqual([{ kind: 'memory', memoryId: 'anonymous-memory', content: '默认中文回答' }])
+  })
   it('解码有效行：含来源锚点、结构化字段与时间戳归一', () => {
     const artifact = decodeReadingArtifact(baseRow({
       structured_content: '{"points":["要点A"]}',

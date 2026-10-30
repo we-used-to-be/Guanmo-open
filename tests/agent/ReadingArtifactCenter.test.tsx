@@ -107,6 +107,19 @@ const independentArtifact: ReadingArtifact = {
 }
 
 describe('ReadingArtifactCenter', () => {
+  it('shows saved memory content without a navigation control', async () => {
+    const memoryArtifact = { ...independentArtifact, structuredContent: {
+      references: [{ kind: 'memory', memoryId: 'anonymous-memory', content: '默认使用中文简洁回答' }],
+    } }
+    mocks.loadReadingArtifactsPage.mockResolvedValue({ artifacts: [memoryArtifact], total: 1 })
+    const open = vi.fn()
+    render(<ReadingArtifactCenter onOpenAiSource={open} />)
+    fireEvent.click(await screen.findByRole('button', { name: /AI · 问题集.*独立问题集/ }))
+    const content = await screen.findByText('默认使用中文简洁回答')
+    expect(content.closest('button, a')).toBeNull()
+    expect(screen.queryByText('暂无可跳转来源')).toBeNull()
+    expect(open).not.toHaveBeenCalled()
+  })
   beforeEach(() => {
     mocks.fileExists.mockReset().mockImplementation(async (path: string) => path.endsWith('A.md'))
     mocks.readRememberedFile.mockReset().mockResolvedValue('匿名原文\n\n第二段')

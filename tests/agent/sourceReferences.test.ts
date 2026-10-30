@@ -24,6 +24,13 @@ const webSource: ChatMessageSource = {
 }
 
 describe('source reference registry', () => {
+  it('deduplicates memory snapshots and keeps them visible alongside cited documents', () => {
+    const memory = { kind: 'memory' as const, memoryId: 'anonymous-memory', content: '默认中文回答' }
+    const registry = createSourceReferenceRegistry([localSource, memory, { ...memory }])
+    expect(registry.entries.map(entry => entry.id)).toEqual(['S1', 'S2'])
+    expect(resolveStoredSourceReferences(registry.entries.map(entry => entry.source), ['S1']).sources).toEqual([localSource, memory])
+    expect(resolveStoredSourceReferences(registry.entries.map(entry => entry.source), ['S2']).sources).toEqual([memory])
+  })
   it('assigns continuous IDs from included sources instead of original RAG numbers', () => {
     const registry = createSourceReferenceRegistry([
       { ...localSource, titlePath: ['来源 1'], startLine: 1, endLine: 2 },

@@ -7,7 +7,7 @@ import { getAiClient, getEmbeddingClient, getEmbeddingConfig, initAiClient, init
 import { SYSTEM_TEMPERATURE, type ChatMessage } from '@/services/ai/types'
 import { initAgent, runAgent } from '@/services/agent'
 import type { AgentRunRequest, AgentStep, AgentTaskContext } from '@/services/agent/types'
-import type { SourceReferenceRegistry } from '@/services/ai/sourceReferences'
+import { registerSourceReferences, type SourceReferenceRegistry } from '@/services/ai/sourceReferences'
 import { createAgentTaskContext, decodeAgentStepEvent, decodeKnowledgeSearchOutcome } from '@/services/agent/session'
 import { createActionProposal } from '@/services/agent/actionProposal'
 import type { ContextTag } from '@/types/contextTag'
@@ -16,7 +16,7 @@ import { setAgentScopeContext } from '@/services/aiScope'
 import { resolveDirectRagSources, searchScopedKnowledge, shouldTriggerScopedRag, streamFinalAnswer } from '@/services/aiChatFlow'
 import { buildAgentFinalAnswerMessages, buildChatMessageTags, buildMessagesForModel, buildSupplementalAiContext, countRagSourcesInContext, createContextMeta, createUserChatMessage, prepareChatHistoryForModel, resolveAiAnswerMode } from '@/services/aiChatMessages'
 import { hideLikelyToolJsonPrefix, stripToolCallJson } from '@/services/agent/toolCallParser'
-import { buildMemoryContext, isPersonalizedRewriteMemoryIntent, loadMemorySourceContext, searchMemories } from '@/services/memory/memoryService'
+import { buildMemoryContextWithSources, isPersonalizedRewriteMemoryIntent, loadMemorySourceContext, searchMemories } from '@/services/memory/memoryService'
 import { scheduleMemoryExtraction } from '@/services/memory/memoryExtractionQueue'
 import { normalizeMemoryScopeKey } from '@/services/memory/memoryPolicy'
 import type { ManualCapability } from '@/components/ai/ManualToolToggle'
@@ -423,10 +423,12 @@ export function useAiChat() {
           if (!isCurrentRequest()) return
           const sourceDetails = await loadMemorySourceContext(memories, content)
           if (!isCurrentRequest()) return
-          memoryContext = buildMemoryContext(memories, sourceDetails ? 600 : 250, sourceDetails)
+          const memorySnapshot = buildMemoryContextWithSources(memories, sourceDetails ? 600 : 250, sourceDetails)
+          memoryContext = memorySnapshot.context
           memoryLookupAttempted = true
           prefetchedMemory = { query: content.trim(), result: memoryContext || '未找到相关记忆。',
-            topK: memoryIntent === 'strong' ? 10 : 3, categories: personalizedRewriteMemory ? ['preference', 'instruction'] : undefined }
+            topK: memoryIntent === 'strong' ? 10 : 3, categories: personalizedRewriteMemory ? ['preference', 'instruction'] : undefined,
+            sources: memorySnapshot.sources }
           if (memoryIntent === 'strong' && !memoryContext) {
             memoryContext = '系统已按需检索长期记忆：未找到相关长期记忆。'
           }
@@ -821,7 +823,8 @@ export function useAiChat() {
       const tagMessageSources = routingDecision.readingScope === 'selection'
         ? toContextTagSources(contextTags || [])
         : []
-      const messageSources = ragMessageSources.length > 0 ? ragMessageSources : tagMessageSources
+      const messageSources = [...(ragMessageSources.length > 0 ? ragMessageSources : tagMessageSources), ...(prefetchedMemory?.sources || [])]
+      directRagRegistry = registerSourceReferences(directRagRegistry, messageSources)
       const contextMeta = createContextMeta({
         tagCount: tagMetadata.length,
         ragSourceCount: countRagSourcesInContext(ragContext),
@@ -830,7 +833,7 @@ export function useAiChat() {
         sourceCoverage: resolveReadingSourceCoverage(
           routingDecision.readingScope,
           [],
-          messageSources.length,
+          messageSources.filter(source => source.kind !== 'memory').length,
         ),
       })
       if (isCurrentRequest()) updateMessageContextMeta(assistantMessageId, contextMeta)
@@ -873,7 +876,7 @@ export function useAiChat() {
             if (!sources.length) return
             updateMessageSources(assistantMessageId, sources)
             updateMessageContextMeta(assistantMessageId, createContextMeta({
-              tagCount: tagMetadata.length, ragSourceCount: sources.length, webSearchUsed: false,
+              tagCount: tagMetadata.length, ragSourceCount: sources.filter(source => source.kind !== 'memory').length, webSearchUsed: false,
               readingScope: routingDecision.readingScope,
             }))
           },

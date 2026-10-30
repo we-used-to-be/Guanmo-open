@@ -1,4 +1,4 @@
-import type { ChatMessage } from '@/services/ai/types'
+import type { ChatMessage, MemoryChatMessageSource } from '@/services/ai/types'
 import type { Memory, MemorySourceGuard } from '@/services/database/persistence'
 import {
   persistMemory,
@@ -775,7 +775,12 @@ export async function searchMemories(
 
 /** Byte-based estimate, not provider tokenizer usage. Default targets roughly 250 tokens. */
 export function buildMemoryContext(memories: Memory[], maxTokens = 250, sourceDetails = ''): string {
-  if (memories.length === 0) return ''
+  return buildMemoryContextWithSources(memories, maxTokens, sourceDetails).context
+}
+
+export function buildMemoryContextWithSources(memories: Memory[], maxTokens = 250, sourceDetails = '') {
+  const sources: MemoryChatMessageSource[] = []
+  if (memories.length === 0) return { context: '', sources }
   const byteLimit = Math.max(0, Math.min(1000, Number.isFinite(maxTokens) ? maxTokens : 250)) * 3
   const encoder = new TextEncoder()
   let context = '【长期记忆】\n'
@@ -811,15 +816,16 @@ export function buildMemoryContext(memories: Memory[], maxTokens = 250, sourceDe
       part = truncated + '…'
     }
     context += part + '\n\n'
+    sources.push({ kind: 'memory', memoryId: memory.id, content: part.slice(part.indexOf('内容：') + 3) })
   }
-  if (context === '【长期记忆】\n') return ''
+  if (context === '【长期记忆】\n') return { context: '', sources }
   if (sourceDetails) {
     for (const character of '\n【原始用户记录，按来源 ID 补查】\n' + sourceDetails) {
       if (encoder.encode(context + character).length > byteLimit) break
       context += character
     }
   }
-  return context.trimEnd()
+  return { context: context.trimEnd(), sources }
 }
 
 export async function loadMemorySourceContext(memories: Memory[], query: string): Promise<string> {

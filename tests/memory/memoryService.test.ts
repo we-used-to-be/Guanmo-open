@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DB_SCHEMA, splitDatabaseSchemaStatements } from '@/services/database/schema'
 import { contentHash, shouldExtractMemoryCandidate, isExplicitMemoryWriteIntent } from '@/services/memory/memoryPolicy'
-import { buildMemoryContext, extractMemories, loadMemorySourceContext, processMemoryCandidateExtraction, searchMemories, upsertExplicitMemory } from '@/services/memory/memoryService'
+import { buildMemoryContext, buildMemoryContextWithSources, extractMemories, loadMemorySourceContext, processMemoryCandidateExtraction, searchMemories, upsertExplicitMemory } from '@/services/memory/memoryService'
 import { loadMemories, persistMemory, persistMemoryEmbedding, updateMemoryIfUnchanged, type Memory } from '@/services/database/persistence'
 import { MemoryExtractionQueue } from '@/services/memory/memoryExtractionQueue'
 import { decodeMemoryEvidence, encodeMemoryEvidence } from '@/services/memory/memoryEvidence'
@@ -32,6 +32,18 @@ beforeEach(() => {
 afterEach(() => db.close())
 
 describe('memory writes against isolated SQLite', () => {
+  it('snapshots only injected active memory content within the context budget', () => {
+    const records = [record({ status: 'active', content: '已确认的长事实'.repeat(300) }),
+      record({ id: 'later', status: 'active', content: '预算外事实' }), record({ id: 'candidate', content: '待确认事实' })]
+    const snapshot = buildMemoryContextWithSources(records)
+    expect(snapshot.context).toBe(buildMemoryContext(records))
+    expect(snapshot.sources).toHaveLength(1)
+    expect(snapshot.sources[0]).toMatchObject({ kind: 'memory', memoryId: 'existing' })
+    expect(snapshot.sources[0].content.endsWith('…')).toBe(true)
+    expect(snapshot.context).toContain(`内容：${snapshot.sources[0].content}`)
+    expect(snapshot.context).not.toContain('预算外事实')
+    expect(buildMemoryContextWithSources([record()]).sources).toEqual([])
+  })
   it('conditional updates preserve a concurrent manual edit and cannot resurrect deletion', async () => {
     const old = record()
     await persistMemory(old)

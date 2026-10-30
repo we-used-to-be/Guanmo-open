@@ -7,11 +7,12 @@ import { useChatStore } from '@/stores/chatStore'
 import { useAiChat } from '@/hooks/useAiChat'
 import { getAgentScopeContext } from '@/services/aiScope'
 import { getDirectChatMetrics } from '@/services/agent/directChat'
+import type { Memory } from '@/services/database/persistence'
 
 const mocks = vi.hoisted(() => ({
   classify: vi.fn<(request: ChatRequest) => Promise<ChatResponse>>(),
   answer: vi.fn(),
-  memory: vi.fn(async () => []),
+  memory: vi.fn<() => Promise<Memory[]>>(async () => []),
   agent: vi.fn(async () => ({ answer: 'anonymous agent answer', steps: [], toolCalls: 0, reason: 'completed' })),
   chunks: [] as StreamChunk[][],
 }))
@@ -41,7 +42,7 @@ beforeEach(() => {
   mocks.classify.mockReset()
   mocks.answer.mockClear()
   mocks.agent.mockClear()
-  mocks.memory.mockClear()
+  mocks.memory.mockReset().mockResolvedValue([])
   mocks.chunks.length = 0
   useSettingsStore.setState({ ai: { ...DEFAULT_AI_CONFIG, baseUrl: 'http://127.0.0.1:1234', chatModel: 'anonymous', routing: { enabled: true } } })
   useChatStore.setState({ messages: [], streaming: false, error: null, agentTaskContext: null, agentMode: false,
@@ -49,6 +50,30 @@ beforeEach(() => {
 })
 
 describe('Router V2 real chat orchestration', () => {
+  const memory: Memory = { id: 'anonymous-memory', content: '默认用中文简洁回答', category: 'preference', source: 'manual_created',
+    status: 'active', locked: false, scopeType: 'global', scopeKey: null, createdAt: 1, updatedAt: 1 }
+
+  it('publishes memories returned by ordinary chat core retrieval as message sources', async () => {
+    mocks.memory.mockResolvedValue([memory])
+    mocks.chunks.push([{ content: '', done: true, toolCallDeltas: [{ index: 0, id: 'memory-source', name: 'search_memory', arguments: '{"query":"偏好"}' }] }])
+    const { result } = renderHook(() => useAiChat())
+    await act(async () => { await result.current.sendMessage('给个建议') })
+    expect(result.current.error).toBeNull()
+    expect(useChatStore.getState().messages.find(message => message.role === 'assistant')?.sources).toEqual([
+      { kind: 'memory', memoryId: memory.id, content: memory.content },
+    ])
+  })
+
+  it('publishes Direct prefetch sources without needing another tool call', async () => {
+    mocks.memory.mockResolvedValue([memory])
+    mocks.classify.mockResolvedValue({ id: 'route', role: 'assistant', content: '{"intent":"no_tool","toolCategories":[],"needsMemory":true,"confidence":0.9}' })
+    const { result } = renderHook(() => useAiChat())
+    await act(async () => { await result.current.sendMessage('这个说法靠谱吗？') })
+    expect(mocks.agent).not.toHaveBeenCalled()
+    expect(useChatStore.getState().messages.find(message => message.role === 'assistant')?.sources).toEqual([
+      { kind: 'memory', memoryId: memory.id, content: memory.content },
+    ])
+  })
   it('lets the main model recover an implicit memory need without entering Agent', async () => {
     useSettingsStore.setState(state => ({ ai: { ...state.ai, routing: { diagnostics: true } } }))
     mocks.chunks.push([{ content: '', done: true, toolCallDeltas: [{ index: 0, id: 'direct-memory', name: 'search_memory', arguments: '{"query":"偏好"}' }] }])
