@@ -31,6 +31,7 @@ import {
 import { buildReadingMarkRangeIndex, findReadingMarkConflict, type CreateReadingMarkResult, type ReadingMark, type ReadingMarkColor } from '@/services/readingMarks'
 import { eventMarker } from '@/services/eventMarker'
 import { startHeadingScroll } from '@/services/headingScroll'
+import { PREVIEW_SELECTION_DIAGNOSTICS_ENABLED, PreviewSelectionDiagnostics, type SelectionDiagnosticCause } from '@/services/previewSelectionDiagnostics'
 import type {
   MarkdownPreviewHandle,
   MarkdownPreviewProps,
@@ -589,6 +590,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const sourceRevealRangeRef = useRef<{ from: number; to: number } | null>(null)
   const selectionAnchorRef = useRef<number | null>(null)
   const dragStateRef = useRef<PreviewDragSelection | null>(null)
+  const selectionDiagnosticsRef = useRef<PreviewSelectionDiagnostics | null>(null)
+  const selectionDiagnosticPointRef = useRef<{ x: number; y: number } | null>(null)
   const nativeSelectionRecoveryRafRef = useRef<number | null>(null)
   /** 受支持交互 HTML（details 展开/折叠）的瞬时状态：块 ID + 块内序号 → 用户态；仅存本组件实例 ref，不写 Tab、不持久化 */
   const interactiveHtmlStateRef = useRef<Map<string, boolean>>(new Map())
@@ -883,18 +886,25 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     }
   }, [syncBlockHighlights, requiresWholeDocumentRender])
 
-  const applySelection = useCallback((range: { from: number; to: number } | null) => {
+  const applySelection = useCallback((range: { from: number; to: number } | null, cause: SelectionDiagnosticCause = 'apply') => {
     const prev = selectionRangeRef.current
     if (range === null || range.from === range.to) {
-      if (prev === null) return
+      if (prev === null) {
+        if (PREVIEW_SELECTION_DIAGNOSTICS_ENABLED && cause !== 'drag-frame') selectionDiagnosticsRef.current?.record('selection', cause)
+        return
+      }
       selectionRangeRef.current = null
     } else {
       const normalized = range.from <= range.to ? range : { from: range.to, to: range.from }
-      if (prev && prev.from === normalized.from && prev.to === normalized.to) return
+      if (prev && prev.from === normalized.from && prev.to === normalized.to) {
+        if (PREVIEW_SELECTION_DIAGNOSTICS_ENABLED && cause !== 'drag-frame') selectionDiagnosticsRef.current?.record('selection', cause)
+        return
+      }
       selectionRangeRef.current = normalized
     }
     // 只同步选区高亮：ref 驱动 + 块级增量，不触发任何 React 重渲染
     syncAllMountedBlocks({ search: false, selection: true, sourceReveal: false, readingMarks: false })
+    if (PREVIEW_SELECTION_DIAGNOSTICS_ENABLED) selectionDiagnosticsRef.current?.record('selection', cause)
   }, [syncAllMountedBlocks])
 
   const getSelectionSnapshot = useCallback((): PreviewSelectionSnapshot | null => {
@@ -941,7 +951,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   const clearTransientReadingMarkSelection = useCallback(() => {
     dismissReadingMarkUi()
     selectionAnchorRef.current = null
-    applySelection(null)
+    applySelection(null, 'transient-clear')
     clearNativePreviewSelection(rootRef.current)
     if (nativeSelectionRecoveryRafRef.current !== null) {
       cancelAnimationFrame(nativeSelectionRecoveryRafRef.current)
@@ -1109,6 +1119,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     const hadSourceReveal = sourceRevealRangeRef.current !== null
     searchStateRef.current = null
     selectionRangeRef.current = null
+    if (PREVIEW_SELECTION_DIAGNOSTICS_ENABLED) selectionDiagnosticsRef.current?.record('selection', 'content-change')
     sourceRevealRangeRef.current = null
     if (sourceRevealTimerRef.current !== null) {
       window.clearTimeout(sourceRevealTimerRef.current)
@@ -2132,9 +2143,10 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       drag.lastResolvedClientY = drag.clientY
       if (offset !== drag.focusOffset) {
         drag.focusOffset = offset
-        applySelection({ from: drag.anchorOffset, to: offset })
+        applySelection({ from: drag.anchorOffset, to: offset }, 'drag-frame')
       }
     }
+    if (PREVIEW_SELECTION_DIAGNOSTICS_ENABLED) selectionDiagnosticsRef.current?.record('drag-tick')
     drag.rafId = requestAnimationFrame(runDragFrameRef.current)
   }
 
@@ -2142,6 +2154,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     const root = rootRef.current
     if (!root) return
 
+    // 页边距属于滚动容器，不在正文 root 内；仍须通过同一源码映射接管拖选。
+    const selectionSurface = root.parentElement ?? root
     const handleMouseDown = (event: MouseEvent) => {
       if (event.button !== 0 || event.altKey) return
       annotationOverlayRef?.current?.hide()
@@ -2165,7 +2179,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
         lastResolvedClientX: event.clientX,
         lastResolvedClientY: event.clientY,
       }
-      applySelection(anchor === offset ? null : { from: anchor, to: offset })
+      applySelection(anchor === offset ? null : { from: anchor, to: offset }, 'drag-start')
     }
 
     const cancelDragOnSecondaryMouseDown = (event: MouseEvent) => {
@@ -2176,7 +2190,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       dragStateRef.current = null
       if (drag.rafId !== 0) cancelAnimationFrame(drag.rafId)
       selectionAnchorRef.current = null
-      applySelection(null)
+      applySelection(null, 'secondary-down')
       window.getSelection()?.removeAllRanges()
     }
 
@@ -2226,7 +2240,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     const completeSelection = (anchor: number, focus: number, event: MouseEvent) => {
       selectionAnchorRef.current = anchor
       const normalized = anchor === focus ? null : (anchor <= focus ? { from: anchor, to: focus } : { from: focus, to: anchor })
-      applySelection(normalized)
+      applySelection(normalized, 'drag-release')
       if (!normalized) {
         clearTransientReadingMarkSelection()
         return
@@ -2289,13 +2303,14 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       }
     }
 
-    root.addEventListener('mousedown', handleMouseDown)
+    selectionSurface.addEventListener('mousedown', handleMouseDown)
     document.addEventListener('mousedown', cancelDragOnSecondaryMouseDown, true)
     document.addEventListener('mousemove', handleMouseMove, true)
     document.addEventListener('mouseup', handleMouseUp, true)
     root.addEventListener('dblclick', handleDoubleClick)
     return () => {
-      root.removeEventListener('mousedown', handleMouseDown)
+      if (PREVIEW_SELECTION_DIAGNOSTICS_ENABLED) selectionDiagnosticsRef.current?.record('lifecycle', 'listener-cleanup')
+      selectionSurface.removeEventListener('mousedown', handleMouseDown)
       document.removeEventListener('mousedown', cancelDragOnSecondaryMouseDown, true)
       document.removeEventListener('mousemove', handleMouseMove, true)
       document.removeEventListener('mouseup', handleMouseUp, true)
@@ -2390,10 +2405,103 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   useEffect(() => {
     const container = scrollContainerRef.current
     if (!container) return
-    const close = () => clearTransientReadingMarkSelection()
+    const close = () => {
+      // 拖选中的滚轮/边缘自动滚动不能清除模型选区；端点未变时拖选帧不会重建高亮。
+      if (dragStateRef.current) return
+      clearTransientReadingMarkSelection()
+    }
     container.addEventListener('scroll', close, { passive: true })
     return () => container.removeEventListener('scroll', close)
   }, [clearTransientReadingMarkSelection, scrollState.viewportHeight])
+
+  useEffect(() => {
+    if (!PREVIEW_SELECTION_DIAGNOSTICS_ENABLED || !isVisible) return
+    const root = rootRef.current
+    const container = root?.parentElement
+    if (!root || !container) return
+    let exporting = false
+    const getRecorder = () => {
+      if (!selectionDiagnosticsRef.current) {
+        selectionDiagnosticsRef.current = new PreviewSelectionDiagnostics(() => {
+          const selection = selectionRangeRef.current
+          const drag = dragStateRef.current
+          const native = window.getSelection()
+          const point = selectionDiagnosticPointRef.current
+          const hitElement = point ? document.elementFromPoint(point.x, point.y) : null
+          const block = hitElement?.closest<HTMLElement>('[data-md-block-index]')
+          const blockIndex = block ? Number(block.dataset.mdBlockIndex) : null
+          const highlight = typeof CSS !== 'undefined' ? CSS.highlights?.get('preview-selection') : undefined
+          let connected = 0
+          highlight?.forEach((range) => {
+            if (root.contains(range.startContainer) && root.contains(range.endContainer)) connected += 1
+          })
+          return {
+            from: selection?.from ?? null, to: selection?.to ?? null,
+            anchor: drag?.anchorOffset ?? null, focus: drag?.focusOffset ?? null,
+            hit: point ? resolveCaretOffsetRef.current(point.x, point.y) : null,
+            hitTag: hitElement?.tagName ?? null, hitBlock: blockIndex !== null && Number.isFinite(blockIndex) ? blockIndex : null,
+            scrollTop: scrollContainerRef.current?.scrollTop ?? 0, viewportHeight: scrollContainerRef.current?.clientHeight ?? 0,
+            modelLength: modelRef.current.rawContent.length,
+            nativeRangeCount: native?.rangeCount ?? 0, nativeCollapsed: native?.isCollapsed ?? true,
+            highlightRanges: highlight?.size ?? 0, connectedHighlightRanges: connected,
+          }
+        })
+        toast.info('选区诊断已开启，异常后按 F8 保存轨迹')
+      }
+      return selectionDiagnosticsRef.current
+    }
+    const recordMouse = (event: MouseEvent) => {
+      const starting = event.type === 'mousedown' && event.target instanceof Node && container.contains(event.target)
+      if (starting) getRecorder()
+      const recorder = selectionDiagnosticsRef.current
+      if (!recorder || (!starting && activePreviewRoot !== root)) return
+      if (event.type === 'mousemove' && !dragStateRef.current && event.buttons === 0) return
+      const point = { x: event.clientX, y: event.clientY }
+      selectionDiagnosticPointRef.current = point
+      recorder.record(event.type as 'mousedown' | 'mousemove' | 'mouseup', undefined, {
+        ...point, button: event.button, buttons: event.buttons,
+      })
+    }
+    const recordWheel = (event: WheelEvent) => {
+      if (activePreviewRoot !== root || !selectionDiagnosticsRef.current) return
+      const point = { x: event.clientX, y: event.clientY }
+      selectionDiagnosticPointRef.current = point
+      selectionDiagnosticsRef.current.record('wheel', undefined, { ...point, buttons: event.buttons, deltaY: event.deltaY })
+    }
+    const recordScroll = () => {
+      if (activePreviewRoot === root) selectionDiagnosticsRef.current?.record('scroll')
+    }
+    const capture = (event: KeyboardEvent) => {
+      if (event.key !== 'F8' || event.repeat || event.ctrlKey || event.altKey || event.shiftKey || event.metaKey || activePreviewRoot !== root) return
+      const recorder = selectionDiagnosticsRef.current
+      if (!recorder) return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      if (exporting) return
+      // Freeze before the native dialog changes focus or selection.
+      const report = recorder.capture()
+      exporting = true
+      void import('@/services/previewSelectionDiagnosticsExport')
+        .then(({ exportPreviewSelectionDiagnostics }) => exportPreviewSelectionDiagnostics(report))
+        .then((saved) => { if (saved) toast.success('选区诊断轨迹已保存') })
+        .catch(() => toast.error('选区诊断轨迹保存失败，请重试 F8'))
+        .finally(() => { exporting = false })
+    }
+    document.addEventListener('mousedown', recordMouse, true)
+    document.addEventListener('mousemove', recordMouse, true)
+    document.addEventListener('mouseup', recordMouse, true)
+    container.addEventListener('wheel', recordWheel, { passive: true })
+    container.addEventListener('scroll', recordScroll, { passive: true })
+    document.addEventListener('keydown', capture, true)
+    return () => {
+      document.removeEventListener('mousedown', recordMouse, true)
+      document.removeEventListener('mousemove', recordMouse, true)
+      document.removeEventListener('mouseup', recordMouse, true)
+      container.removeEventListener('wheel', recordWheel)
+      container.removeEventListener('scroll', recordScroll)
+      document.removeEventListener('keydown', capture, true)
+    }
+  }, [isVisible])
 
   const rehypePlugins = useMemo(
     () => [

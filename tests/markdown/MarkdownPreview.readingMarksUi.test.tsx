@@ -299,6 +299,51 @@ describe('MarkdownPreview 批注浮层', () => {
     expect(toolbar!.querySelector('.gm-reading-mark-toolbar-actions')?.className).not.toContain('is-expanded')
   })
 
+  it.each([
+    ...[1, 2, 3, 4, 5, 6].map((level) => ({ level, padding: false })),
+    { level: 2, padding: true },
+    { level: 3, padding: true },
+  ])('从 $level 级标题拖选时滚动保留选区，随后仍可延伸并松手（页边距起点：$padding）', async ({ level, padding }) => {
+    const heading = '标题目标'
+    const body = '正文延伸目标'
+    const markdown = `${'#'.repeat(level)} ${heading}\n\n${body}`
+    const previewRef = { current: null } as MutableRefObject<MarkdownPreviewHandle | null>
+    const caretDocument = document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
+    caretDocument.caretRangeFromPoint = (x, y) => {
+      const textNode = host?.querySelector(y < 200 ? `h${level} span[data-gm-src-from]` : 'p span[data-gm-src-from]')?.firstChild
+      if (!textNode) return null
+      const range = document.createRange()
+      range.setStart(textNode, x < 50 ? 0 : (textNode.textContent?.length ?? 0))
+      range.collapse(true)
+      return range
+    }
+    render(<MarkdownPreview ref={previewRef} content={markdown} documentKey="doc-heading-drag" documentVersion={1} filePath={documentPath} readingMarks={emptyReadingMarks} onCreateReadingMark={vi.fn()} />, { container: host! })
+
+    const headingElement = host!.querySelector(`h${level}`)!
+    fireEvent.mouseDown(padding ? host! : headingElement, { button: 0, buttons: 1, clientX: 4, clientY: 110 })
+    fireEvent.mouseMove(document, { buttons: 1, clientX: 120, clientY: 110 })
+    await waitFor(() => expect(previewRef.current?.getSelection()?.text).toBe(heading))
+    const beforeScroll = previewRef.current!.getSelection()
+
+    fireEvent.wheel(host!, { deltaY: 100, buttons: 1 })
+    host!.scrollTop = 100
+    fireEvent.scroll(host!)
+    expect(previewRef.current?.getSelection()).toEqual(beforeScroll)
+    expect(screen.queryByRole('button', { name: '添加批注' })).not.toBeInTheDocument()
+
+    fireEvent.mouseMove(document, { buttons: 1, clientX: 120, clientY: 220 })
+    await waitFor(() => expect(previewRef.current?.getSelection()?.to).toBe(markdown.length))
+    expect(previewRef.current?.getSelection()?.from).toBe(markdown.indexOf(heading))
+    fireEvent.mouseUp(document, { button: 0, clientX: 120, clientY: 220 })
+    expect(previewRef.current?.getSelection()?.to).toBe(markdown.length)
+    expect(screen.getByRole('button', { name: '添加批注' })).toBeInTheDocument()
+
+    // 松手后的滚动仍关闭批注入口并清理临时选区。
+    fireEvent.scroll(host!)
+    expect(previewRef.current?.getSelection()).toBeNull()
+    expect(screen.queryByRole('button', { name: '添加批注' })).not.toBeInTheDocument()
+  })
+
   it('纯代码块选区可转换为稳定快照并显示批注入口', async () => {
     const caretRangeFromPoint = document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
     caretRangeFromPoint.caretRangeFromPoint = (x) => {
