@@ -850,6 +850,7 @@ export function useAiChat() {
       const abortStaleScope = () => { if (!isCurrentRequest()) requestController.abort('scope_changed') }
       const unsubscribeChatScope = useChatStore.subscribe(abortStaleScope)
       const unsubscribeWorkspaceScope = useAppStore.subscribe(abortStaleScope)
+      const directToolSteps = new Map<string, AgentStep>()
       try {
         updateRequestMessage('正在生成回答...')
         addTimelineItem({ type: 'answer_streaming', label: '生成回答' })
@@ -866,8 +867,22 @@ export function useAiChat() {
           onStep: step => {
             if (!isCurrentRequest()) return
             addAgentStep(step)
-            addTimelineItem({ type: step.type === 'action' ? 'local_search_start' : 'local_search_found',
-              label: step.type === 'action' ? getAgentToolLabel(step.toolName || '') : '检索结果已返回' })
+            const key = JSON.stringify([step.toolName, step.toolArgs])
+            if (step.type === 'action' || step.type === 'progress') directToolSteps.set(key, step)
+            else if (step.type === 'observation') directToolSteps.delete(key)
+            const activeStatuses = [...new Set([...directToolSteps.values()].map(activeStep => getAgentProgressText(activeStep)))]
+            updateRequestMessage(activeStatuses.length ? activeStatuses.join('；')
+              : step.type === 'thought' ? step.content : getAgentProgressText(step))
+            if (step.type === 'progress') {
+              const type = step.progressStage === 'rag_initializing' ? 'index_initializing'
+                : step.progressStage === 'rag_ready' ? 'index_ready'
+                : step.progressStage === 'rag_fallback' ? 'index_fallback' : 'local_search_start'
+              addTimelineItem({ type, label: getAgentProgressText(step) })
+            } else {
+              addTimelineItem({ type: step.type === 'thought' ? 'answer_streaming'
+                : step.type === 'action' ? 'local_search_start' : 'local_search_found',
+              label: step.type === 'thought' ? step.content : getAgentProgressText(step) })
+            }
           },
           onSources: registry => {
             if (!isCurrentRequest()) return

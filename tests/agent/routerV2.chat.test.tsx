@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   classify: vi.fn<(request: ChatRequest) => Promise<ChatResponse>>(),
   answer: vi.fn(),
   memory: vi.fn<() => Promise<Memory[]>>(async () => []),
+  knowledge: vi.fn<typeof import('@/services/rag/pipeline').searchRelevant>(async () => []),
   agent: vi.fn(async () => ({ answer: 'anonymous agent answer', steps: [], toolCalls: 0, reason: 'completed' })),
   chunks: [] as StreamChunk[][],
 }))
@@ -30,6 +31,9 @@ vi.mock('@/services/ai/aiClient', () => ({
   createChatProvider: () => client,
 }))
 vi.mock('@/services/settingsSecrets', () => ({ ensureSettingsSecretsHydrated: async () => {} }))
+vi.mock('@/services/rag/pipeline', async importOriginal => ({
+  ...await importOriginal<typeof import('@/services/rag/pipeline')>(), searchRelevant: mocks.knowledge, getKnowledgeDocumentStates: async () => [],
+}))
 vi.mock('@/services/database/db', async importOriginal => ({ ...await importOriginal<typeof import('@/services/database/db')>(), isDatabaseReady: () => true }))
 vi.mock('@/hooks/useTauri', async importOriginal => ({ ...await importOriginal<typeof import('@/hooks/useTauri')>(), isTauri: () => true }))
 vi.mock('@/services/agent', async importOriginal => ({ ...await importOriginal<typeof import('@/services/agent')>(), runAgent: mocks.agent }))
@@ -43,6 +47,7 @@ beforeEach(() => {
   mocks.answer.mockClear()
   mocks.agent.mockClear()
   mocks.memory.mockReset().mockResolvedValue([])
+  mocks.knowledge.mockReset().mockResolvedValue([])
   mocks.chunks.length = 0
   useSettingsStore.setState({ ai: { ...DEFAULT_AI_CONFIG, baseUrl: 'http://127.0.0.1:1234', chatModel: 'anonymous', routing: { enabled: true } } })
   useChatStore.setState({ messages: [], streaming: false, error: null, agentTaskContext: null, agentMode: false,
@@ -50,6 +55,50 @@ beforeEach(() => {
 })
 
 describe('Router V2 real chat orchestration', () => {
+  it('keeps pending knowledge status after memory completes and shows index progress before final generation', async () => {
+    let finishMemory!: (value: Memory[]) => void
+    let finishKnowledge!: (value: []) => void
+    let reportProgress!: (stage: 'initializing' | 'fallback') => void
+    mocks.memory.mockImplementationOnce(() => new Promise(resolve => { finishMemory = resolve }))
+    mocks.knowledge.mockImplementationOnce((_query, options) => {
+      reportProgress = options!.onProgress!
+      return new Promise(resolve => { finishKnowledge = resolve })
+    })
+    mocks.chunks.push([{ content: '', done: true, toolCallDeltas: [
+      { index: 0, id: 'memory-status', name: 'search_memory', arguments: '{"query":"偏好"}' },
+      { index: 1, id: 'knowledge-status', name: 'search_knowledge', arguments: '{"query":"资料"}' },
+    ] }])
+    const assistantText = () => useChatStore.getState().messages.find(message => message.role === 'assistant')?.content
+    mocks.answer.mockImplementationOnce(() => {}).mockImplementationOnce(() => expect(assistantText()).toBe('正在生成回答...'))
+    const { result } = renderHook(() => useAiChat())
+    let pending!: Promise<void>
+    act(() => { pending = result.current.sendMessage('给个建议') })
+    await waitFor(() => expect(mocks.knowledge).toHaveBeenCalledTimes(1))
+    expect(assistantText()).toContain('正在读取长期记忆库...')
+    expect(assistantText()).toContain('正在检索本地知识库索引...')
+    await act(async () => { finishMemory([]) })
+    await waitFor(() => expect(assistantText()).toBe('正在检索本地知识库索引...'))
+    act(() => reportProgress('initializing'))
+    expect(assistantText()).toBe('正在初始化索引库…')
+    act(() => reportProgress('fallback'))
+    expect(assistantText()).toBe('索引库初始化失败，正在使用关键词检索…')
+    await act(async () => { finishKnowledge([]); await pending })
+    expect(assistantText()).toBe('anonymous direct answer')
+  })
+
+  it('shows memory retrieval status while a Direct core read is pending, then replaces it with the answer', async () => {
+    let finishMemory!: (value: Memory[]) => void
+    mocks.memory.mockImplementationOnce(() => new Promise(resolve => { finishMemory = resolve }))
+    mocks.chunks.push([{ content: '', done: true, toolCallDeltas: [{ index: 0, id: 'memory-status', name: 'search_memory', arguments: '{"query":"偏好"}' }] }])
+    const { result } = renderHook(() => useAiChat())
+    let pending!: Promise<void>
+    act(() => { pending = result.current.sendMessage('给个建议') })
+    await waitFor(() => expect(mocks.memory).toHaveBeenCalledTimes(1))
+    expect(useChatStore.getState().messages.find(message => message.role === 'assistant')?.content).toBe('正在读取长期记忆库...')
+    await act(async () => { finishMemory([]); await pending })
+    expect(useChatStore.getState().messages.find(message => message.role === 'assistant')?.content).toBe('anonymous direct answer')
+  })
+
   const memory: Memory = { id: 'anonymous-memory', content: '默认用中文简洁回答', category: 'preference', source: 'manual_created',
     status: 'active', locked: false, scopeType: 'global', scopeKey: null, createdAt: 1, updatedAt: 1 }
 

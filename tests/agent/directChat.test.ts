@@ -7,7 +7,7 @@ import { resolveRouterConfig } from '@/services/agent/routerConfig'
 import { createSourceReferenceRegistry } from '@/services/ai/sourceReferences'
 
 const mocks = vi.hoisted(() => ({
-  execute: vi.fn(async () => ({ result: '已确认事实', rawResult: '已确认事实', status: 'success' as const })),
+  execute: vi.fn<typeof import('@/services/agent/executor').executeTool>(async () => ({ result: '已确认事实', rawResult: '已确认事实', status: 'success' })),
   eligibility: { desktop: true, databaseAvailable: true, readAllowed: true, writeAllowed: false,
     hasSelection: false, hasReadableContext: false, hasEditTarget: false, memoryWriteRequested: false,
     webEnabled: false, reminderEnabled: false },
@@ -65,7 +65,7 @@ describe('bounded Direct core tools', () => {
     const s = setup([{ toolCalls: [memoryCall()] }, { content: '基于事实回答' }])
     await streamDirectChat(s.options)
     expect(mocks.execute).toHaveBeenCalledTimes(1)
-    expect(mocks.execute.mock.calls[0]).toEqual(['search_memory', { query: '安排', topK: 5 }, 10000, '给个安排', undefined, undefined, undefined, { workspacePath: 'C:/Temp/anonymous' }])
+    expect(mocks.execute.mock.calls[0]).toEqual(['search_memory', { query: '安排', topK: 5 }, 10000, '给个安排', undefined, expect.any(Function), undefined, { workspacePath: 'C:/Temp/anonymous' }])
     expect(s.requests).toHaveLength(2)
     expect(s.requests[1].tools).toBeUndefined()
     expect(s.requests[1].messages).toContainEqual({ role: 'assistant', content: '', tool_calls: [
@@ -80,6 +80,25 @@ describe('bounded Direct core tools', () => {
     await streamDirectChat(s.options)
     expect(mocks.execute).toHaveBeenCalledTimes(1)
     expect(s.requests).toHaveLength(2)
+  })
+
+  it('forwards knowledge index progress, ignores late progress, and announces final generation', async () => {
+    let reportProgress!: (stage: 'rag_initializing' | 'rag_fallback') => void
+    mocks.execute.mockImplementationOnce(async (...args) => {
+      reportProgress = args[5]!
+      reportProgress('rag_initializing')
+      reportProgress('rag_fallback')
+      return { result: '资料片段', rawResult: '资料片段', status: 'success' }
+    })
+    const s = setup([{ toolCalls: [{ id: 'knowledge', name: 'search_knowledge', args: { query: '资料' } }] }, { content: '回答' }])
+    const onStep = vi.fn()
+    await streamDirectChat({ ...s.options, onStep })
+    expect(onStep.mock.calls.map(([step]) => [step.type, step.progressStage || step.content])).toEqual([
+      ['action', '正在检索本地资料'], ['progress', 'rag_initializing'], ['progress', 'rag_fallback'],
+      ['observation', '资料片段'], ['thought', '正在生成回答...'],
+    ])
+    reportProgress('rag_initializing')
+    expect(onStep).toHaveBeenCalledTimes(5)
   })
 
   it('coalesces identical default and explicit TopK calls without duplicating evidence', async () => {
