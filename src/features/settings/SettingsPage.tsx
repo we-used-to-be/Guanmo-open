@@ -69,6 +69,8 @@ import { AiShortcutSettings } from '@/features/settings/AiShortcutSettings'
 import { UsageActivity } from '@/features/settings/UsageActivity'
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '@/services/requestTimeout'
 import { AdvancedTimeoutSettings } from '@/features/settings/AdvancedTimeoutSettings'
+import { PreviewScrollSettings } from '@/features/settings/PreviewScrollSettings'
+import { PREVIEW_SCROLL_DAMPING } from '@/services/previewWheel'
 import { ThemeManager } from '@/features/settings/ThemeManager'
 import { DiagnosticsSettings } from '@/features/settings/DiagnosticsSettings'
 import { requestProductTour } from '@/features/productTour/productTourEvents'
@@ -1371,6 +1373,7 @@ function EditorSettings() {
       <SettingField label="同步滚动" description="编辑 + 预览模式下同步两侧滚动位置">
         <Switch checked={editor.syncScroll} onChange={(v) => updateEditorSettings({ syncScroll: v })} />
       </SettingField>
+      <PreviewScrollSettings value={editor.previewScrollDamping} onChange={(previewScrollDamping) => updateEditorSettings({ previewScrollDamping })} />
       <SettingField label="预览内源码编辑" description="预览模式下按住 Alt 并点击 Markdown 块，可直接编辑该块源码">
         <Switch checked={editor.inlinePreviewEdit} onChange={(v) => updateEditorSettings({ inlinePreviewEdit: v })} />
       </SettingField>
@@ -1542,6 +1545,7 @@ function GeneralSettings() {
       autoSave: true,
       autoSaveDelay: 1000,
       syncScroll: true,
+      previewScrollDamping: PREVIEW_SCROLL_DAMPING.default,
       autoSendAiShortcut: true,
       inlinePreviewEdit: true,
       modePerformancePolicy: 'balanced',

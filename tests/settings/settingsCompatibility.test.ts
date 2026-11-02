@@ -65,7 +65,17 @@ describe('设置兼容', () => {
     const state = store.getState()
 
     expect(state.editor).toMatchObject({ fontSize: 18, lineHeight: 1.65, fullscreenContentPaddingPercent: 7, inlinePreviewEdit: true, autoSendAiShortcut: true, defaultOpenMode: 'preview' })
+    expect(state.editor.previewScrollDamping).toBe(90)
     expect(state.appearance).toMatchObject({ themeId: 'dark', lastLightThemeId: 'warm', aiAvatarStyle: 'sprite', aiAssistantFontSize: 14, fullscreenTransitionEnabled: true, sendMessageAnimationEnabled: true, fullscreenOptionAnimationEnabled: true })
+  })
+
+  it('预览滚动设置保留有效值并限制异常输入', async () => {
+    const store = await loadSettingsStore({ editor: { previewScrollDamping: 135 } })
+    expect(store.getState().editor.previewScrollDamping).toBe(135)
+    store.getState().updateEditorSettings({ previewScrollDamping: 999 })
+    expect(store.getState().editor.previewScrollDamping).toBe(180)
+    const restored = await loadSettingsStore({ editor: { previewScrollDamping: 'bad' } })
+    expect(restored.getState().editor.previewScrollDamping).toBe(90)
   })
 
   it('将旧版全屏像素边距迁移为百分比', async () => {

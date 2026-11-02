@@ -9,6 +9,7 @@ import {
   type ScrollSyncSession,
 } from '@/services/editorSession'
 import type { MarkdownPreviewHandle } from './markdownPreviewTypes'
+import { attachPreviewWheel } from '@/services/previewWheel'
 
 interface UseReadingPositionBridgeOptions {
   activeTabId: string | null | undefined
@@ -76,6 +77,14 @@ export function useReadingPositionBridge({
   updateEditorHeading,
   setTocFocus,
 }: UseReadingPositionBridgeOptions) {
+  const previewScrollDamping = useSettingsStore((state) => state.editor.previewScrollDamping)
+  useEffect(() => {
+    const container = leftPreviewContainerRef.current
+    if (viewMode !== 'preview' || !activeTabId || !container) return
+
+    return attachPreviewWheel(container, previewScrollDamping)
+  }, [activeTabId, leftPreviewContainerRef, viewMode, previewScrollDamping])
+
   const readingPositionsRef = useRef<ReadingPositionSession | null>(null)
   if (!readingPositionsRef.current) {
     readingPositionsRef.current = seedReadingPositionsFromStore()
