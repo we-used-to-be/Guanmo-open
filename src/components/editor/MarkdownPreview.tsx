@@ -6,7 +6,7 @@ import rehypeHighlight from 'rehype-highlight'
 import rehypeKatex from 'rehype-katex'
 import { Highlighter } from 'lucide-react'
 import { motion } from 'motion/react'
-import { createContext, forwardRef, isValidElement, lazy, memo, Suspense, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createContext, forwardRef, isValidElement, lazy, memo, Suspense, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { MarkdownImage } from './MarkdownImage'
 import { rehypeWindowsImagePaths } from '@/services/markdownImagePaths'
@@ -17,7 +17,7 @@ import { describeFileOperationError } from '@/services/fileOperationErrors'
 import { createHeadingId } from '@/services/markdownToc'
 import { remarkStandaloneDisplayMath } from '@/services/markdownMath'
 import { useSettingsStore } from '@/stores/settingsStore'
-import { createMarkdownPreviewModel, computeVisibleRange, findAnchorTarget, findBlockIndexByLine, findBlockIndexByOffset, getEstimatedPreviewLineForTop, getEstimatedPreviewTopForLine, getSourceOffsetForLine, MARKDOWN_GFM_OPTIONS, searchVisibleText, type MarkdownPreviewModel, type PreviewBlock } from '@/services/markdownPreviewModel'
+import { createMarkdownPreviewModel, computeVisibleRange, findAnchorTarget, findBlockIndexByLine, findBlockIndexByOffset, getEstimatedPreviewLineForTop, getEstimatedPreviewTopForLine, getSourceOffsetForLine, MARKDOWN_GFM_OPTIONS, searchVisibleText, type FootnoteDefinition, type FootnoteReference, type MarkdownPreviewModel, type PreviewBlock } from '@/services/markdownPreviewModel'
 import {
   buildDocumentRangeInfo,
   buildDomRangesForSourceRange,
@@ -67,7 +67,14 @@ let markdownHtmlPluginsPromise: Promise<RehypePlugins> | null = null
 
 const BlockLineBaseContext = createContext<number>(0)
 const FootnoteSectionContext = createContext(true)
-const FootnoteReferenceSuffixContext = createContext<string | null>(null)
+interface FootnoteRenderContext {
+  idPrefix: string
+  referencesByOffset: ReadonlyMap<number, FootnoteReference>
+  sectionReferences: boolean
+  definitionNumbers?: ReadonlyMap<string, number>
+  backrefTargets?: ReadonlyMap<string, string>
+}
+const FootnoteRenderContextProvider = createContext<FootnoteRenderContext | null>(null)
 function useBlockLineBase(): number {
   return useContext(BlockLineBaseContext)
 }
@@ -333,7 +340,7 @@ interface StableMarkdownContentProps {
   components: Partial<Components>
   baseLine: number
   renderFootnoteSection?: boolean
-  footnoteReferenceSuffix?: string
+  footnoteRenderContext?: FootnoteRenderContext
   readingMarkRanges?: Array<{ id: string; from: number; to: number }>
 }
 
@@ -344,12 +351,12 @@ const StableMarkdownContent = memo(function StableMarkdownContent({
   components,
   baseLine,
   renderFootnoteSection = true,
-  footnoteReferenceSuffix,
+  footnoteRenderContext,
 }: StableMarkdownContentProps) {
   return (
     <BlockLineBaseContext.Provider value={baseLine}>
       <FootnoteSectionContext.Provider value={renderFootnoteSection}>
-        <FootnoteReferenceSuffixContext.Provider value={footnoteReferenceSuffix ?? null}>
+        <FootnoteRenderContextProvider.Provider value={footnoteRenderContext ?? null}>
           <ReactMarkdown
             skipHtml={skipHtml}
             remarkPlugins={MARKDOWN_REMARK_PLUGINS}
@@ -358,7 +365,7 @@ const StableMarkdownContent = memo(function StableMarkdownContent({
           >
             {markdown}
           </ReactMarkdown>
-        </FootnoteReferenceSuffixContext.Provider>
+        </FootnoteRenderContextProvider.Provider>
       </FootnoteSectionContext.Provider>
     </BlockLineBaseContext.Provider>
   )
@@ -475,30 +482,97 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     () => model.definitions.map((definition) => definition.rawSource).join('\n'),
     [model.definitions],
   )
-  const footnoteDefinitionSource = useMemo(
-    () => model.footnoteDefinitions.map((definition) => definition.rawSource).join('\n\n'),
-    [model.footnoteDefinitions],
-  )
-  const footnoteReferences = useMemo(() => {
-    const references: Array<{ source: string; identifier: string; startLine: number }> = []
-    const re = /\[\^[^\]]+\]/g
-    for (const block of model.blocks) {
-      if (block.type === 'footnoteDefinition') continue
-      let match: RegExpExecArray | null
-      while ((match = re.exec(block.rawSource)) !== null) {
-        references.push({
-          source: match[0],
-          identifier: match[0].slice(2, -1).trim().toLowerCase(),
-          startLine: block.startLine,
-        })
-      }
+  const footnoteIdPrefix = `gm-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
+  const footnoteReferences = model.footnoteReferences
+  const footnoteDefinitions = model.footnoteDefinitions
+  const footnoteReferencesByBlock = useMemo(() => {
+    const referencesByBlock = new Map<string, FootnoteReference[]>()
+    for (const reference of footnoteReferences) {
+      if (reference.isDefinitionReference) continue
+      const references = referencesByBlock.get(reference.blockId) ?? []
+      references.push(reference)
+      referencesByBlock.set(reference.blockId, references)
     }
-    return references
-  }, [model.blocks])
-  const standaloneFootnoteMarkdown = useMemo(() => {
-    if (!footnoteDefinitionSource || footnoteReferences.length === 0) return ''
-    return `${footnoteReferences.map((reference) => reference.source).join(' ')}\n\n${footnoteDefinitionSource}`
-  }, [footnoteDefinitionSource, footnoteReferences])
+    return referencesByBlock
+  }, [footnoteReferences])
+  const footnoteDefinitionsByIdentifier = useMemo(
+    () => {
+      const definitions = new Map<string, FootnoteDefinition>()
+      for (const definition of footnoteDefinitions) {
+        if (!definitions.has(definition.identifier)) definitions.set(definition.identifier, definition)
+      }
+      return definitions
+    },
+    [footnoteDefinitions],
+  )
+  const { standaloneFootnoteMarkdown, standaloneFootnoteRenderContext, wholeDocumentFootnoteRenderContext } = useMemo(() => {
+    const bodyReferences = footnoteReferences.filter((reference) => !reference.isDefinitionReference)
+    const usedIdentifiers = new Set(model.blocks.flatMap((block) => block.footnoteDefinitionIdentifiers ?? []))
+    const seenDefinitions = new Set<string>()
+    const definitionOrder = new Map<string, number>()
+    for (const reference of footnoteReferences) {
+      if (!definitionOrder.has(reference.identifier)) definitionOrder.set(reference.identifier, reference.number)
+    }
+    const definitions = model.footnoteDefinitions.filter((definition) => {
+      if (!usedIdentifiers.has(definition.identifier) || seenDefinitions.has(definition.identifier)) return false
+      seenDefinitions.add(definition.identifier)
+      return true
+    }).sort((left, right) => (definitionOrder.get(left.identifier) ?? Number.MAX_SAFE_INTEGER) - (definitionOrder.get(right.identifier) ?? Number.MAX_SAFE_INTEGER))
+    const referencesByOffset = new Map<number, FootnoteReference>()
+    const backrefTargets = new Map<string, string>()
+    const definitionNumbers = new Map<string, number>()
+    for (const definition of definitions) {
+      const reference = footnoteReferences.find((item) => item.identifier === definition.identifier)
+      if (reference) definitionNumbers.set(`user-content-fn-${definition.identifier}`, reference.number)
+    }
+    const wholeDocumentReferencesByOffset = new Map(footnoteReferences.map((reference) => [reference.startOffset, reference]))
+    const wholeDocumentBackrefTargets = new Map<string, string>()
+    for (const reference of footnoteReferences) {
+      const generatedId = `user-content-fnref-${reference.identifier}${reference.occurrence > 1 ? `-${reference.occurrence}` : ''}`
+      wholeDocumentBackrefTargets.set(`#${generatedId}`, `${footnoteIdPrefix}-ref-${reference.index}`)
+    }
+    const wholeDocumentFootnoteRenderContext = footnoteReferences.length > 0
+      ? {
+          idPrefix: footnoteIdPrefix,
+          referencesByOffset: wholeDocumentReferencesByOffset,
+          sectionReferences: false,
+          definitionNumbers,
+          backrefTargets: wholeDocumentBackrefTargets,
+        } satisfies FootnoteRenderContext
+      : undefined
+    if (bodyReferences.length === 0 || definitions.length === 0) {
+      return { standaloneFootnoteMarkdown: '', standaloneFootnoteRenderContext: undefined, wholeDocumentFootnoteRenderContext }
+    }
+
+    let sourceOffset = 0
+    for (const reference of bodyReferences) {
+      referencesByOffset.set(sourceOffset, reference)
+      sourceOffset += reference.source.length + 1
+    }
+    for (const reference of footnoteReferences) {
+      const generatedId = `user-content-fnref-${reference.identifier}${reference.occurrence > 1 ? `-${reference.occurrence}` : ''}`
+      backrefTargets.set(
+        `#${generatedId}`,
+        `${footnoteIdPrefix}-ref-${reference.index}${reference.isDefinitionReference ? '-section' : ''}`,
+      )
+    }
+    const referencesSource = bodyReferences.map((reference) => reference.source).join(' ')
+    sourceOffset = referencesSource.length + 2
+    for (const definition of definitions) {
+      for (const reference of footnoteReferences) {
+        if (reference.isDefinitionReference && reference.startOffset >= definition.startOffset && reference.endOffset <= definition.endOffset) {
+          referencesByOffset.set(sourceOffset + reference.startOffset - definition.startOffset, reference)
+        }
+      }
+      sourceOffset += definition.rawSource.length + 2
+    }
+
+    return {
+      standaloneFootnoteMarkdown: `${referencesSource}\n\n${definitions.map((definition) => definition.rawSource).join('\n\n')}`,
+      standaloneFootnoteRenderContext: { idPrefix: footnoteIdPrefix, referencesByOffset, sectionReferences: true, definitionNumbers, backrefTargets } satisfies FootnoteRenderContext,
+      wholeDocumentFootnoteRenderContext,
+    }
+  }, [footnoteIdPrefix, footnoteReferences, model])
   const { hasEmbeddedHtml, requiresWholeDocumentRender } = model
   const [htmlRehypePlugins, setHtmlRehypePlugins] = useState<RehypePlugins | null>(null)
   const [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(null)
@@ -2524,7 +2598,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
 
   const components = useMemo<Partial<Components>>(() => {
     const headingIds = new Map<string, number>()
-    const handleAnchorClick = (href?: string, isFootnoteBackref?: boolean) => (event: React.MouseEvent<HTMLAnchorElement>) => {
+    const handleAnchorClick = (href?: string, isFootnoteBackref?: boolean, isFootnoteReference?: boolean) => (event: React.MouseEvent<HTMLAnchorElement>) => {
       if (!href?.startsWith('#')) {
         if (!href || isTauri()) {
           event.preventDefault()
@@ -2553,20 +2627,45 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
         const reference = identifier && backrefIndex >= 0
           ? footnoteReferences.filter((item) => item.identifier === identifier)[backrefIndex]
           : undefined
-        const container = scrollContainerRef.current
-        const top = reference
-          ? getEstimatedPreviewTopForLine(model, reference.startLine, estimateBlockHeight, measuredHeightsRef.current)
-          : undefined
-        if (container && typeof top === 'number') {
-          container.scrollTo({ top: Math.max(0, top - 24), behavior: 'smooth' })
+        const resolvedHref = event.currentTarget.getAttribute('href')
+        const nestedTarget = reference?.isDefinitionReference && resolvedHref?.startsWith('#')
+          ? rootRef.current?.querySelector<HTMLElement>(`#${CSS.escape(resolvedHref.slice(1))}`)
+          : null
+        if (nestedTarget) {
+          nestedTarget.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          nestedTarget.focus({ preventScroll: true })
           navigated = true
+        }
+        if (reference && !reference.isDefinitionReference) {
+          navigated = scrollToLineInternal(reference.startLine)
         }
       } else {
         target ??= rootRef.current?.querySelector<HTMLElement>(`#${CSS.escape(id)}`)
         if (target instanceof HTMLElement) {
-          target.scrollIntoView({ behavior: 'smooth', block: 'start' })
-          target.focus({ preventScroll: true })
-          navigated = true
+          const container = scrollContainerRef.current
+          if (isFootnoteReference && container) {
+            const footnoteTarget = target
+            const getTargetTop = () => {
+              if (!mountedRef.current || scrollContainerRef.current !== container || !footnoteTarget.isConnected) return undefined
+              return footnoteTarget.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - 24
+            }
+            let cleanup: (() => void) | null = null
+            cleanup = startHeadingScroll({
+              container,
+              fadeElement: rootRef.current,
+              getTargetTop,
+              onBeforeReveal: () => footnoteTarget.focus({ preventScroll: true }),
+              onSettled: () => {
+                if (cleanup && headingScrollCancelRef.current === cleanup) headingScrollCancelRef.current = null
+              },
+            })
+            if (cleanup) headingScrollCancelRef.current = cleanup
+            navigated = true
+          } else {
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            target.focus({ preventScroll: true })
+            navigated = true
+          }
         } else {
           // 模型驱动回退：目标未挂载（虚拟窗口外）或为标题 slug / HTML id 锚点时按全文模型定位
           const anchorTarget = findAnchorTarget(model, id)
@@ -2701,28 +2800,39 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
               </blockquote>
             )
           },
-          a: ({ href, children, node: _node, ...props }) => {
+          a: ({ href, children, node, ...props }) => {
             // eslint-disable-next-line react-hooks/rules-of-hooks
-            const footnoteSuffix = useContext(FootnoteReferenceSuffixContext)
+            const footnoteContext = useContext(FootnoteRenderContextProvider)
             const isHashLink = href?.startsWith('#')
             const isFootnoteBackref = 'data-footnote-backref' in props
             const isFootnoteReference = 'data-footnote-ref' in props
-            const anchorId = isFootnoteReference && footnoteSuffix && typeof props.id === 'string'
-              ? `${props.id}-${footnoteSuffix}`
-              : props.id
-            // 背向跳转（backref→正文）：保持原始 href，由 handleAnchorClick 查找首个匹配的 data-footnote-ref 元素
+            const sourceOffset = node?.position?.start.offset
+            const footnoteReference = isFootnoteReference && typeof sourceOffset === 'number'
+              ? footnoteContext?.referencesByOffset.get(sourceOffset)
+              : undefined
+            const anchorId = footnoteContext && isFootnoteReference && footnoteReference
+              ? `${footnoteContext.idPrefix}-ref-${footnoteReference.index}${footnoteContext.sectionReferences ? '-section' : ''}`
+              : footnoteContext && (isFootnoteReference || isFootnoteBackref) && typeof props.id === 'string'
+                ? `${footnoteContext.idPrefix}-${props.id}`
+                : props.id
+            const anchorHref = footnoteContext && isFootnoteBackref && href
+              ? `#${footnoteContext.backrefTargets?.get(href) ?? `${footnoteContext.idPrefix}-${href.slice(1)}`}`
+              : footnoteContext && isFootnoteReference && href?.startsWith('#')
+                ? `#${footnoteContext.idPrefix}-${href.slice(1)}`
+                : href
+            // 背向跳转（backref→正文）由 handleAnchorClick 按全文引用顺序定位源码行。
             return (
               <a
                 {...props}
                 id={anchorId}
-                  href={href || undefined}
+                href={anchorHref || undefined}
                 className="text-gm-primary hover:underline font-bold transition-colors hover:text-gm-primary-hover"
-                  target={isHashLink || !href || isTauri() ? undefined : '_blank'}
+                target={isHashLink || !href || isTauri() ? undefined : '_blank'}
                 rel={isHashLink ? undefined : 'noopener noreferrer'}
-                  onClick={handleAnchorClick(href, isFootnoteBackref)}
-                  onAuxClick={(event) => { if (event.button === 1) handleAnchorClick(href, isFootnoteBackref)(event) }}
+                onClick={handleAnchorClick(isFootnoteBackref ? href : anchorHref, isFootnoteBackref, isFootnoteReference)}
+                onAuxClick={(event) => { if (event.button === 1) handleAnchorClick(isFootnoteBackref ? href : anchorHref, isFootnoteBackref, isFootnoteReference)(event) }}
               >
-                {isFootnoteBackref ? (children && String(children).trim() ? children : '↩ 返回正文') : children}
+                {footnoteReference ? footnoteReference.number : isFootnoteBackref ? (children && String(children).trim() ? children : '↩ 返回正文') : children}
               </a>
             )
           },
@@ -2737,8 +2847,16 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
             const base = useBlockLineBase()
             const localLine = node?.position?.start?.line
             const line = typeof localLine === 'number' ? localLine + base : undefined
+            // eslint-disable-next-line react-hooks/rules-of-hooks
+            const footnoteContext = useContext(FootnoteRenderContextProvider)
+            const id = footnoteContext && typeof liProps.id === 'string' && liProps.id.startsWith('user-content-fn-')
+              ? `${footnoteContext.idPrefix}-${liProps.id}`
+              : liProps.id
+            const footnoteNumber = typeof liProps.id === 'string'
+              ? footnoteContext?.definitionNumbers?.get(liProps.id)
+              : undefined
             return (
-              <li data-md-line={line} {...liProps}>
+              <li data-md-line={line} {...liProps} id={id} value={footnoteNumber}>
                 {children}
               </li>
             )
@@ -2823,7 +2941,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
             )
           },
         }
-  }, [cancelProgrammaticScroll, estimateBlockHeight, filePath, fontSize, footnoteReferences, model, onHeadingClick, onTaskToggle, scrollToLineInternal])
+  }, [cancelProgrammaticScroll, filePath, fontSize, footnoteReferences, model, onHeadingClick, onTaskToggle, scrollToLineInternal])
 
   return (
     <div
@@ -2842,6 +2960,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
           <StableMarkdownContent
             baseLine={0}
             markdown={normalizedContent}
+            footnoteRenderContext={wholeDocumentFootnoteRenderContext}
             readingMarkRanges={readingMarkHitRanges}
           skipHtml={skipHtml || (hasEmbeddedHtml && !htmlRehypePlugins)}
           rehypePlugins={wholeDocumentRehypePlugins}
@@ -2851,10 +2970,18 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
         <div style={{ position: 'relative', height: visible.totalHeight, minHeight: visible.totalHeight > 0 ? undefined : '100%' }}>
           {model.blocks.slice(visible.startIndex, visible.endIndex).map((block, index) => {
             const globalIndex = visible.startIndex + index
-            const isFootnoteDefinition = block.type === 'footnoteDefinition'
-            const footnoteContext = footnoteDefinitionSource
-              ? `${footnoteDefinitionSource}\n\n<!-- guanmo-footnote-context -->`
-              : ''
+            if (block.type === 'footnoteDefinition') return null
+            const blockReferences = footnoteReferencesByBlock.get(block.blockId) ?? []
+            const referencesByOffset = new Map(blockReferences.map((reference) => [reference.startOffset - block.startOffset, reference]))
+            const footnoteDefinitions = (block.footnoteDefinitionIdentifiers ?? [])
+              .map((identifier) => footnoteDefinitionsByIdentifier.get(identifier))
+              .filter((definition): definition is NonNullable<typeof definition> => Boolean(definition))
+            const footnoteDefinitionSource = footnoteDefinitions.map((definition) => definition.rawSource).join('\n\n')
+            const markdown = [
+              normalizedContent.slice(block.normalizedStartOffset, block.normalizedEndOffset),
+              referenceDefinitionSource,
+              footnoteDefinitionSource,
+            ].filter(Boolean).join('\n\n')
             return (
               <StableMarkdownBlock
                 key={block.blockId}
@@ -2865,8 +2992,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
                 readingMarkRanges={readingMarkHitRangesByBlock.get(block.blockId)}
                 baseLine={block.startLine - 1}
                 renderFootnoteSection={false}
-                footnoteReferenceSuffix={`block-${globalIndex}`}
-                markdown={`${isFootnoteDefinition ? '' : normalizedContent.slice(block.normalizedStartOffset, block.normalizedEndOffset)}${referenceDefinitionSource ? `\n\n${referenceDefinitionSource}` : ''}${footnoteContext ? `\n\n${footnoteContext}` : ''}`}
+                footnoteRenderContext={blockReferences.length ? { idPrefix: footnoteIdPrefix, referencesByOffset, sectionReferences: false } : undefined}
+                markdown={markdown}
                 skipHtml={skipHtml || (hasEmbeddedHtml && !htmlRehypePlugins)}
                 rehypePlugins={rehypePlugins}
                 components={components}
@@ -2878,9 +3005,9 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       {!requiresWholeDocumentRender && standaloneFootnoteMarkdown && (
         <div className="gm-footnote-section" data-md-footnote-section>
           <StableMarkdownContent
-            baseLine={0}
+            baseLine={-model.rawContent.length - 2}
             renderFootnoteSection={true}
-            footnoteReferenceSuffix="footnote-section"
+            footnoteRenderContext={standaloneFootnoteRenderContext}
             markdown={standaloneFootnoteMarkdown}
             skipHtml={skipHtml || (hasEmbeddedHtml && !htmlRehypePlugins)}
             rehypePlugins={rehypePlugins}
@@ -3041,6 +3168,7 @@ function handleHeadingClick(line: number | undefined, onHeadingClick?: (line: nu
 }
 
 function estimatePreviewBlockHeight(block: PreviewBlock, fontSize: number, lineHeight: number): number {
+  if (block.type === 'footnoteDefinition') return 0
   const baseLinePx = fontSize * lineHeight
   const lines = Math.max(1, block.endLine - block.startLine + 1)
   switch (block.type) {
@@ -3075,7 +3203,6 @@ function estimatePreviewBlockHeight(block: PreviewBlock, fontSize: number, lineH
     case 'html':
       return Math.max(32, lines * baseLinePx * 1.5)
     case 'definition':
-    case 'footnoteDefinition':
       return Math.max(24, lines * baseLinePx * 1.1 + 8)
     case 'blockquote':
     case 'paragraph':

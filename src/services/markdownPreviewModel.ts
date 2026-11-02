@@ -195,6 +195,8 @@ export interface PreviewBlock {
     rows: number
     cols: number
   }
+  /** 当前块引用的注脚及其递归依赖，按注脚定义在全文中的顺序排列 */
+  footnoteDefinitionIdentifiers?: string[]
 }
 
 export interface ReferenceDefinition {
@@ -208,11 +210,26 @@ export interface ReferenceDefinition {
 export interface FootnoteDefinition {
   identifier: string
   label?: string
+  blockId: string
   startLine: number
   endLine: number
   startOffset: number
   endOffset: number
   rawSource: string
+  references: string[]
+}
+
+export interface FootnoteReference {
+  identifier: string
+  source: string
+  startLine: number
+  startOffset: number
+  endOffset: number
+  blockId: string
+  number: number
+  index: number
+  occurrence: number
+  isDefinitionReference: boolean
 }
 
 export interface MarkdownPreviewModel {
@@ -225,6 +242,8 @@ export interface MarkdownPreviewModel {
   definitions: ReferenceDefinition[]
   /** 全文 footnote definitions */
   footnoteDefinitions: FootnoteDefinition[]
+  /** 有效注脚引用，按全文实际渲染顺序编号 */
+  footnoteReferences: FootnoteReference[]
   /** AST 中是否存在可渲染的原始 HTML 节点 */
   hasEmbeddedHtml: boolean
   /** 是否有 HTML 标签跨越顶层 Markdown 块，必须保留整篇渲染语义 */
@@ -378,6 +397,7 @@ export function createMarkdownPreviewModel(rawContent: string): MarkdownPreviewM
   const blocks: PreviewBlock[] = []
   const definitions: ReferenceDefinition[] = []
   const footnoteDefinitions: FootnoteDefinition[] = []
+  const pendingFootnoteReferences: Array<Omit<FootnoteReference, 'number' | 'index' | 'occurrence'>> = []
   const toc: TocItem[] = []
   const headingIds = new Map<string, number>()
   const htmlCompatibility = analyzeHtmlCompatibility(root.children ?? [])
@@ -413,6 +433,7 @@ export function createMarkdownPreviewModel(rawContent: string): MarkdownPreviewM
     if (frontmatter && endOffset <= frontmatter.endOffset) continue
 
     const type = classifyBlockType(node)
+    const blockId = makeBlockId(type, blockIndex, normalizedContent.slice(startOffset, Math.min(startOffset + 120, endOffset)))
     if (type === 'definition') {
       if (node.identifier && node.url) {
         definitions.push({
@@ -428,13 +449,15 @@ export function createMarkdownPreviewModel(rawContent: string): MarkdownPreviewM
     if (type === 'footnoteDefinition') {
       if (node.identifier) {
         footnoteDefinitions.push({
-          identifier: node.identifier.toLowerCase(),
+          identifier: normalizeFootnoteIdentifier(node.identifier),
           label: node.label,
+          blockId,
           startLine,
           endLine,
           startOffset,
           endOffset,
           rawSource: rawContent.slice(startOffset, endOffset),
+          references: collectFootnoteReferenceNodes(node).map((reference) => normalizeFootnoteIdentifier(reference.identifier ?? '')).filter(Boolean),
         })
       }
       // footnote definition 仍然作为可见块保留，但放入 definitions 表中供引用解析
@@ -445,7 +468,7 @@ export function createMarkdownPreviewModel(rawContent: string): MarkdownPreviewM
     const rawEnd = endOffset
     const rawSource = rawContent.slice(rawStart, rawEnd)
     const block: PreviewBlock = {
-      blockId: makeBlockId(type, blockIndex, normalizedContent.slice(startOffset, Math.min(startOffset + 120, endOffset))),
+      blockId,
       type,
       startLine,
       endLine,
@@ -455,6 +478,24 @@ export function createMarkdownPreviewModel(rawContent: string): MarkdownPreviewM
       normalizedEndOffset: endOffset,
       rawSource,
       textSegments: collectTextSegments(node, normalizedContent),
+      footnoteDefinitionIdentifiers: [],
+    }
+
+    for (const reference of collectFootnoteReferenceNodes(node)) {
+      const referenceStart = reference.position?.start?.offset
+      const referenceEnd = reference.position?.end?.offset
+      const referenceLine = reference.position?.start?.line
+      const identifier = normalizeFootnoteIdentifier(reference.identifier ?? '')
+      if (typeof referenceStart !== 'number' || typeof referenceEnd !== 'number' || typeof referenceLine !== 'number' || !identifier) continue
+      pendingFootnoteReferences.push({
+        identifier,
+        source: normalizedContent.slice(referenceStart, referenceEnd),
+        startLine: referenceLine,
+        startOffset: referenceStart,
+        endOffset: referenceEnd,
+        blockId,
+        isDefinitionReference: type === 'footnoteDefinition',
+      })
     }
 
     if (type === 'heading') {
@@ -480,6 +521,47 @@ export function createMarkdownPreviewModel(rawContent: string): MarkdownPreviewM
     blockIndex += 1
   }
 
+  const definitionsByIdentifier = new Map<string, FootnoteDefinition>()
+  for (const definition of footnoteDefinitions) {
+    if (!definitionsByIdentifier.has(definition.identifier)) definitionsByIdentifier.set(definition.identifier, definition)
+  }
+  const directReferences = pendingFootnoteReferences.filter((reference) => !reference.isDefinitionReference && definitionsByIdentifier.has(reference.identifier))
+  const referencedDefinitionIdentifiers = collectFootnoteDefinitionDependencies(
+    directReferences.map((reference) => reference.identifier),
+    definitionsByIdentifier,
+  )
+  const reachableDefinitionBlockIds = new Set(referencedDefinitionIdentifiers
+    .map((identifier) => definitionsByIdentifier.get(identifier)?.blockId)
+    .filter((blockId): blockId is string => Boolean(blockId)))
+  const reachableDefinitionReferences = pendingFootnoteReferences.filter((reference) =>
+    reference.isDefinitionReference && reachableDefinitionBlockIds.has(reference.blockId) && definitionsByIdentifier.has(reference.identifier),
+  )
+  const orderedReferences = [...directReferences, ...reachableDefinitionReferences].sort((left, right) => left.startOffset - right.startOffset)
+  const occurrenceByIdentifier = new Map<string, number>()
+  const numberByIdentifier = new Map<string, number>()
+  const footnoteReferences: FootnoteReference[] = orderedReferences.map((reference, index) => {
+    const occurrence = (occurrenceByIdentifier.get(reference.identifier) ?? 0) + 1
+    occurrenceByIdentifier.set(reference.identifier, occurrence)
+    let number = numberByIdentifier.get(reference.identifier)
+    if (number === undefined) {
+      number = numberByIdentifier.size + 1
+      numberByIdentifier.set(reference.identifier, number)
+    }
+    return { ...reference, number, index, occurrence }
+  })
+
+  const identifiersByBlock = new Map<string, string[]>()
+  for (const reference of footnoteReferences) {
+    if (reference.isDefinitionReference) continue
+    const identifiers = identifiersByBlock.get(reference.blockId) ?? []
+    identifiers.push(reference.identifier)
+    identifiersByBlock.set(reference.blockId, identifiers)
+  }
+  for (const block of blocks) {
+    const identifiers = identifiersByBlock.get(block.blockId) ?? []
+    block.footnoteDefinitionIdentifiers = collectFootnoteDefinitionDependencies(identifiers, definitionsByIdentifier)
+  }
+
   const _blockStartOffsets = blocks.map((b) => b.startOffset)
   return {
     rawContent,
@@ -487,6 +569,7 @@ export function createMarkdownPreviewModel(rawContent: string): MarkdownPreviewM
     blocks,
     definitions,
     footnoteDefinitions,
+    footnoteReferences,
     ...htmlCompatibility,
     toc,
     _blockStartOffsets,
@@ -502,6 +585,31 @@ export function createMarkdownPreviewModel(rawContent: string): MarkdownPreviewM
         recordDiagnostic('markdown.parse_slow', 'slow', durationMs)).catch(() => undefined)
     }
   }
+}
+
+function normalizeFootnoteIdentifier(identifier: string): string {
+  return identifier.trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+function collectFootnoteReferenceNodes(node: MdastPositioned): MdastPositioned[] {
+  if (node.type === 'footnoteReference') return [node]
+  return (node.children ?? []).flatMap(collectFootnoteReferenceNodes)
+}
+
+function collectFootnoteDefinitionDependencies(
+  identifiers: string[],
+  definitionsByIdentifier: Map<string, FootnoteDefinition>,
+): string[] {
+  const reachable = new Set<string>()
+  const visit = (identifier: string) => {
+    if (reachable.has(identifier)) return
+    const definition = definitionsByIdentifier.get(identifier)
+    if (!definition) return
+    reachable.add(identifier)
+    for (const dependency of definition.references) visit(dependency)
+  }
+  for (const identifier of identifiers) visit(identifier)
+  return [...definitionsByIdentifier.keys()].filter((identifier) => reachable.has(identifier))
 }
 
 /**
