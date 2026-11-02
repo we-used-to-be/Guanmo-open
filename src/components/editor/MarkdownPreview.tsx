@@ -5,10 +5,11 @@ import remarkMath from 'remark-math'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeKatex from 'rehype-katex'
 import { Highlighter } from 'lucide-react'
-import { motion } from 'motion/react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { createContext, forwardRef, isValidElement, lazy, memo, Suspense, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { MarkdownImage } from './MarkdownImage'
+import { MORPHING_MOTION_TOKENS } from '@/components/common/useMorphingMotion'
 import { rehypeWindowsImagePaths } from '@/services/markdownImagePaths'
 import { rehypeLocalLinkPaths } from '@/services/markdownLinks'
 import { isTauri } from '@/hooks/useTauri'
@@ -575,7 +576,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   }, [footnoteIdPrefix, footnoteReferences, model])
   const { hasEmbeddedHtml, requiresWholeDocumentRender } = model
   const [htmlRehypePlugins, setHtmlRehypePlugins] = useState<RehypePlugins | null>(null)
-  const [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(null)
+  const [zoomImage, setZoomImage] = useState<{ src: string; alt: string; origin?: { left: number; top: number; width: number; height: number; naturalWidth: number; naturalHeight: number } } | null>(null)
+  const reducedMotion = useReducedMotion()
   const [pendingSelectionUi, setPendingSelectionUi] = useState<PendingSelectionUi | null>(null)
   const textInputRef = useRef<HTMLTextAreaElement | null>(null)
   const colorActionRef = useRef<HTMLButtonElement | null>(null)
@@ -3132,9 +3134,15 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
           </Suspense>
         </div>
       )}
+      <AnimatePresence>
       {zoomImage && (
-        <div
+        <motion.div
+          key="image-zoom"
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-8"
+          initial={{ opacity: reducedMotion ? 1 : 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: reducedMotion ? 1 : 0 }}
+          transition={reducedMotion ? { duration: 0 } : { duration: 0.2 }}
           onClick={() => setZoomImage(null)}
         >
           <button
@@ -3147,20 +3155,38 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
               <path d="M18 6L6 18M6 6l12 12" />
             </svg>
           </button>
-          <img
+          <motion.img
             src={zoomImage.src}
             alt={zoomImage.alt}
             referrerPolicy="no-referrer"
             loading="lazy"
             decoding="async"
             className="max-h-full max-w-full rounded-xl bg-gm-surface object-contain shadow-2xl"
+            initial={reducedMotion ? false : getImageZoomOrigin(zoomImage.origin)}
+            animate={{ x: 0, y: 0, scaleX: 1, scaleY: 1 }}
+            exit={reducedMotion ? {} : getImageZoomOrigin(zoomImage.origin)}
+            transition={reducedMotion ? { duration: 0 } : MORPHING_MOTION_TOKENS.surface}
             onClick={(event) => event.stopPropagation()}
           />
-        </div>
+        </motion.div>
       )}
+      </AnimatePresence>
     </div>
   )
 }))
+
+function getImageZoomOrigin(origin?: { left: number; top: number; width: number; height: number; naturalWidth: number; naturalHeight: number }) {
+  if (!origin || !origin.width || !origin.height) return { x: 0, y: 0, scaleX: 1, scaleY: 1 }
+  const scale = Math.min(1, (window.innerWidth - 64) / origin.naturalWidth, (window.innerHeight - 64) / origin.naturalHeight)
+  const width = origin.naturalWidth * scale
+  const height = origin.naturalHeight * scale
+  return {
+    x: origin.left + origin.width / 2 - window.innerWidth / 2,
+    y: origin.top + origin.height / 2 - window.innerHeight / 2,
+    scaleX: origin.width / width,
+    scaleY: origin.height / height,
+  }
+}
 
 function handleHeadingClick(line: number | undefined, onHeadingClick?: (line: number) => void) {
   if (!onHeadingClick || typeof line !== 'number') return

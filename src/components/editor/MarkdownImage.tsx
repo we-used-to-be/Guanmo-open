@@ -11,7 +11,7 @@ interface MarkdownImageProps {
   height?: string | number
   filePath?: string | null
   line?: number
-  onZoom: (image: { src: string; alt: string }) => void
+  onZoom: (image: { src: string; alt: string; origin?: { left: number; top: number; width: number; height: number; naturalWidth: number; naturalHeight: number } }) => void
 }
 
 function localImagePath(src: string, filePath?: string | null): string | null {
@@ -76,8 +76,18 @@ export function MarkdownImage({ src = '', alt = '', title, width, height, filePa
   return (
     <button
       type="button"
-      className="gm-markdown-image my-4 block max-w-full cursor-zoom-in rounded-xl border border-gm-border bg-transparent p-0 text-left"
-      onClick={() => { if (failed) void authorizeImage(); else if (resolvedSrc) onZoom({ src: resolvedSrc, alt }) }}
+      className="gm-markdown-image mx-auto my-4 block max-w-full cursor-zoom-in rounded-xl border border-gm-border bg-transparent p-0 text-left"
+      onClick={(event) => {
+        if (failed) void authorizeImage()
+        else if (resolvedSrc) {
+          const image = event.currentTarget.querySelector('img')
+          const rect = image?.getBoundingClientRect()
+          const origin = image && rect && image.naturalWidth && image.naturalHeight
+            ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height, naturalWidth: image.naturalWidth, naturalHeight: image.naturalHeight }
+            : undefined
+          onZoom({ src: resolvedSrc, alt, origin })
+        }
+      }}
       disabled={busy}
       title={failed ? (current?.error || '无法加载图片：请检查路径，点击选择原图片并授权') : '点击放大图片'}
       data-md-line={line}
