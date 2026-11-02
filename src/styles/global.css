@@ -1911,7 +1911,30 @@ html[data-gm-runtime='web'] .gm-settings-tabs--web > div:nth-child(2) {
 }
 
 .gm-markdown-preview blockquote {
+  position: relative;
   background: var(--gm-markdown-quote-bg);
+  border-left: 0;
+  border-radius: 10px;
+  padding: 12px 16px 12px 31px;
+}
+
+.gm-markdown-preview blockquote::before {
+  content: '';
+  position: absolute;
+  top: 15px;
+  bottom: 15px;
+  left: 13px;
+  width: 3px;
+  border-radius: 0;
+  background: var(--gm-primary);
+}
+
+.gm-markdown-preview blockquote > p:first-child {
+  margin-top: 0;
+}
+
+.gm-markdown-preview blockquote > p:last-child {
+  margin-bottom: 0;
 }
 
 .gm-markdown-preview details {
