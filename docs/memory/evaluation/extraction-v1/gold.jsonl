@@ -1,0 +1,200 @@
+{"id":"EX-01-S1","script":"01","description":"用户专业/计算机科学/global；源U1。","originalRow":"U:我的专业是计算机科学。 G=用户专业/计算机科学/global；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-01-S2","script":"01","description":"用户专业/计算机科学/global；源U1。","originalRow":"U:我的专业是计算机科学。 G=用户专业/计算机科学/global；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-01-S3","script":"01","description":"用户专业/计算机科学/global；源U1。","originalRow":"U:我的专业是计算机科学。 G=用户专业/计算机科学/global；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-01-S4","script":"01","description":"用户专业/计算机科学/global；源U1。","originalRow":"U:我的专业是计算机科学。 G=用户专业/计算机科学/global；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-01-S5","script":"01","description":"用户专业/计算机科学/global；源U1。","originalRow":"U:我的专业是计算机科学。 G=用户专业/计算机科学/global；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-02-S1","script":"02","description":"职业/工业设计师；长期方向/无障碍产品；global，源U1。","originalRow":"U:我是工业设计师，工作方向长期是无障碍产品。 G=职业/工业设计师；长期方向/无障碍产品；global，源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-02-S2","script":"02","description":"职业/工业设计师；长期方向/无障碍产品；global，源U1。","originalRow":"U:我是工业设计师，工作方向长期是无障碍产品。 G=职业/工业设计师；长期方向/无障碍产品；global，源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-02-S3","script":"02","description":"职业/工业设计师；长期方向/无障碍产品；global，源U1。","originalRow":"U:我是工业设计师，工作方向长期是无障碍产品。 G=职业/工业设计师；长期方向/无障碍产品；global，源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-02-S4","script":"02","description":"职业/工业设计师；长期方向/无障碍产品；global，源U1。","originalRow":"U:我是工业设计师，工作方向长期是无障碍产品。 G=职业/工业设计师；长期方向/无障碍产品；global，源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-02-S5","script":"02","description":"职业/工业设计师；长期方向/无障碍产品；global，源U1。","originalRow":"U:我是工业设计师，工作方向长期是无障碍产品。 G=职业/工业设计师；长期方向/无障碍产品；global，源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-03-S1","script":"03","description":"回答顺序/先结论后依据/global；源U1。","originalRow":"U:我喜欢技术回答先给结论，再给必要依据。 G=回答顺序/先结论后依据/global；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-03-S2","script":"03","description":"回答顺序/先结论后依据/global；源U1。","originalRow":"U:我喜欢技术回答先给结论，再给必要依据。 G=回答顺序/先结论后依据/global；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-03-S3","script":"03","description":"回答顺序/先结论后依据/global；源U1。","originalRow":"U:我喜欢技术回答先给结论，再给必要依据。 G=回答顺序/先结论后依据/global；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-03-S4","script":"03","description":"回答顺序/先结论后依据/global；源U1。","originalRow":"U:我喜欢技术回答先给结论，再给必要依据。 G=回答顺序/先结论后依据/global；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-03-S5","script":"03","description":"回答顺序/先结论后依据/global；源U1。","originalRow":"U:我喜欢技术回答先给结论，再给必要依据。 G=回答顺序/先结论后依据/global；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-04-S1","script":"04","description":"阅读代码主题/深色/global；源U1；N=医学推断。","originalRow":"U:阅读代码时我一直用深色主题，浅色让我难以集中。 G=阅读代码主题/深色/global；源U1；N=医学推断。","reviewStatus":"pending_independent_review"}
+{"id":"EX-04-S2","script":"04","description":"阅读代码主题/深色/global；源U1；N=医学推断。","originalRow":"U:阅读代码时我一直用深色主题，浅色让我难以集中。 G=阅读代码主题/深色/global；源U1；N=医学推断。","reviewStatus":"pending_independent_review"}
+{"id":"EX-04-S3","script":"04","description":"阅读代码主题/深色/global；源U1；N=医学推断。","originalRow":"U:阅读代码时我一直用深色主题，浅色让我难以集中。 G=阅读代码主题/深色/global；源U1；N=医学推断。","reviewStatus":"pending_independent_review"}
+{"id":"EX-04-S4","script":"04","description":"阅读代码主题/深色/global；源U1；N=医学推断。","originalRow":"U:阅读代码时我一直用深色主题，浅色让我难以集中。 G=阅读代码主题/深色/global；源U1；N=医学推断。","reviewStatus":"pending_independent_review"}
+{"id":"EX-04-S5","script":"04","description":"阅读代码主题/深色/global；源U1；N=医学推断。","originalRow":"U:阅读代码时我一直用深色主题，浅色让我难以集中。 G=阅读代码主题/深色/global；源U1；N=医学推断。","reviewStatus":"pending_independent_review"}
+{"id":"EX-05-S1","script":"05","description":"空。","originalRow":"U:今天太阳真好。→A:适合散步。→U:哈哈，是啊。 G=空。","reviewStatus":"pending_independent_review"}
+{"id":"EX-05-S2","script":"05","description":"空。","originalRow":"U:今天太阳真好。→A:适合散步。→U:哈哈，是啊。 G=空。","reviewStatus":"pending_independent_review"}
+{"id":"EX-05-S3","script":"05","description":"空。","originalRow":"U:今天太阳真好。→A:适合散步。→U:哈哈，是啊。 G=空。","reviewStatus":"pending_independent_review"}
+{"id":"EX-05-S4","script":"05","description":"空。","originalRow":"U:今天太阳真好。→A:适合散步。→U:哈哈，是啊。 G=空。","reviewStatus":"pending_independent_review"}
+{"id":"EX-05-S5","script":"05","description":"空。","originalRow":"U:今天太阳真好。→A:适合散步。→U:哈哈，是啊。 G=空。","reviewStatus":"pending_independent_review"}
+{"id":"EX-06-S1","script":"06","description":"空。","originalRow":"U:谢谢你刚才帮忙。→A:不用客气。→U:那我们结束吧。 G=空。","reviewStatus":"pending_independent_review"}
+{"id":"EX-06-S2","script":"06","description":"空。","originalRow":"U:谢谢你刚才帮忙。→A:不用客气。→U:那我们结束吧。 G=空。","reviewStatus":"pending_independent_review"}
+{"id":"EX-06-S3","script":"06","description":"空。","originalRow":"U:谢谢你刚才帮忙。→A:不用客气。→U:那我们结束吧。 G=空。","reviewStatus":"pending_independent_review"}
+{"id":"EX-06-S4","script":"06","description":"空。","originalRow":"U:谢谢你刚才帮忙。→A:不用客气。→U:那我们结束吧。 G=空。","reviewStatus":"pending_independent_review"}
+{"id":"EX-06-S5","script":"06","description":"空。","originalRow":"U:谢谢你刚才帮忙。→A:不用客气。→U:那我们结束吧。 G=空。","reviewStatus":"pending_independent_review"}
+{"id":"EX-07-S1","script":"07","description":"当前P数据库/PostgreSQL，C；源U3支持U1/A2；N=全局所有未来项目。","originalRow":"P U:项目数据库在SQLite和PostgreSQL里选。→A:前者适合本地，后者适合服务端。→U:定第二个，后续项目都这样。 G=当前P数据库/PostgreSQL，C；源U3支持U1/A2；N=全局所有未来项目。","reviewStatus":"pending_independent_review"}
+{"id":"EX-07-S2","script":"07","description":"当前P数据库/PostgreSQL，C；源U3支持U1/A2；N=全局所有未来项目。","originalRow":"P U:项目数据库在SQLite和PostgreSQL里选。→A:前者适合本地，后者适合服务端。→U:定第二个，后续项目都这样。 G=当前P数据库/PostgreSQL，C；源U3支持U1/A2；N=全局所有未来项目。","reviewStatus":"pending_independent_review"}
+{"id":"EX-07-S3","script":"07","description":"当前P数据库/PostgreSQL，C；源U3支持U1/A2；N=全局所有未来项目。","originalRow":"P U:项目数据库在SQLite和PostgreSQL里选。→A:前者适合本地，后者适合服务端。→U:定第二个，后续项目都这样。 G=当前P数据库/PostgreSQL，C；源U3支持U1/A2；N=全局所有未来项目。","reviewStatus":"pending_independent_review"}
+{"id":"EX-07-S4","script":"07","description":"当前P数据库/PostgreSQL，C；源U3支持U1/A2；N=全局所有未来项目。","originalRow":"P U:项目数据库在SQLite和PostgreSQL里选。→A:前者适合本地，后者适合服务端。→U:定第二个，后续项目都这样。 G=当前P数据库/PostgreSQL，C；源U3支持U1/A2；N=全局所有未来项目。","reviewStatus":"pending_independent_review"}
+{"id":"EX-07-S5","script":"07","description":"当前P数据库/PostgreSQL，C；源U3支持U1/A2；N=全局所有未来项目。","originalRow":"P U:项目数据库在SQLite和PostgreSQL里选。→A:前者适合本地，后者适合服务端。→U:定第二个，后续项目都这样。 G=当前P数据库/PostgreSQL，C；源U3支持U1/A2；N=全局所有未来项目。","reviewStatus":"pending_independent_review"}
+{"id":"EX-08-S1","script":"08","description":"P发布方式/流水线，C；源U3支持U1/A2。","originalRow":"P U:本项目发布方式可以手动，也可以走流水线。→A:后者能保持校验一致。→U:同意，就长期固定后者。 G=P发布方式/流水线，C；源U3支持U1/A2。","reviewStatus":"pending_independent_review"}
+{"id":"EX-08-S2","script":"08","description":"P发布方式/流水线，C；源U3支持U1/A2。","originalRow":"P U:本项目发布方式可以手动，也可以走流水线。→A:后者能保持校验一致。→U:同意，就长期固定后者。 G=P发布方式/流水线，C；源U3支持U1/A2。","reviewStatus":"pending_independent_review"}
+{"id":"EX-08-S3","script":"08","description":"P发布方式/流水线，C；源U3支持U1/A2。","originalRow":"P U:本项目发布方式可以手动，也可以走流水线。→A:后者能保持校验一致。→U:同意，就长期固定后者。 G=P发布方式/流水线，C；源U3支持U1/A2。","reviewStatus":"pending_independent_review"}
+{"id":"EX-08-S4","script":"08","description":"P发布方式/流水线，C；源U3支持U1/A2。","originalRow":"P U:本项目发布方式可以手动，也可以走流水线。→A:后者能保持校验一致。→U:同意，就长期固定后者。 G=P发布方式/流水线，C；源U3支持U1/A2。","reviewStatus":"pending_independent_review"}
+{"id":"EX-08-S5","script":"08","description":"P发布方式/流水线，C；源U3支持U1/A2。","originalRow":"P U:本项目发布方式可以手动，也可以走流水线。→A:后者能保持校验一致。→U:同意，就长期固定后者。 G=P发布方式/流水线，C；源U3支持U1/A2。","reviewStatus":"pending_independent_review"}
+{"id":"EX-09-S1","script":"09","description":"回答顺序/结论先行，C global；源U3支持U1。","originalRow":"U:回答顺序有结论先行和推导先行。→A:两种都可以。→U:我长期更习惯前一种。 G=回答顺序/结论先行，C global；源U3支持U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-09-S2","script":"09","description":"回答顺序/结论先行，C global；源U3支持U1。","originalRow":"U:回答顺序有结论先行和推导先行。→A:两种都可以。→U:我长期更习惯前一种。 G=回答顺序/结论先行，C global；源U3支持U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-09-S3","script":"09","description":"回答顺序/结论先行，C global；源U3支持U1。","originalRow":"U:回答顺序有结论先行和推导先行。→A:两种都可以。→U:我长期更习惯前一种。 G=回答顺序/结论先行，C global；源U3支持U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-09-S4","script":"09","description":"回答顺序/结论先行，C global；源U3支持U1。","originalRow":"U:回答顺序有结论先行和推导先行。→A:两种都可以。→U:我长期更习惯前一种。 G=回答顺序/结论先行，C global；源U3支持U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-09-S5","script":"09","description":"回答顺序/结论先行，C global；源U3支持U1。","originalRow":"U:回答顺序有结论先行和推导先行。→A:两种都可以。→U:我长期更习惯前一种。 G=回答顺序/结论先行，C global；源U3支持U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-10-S1","script":"10","description":"笔记格式/分主题，C global；源U3支持U1。","originalRow":"U:笔记格式可以是表格，也可以分主题写。→A:你习惯哪种？→U:第二种，以后一直这样。 G=笔记格式/分主题，C global；源U3支持U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-10-S2","script":"10","description":"笔记格式/分主题，C global；源U3支持U1。","originalRow":"U:笔记格式可以是表格，也可以分主题写。→A:你习惯哪种？→U:第二种，以后一直这样。 G=笔记格式/分主题，C global；源U3支持U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-10-S3","script":"10","description":"笔记格式/分主题，C global；源U3支持U1。","originalRow":"U:笔记格式可以是表格，也可以分主题写。→A:你习惯哪种？→U:第二种，以后一直这样。 G=笔记格式/分主题，C global；源U3支持U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-10-S4","script":"10","description":"笔记格式/分主题，C global；源U3支持U1。","originalRow":"U:笔记格式可以是表格，也可以分主题写。→A:你习惯哪种？→U:第二种，以后一直这样。 G=笔记格式/分主题，C global；源U3支持U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-10-S5","script":"10","description":"笔记格式/分主题，C global；源U3支持U1。","originalRow":"U:笔记格式可以是表格，也可以分主题写。→A:你习惯哪种？→U:第二种，以后一直这样。 G=笔记格式/分主题，C global；源U3支持U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-11-S1","script":"11","description":"技术学习方式/先最小例子后原理/global；源U1。","originalRow":"U:每回看技术解释，我都会先找最小可运行例子再读原理，很多年都这样。 G=技术学习方式/先最小例子后原理/global；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-11-S2","script":"11","description":"技术学习方式/先最小例子后原理/global；源U1。","originalRow":"U:每回看技术解释，我都会先找最小可运行例子再读原理，很多年都这样。 G=技术学习方式/先最小例子后原理/global；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-11-S3","script":"11","description":"技术学习方式/先最小例子后原理/global；源U1。","originalRow":"U:每回看技术解释，我都会先找最小可运行例子再读原理，很多年都这样。 G=技术学习方式/先最小例子后原理/global；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-11-S4","script":"11","description":"技术学习方式/先最小例子后原理/global；源U1。","originalRow":"U:每回看技术解释，我都会先找最小可运行例子再读原理，很多年都这样。 G=技术学习方式/先最小例子后原理/global；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-11-S5","script":"11","description":"技术学习方式/先最小例子后原理/global；源U1。","originalRow":"U:每回看技术解释，我都会先找最小可运行例子再读原理，很多年都这样。 G=技术学习方式/先最小例子后原理/global；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-12-S1","script":"12","description":"交流语言/简体中文/global；源U1；N=英语水平或国籍推断。","originalRow":"U:我读英文资料已经十年，交流时仍一直选择简体中文。 G=交流语言/简体中文/global；源U1；N=英语水平或国籍推断。","reviewStatus":"pending_independent_review"}
+{"id":"EX-12-S2","script":"12","description":"交流语言/简体中文/global；源U1；N=英语水平或国籍推断。","originalRow":"U:我读英文资料已经十年，交流时仍一直选择简体中文。 G=交流语言/简体中文/global；源U1；N=英语水平或国籍推断。","reviewStatus":"pending_independent_review"}
+{"id":"EX-12-S3","script":"12","description":"交流语言/简体中文/global；源U1；N=英语水平或国籍推断。","originalRow":"U:我读英文资料已经十年，交流时仍一直选择简体中文。 G=交流语言/简体中文/global；源U1；N=英语水平或国籍推断。","reviewStatus":"pending_independent_review"}
+{"id":"EX-12-S4","script":"12","description":"交流语言/简体中文/global；源U1；N=英语水平或国籍推断。","originalRow":"U:我读英文资料已经十年，交流时仍一直选择简体中文。 G=交流语言/简体中文/global；源U1；N=英语水平或国籍推断。","reviewStatus":"pending_independent_review"}
+{"id":"EX-12-S5","script":"12","description":"交流语言/简体中文/global；源U1；N=英语水平或国籍推断。","originalRow":"U:我读英文资料已经十年，交流时仍一直选择简体中文。 G=交流语言/简体中文/global；源U1；N=英语水平或国籍推断。","reviewStatus":"pending_independent_review"}
+{"id":"EX-13-S1","script":"13","description":"空；N=长期字数限制。","originalRow":"U:这次回答只用三个字，临时测试一下。 G=空；N=长期字数限制。","reviewStatus":"pending_independent_review"}
+{"id":"EX-13-S2","script":"13","description":"空；N=长期字数限制。","originalRow":"U:这次回答只用三个字，临时测试一下。 G=空；N=长期字数限制。","reviewStatus":"pending_independent_review"}
+{"id":"EX-13-S3","script":"13","description":"空；N=长期字数限制。","originalRow":"U:这次回答只用三个字，临时测试一下。 G=空；N=长期字数限制。","reviewStatus":"pending_independent_review"}
+{"id":"EX-13-S4","script":"13","description":"空；N=长期字数限制。","originalRow":"U:这次回答只用三个字，临时测试一下。 G=空；N=长期字数限制。","reviewStatus":"pending_independent_review"}
+{"id":"EX-13-S5","script":"13","description":"空；N=长期字数限制。","originalRow":"U:这次回答只用三个字，临时测试一下。 G=空；N=长期字数限制。","reviewStatus":"pending_independent_review"}
+{"id":"EX-14-S1","script":"14","description":"空；N=长期语言偏好。","originalRow":"U:今天演示先用英文，明天恢复原样。 G=空；N=长期语言偏好。","reviewStatus":"pending_independent_review"}
+{"id":"EX-14-S2","script":"14","description":"空；N=长期语言偏好。","originalRow":"U:今天演示先用英文，明天恢复原样。 G=空；N=长期语言偏好。","reviewStatus":"pending_independent_review"}
+{"id":"EX-14-S3","script":"14","description":"空；N=长期语言偏好。","originalRow":"U:今天演示先用英文，明天恢复原样。 G=空；N=长期语言偏好。","reviewStatus":"pending_independent_review"}
+{"id":"EX-14-S4","script":"14","description":"空；N=长期语言偏好。","originalRow":"U:今天演示先用英文，明天恢复原样。 G=空；N=长期语言偏好。","reviewStatus":"pending_independent_review"}
+{"id":"EX-14-S5","script":"14","description":"空；N=长期语言偏好。","originalRow":"U:今天演示先用英文，明天恢复原样。 G=空；N=长期语言偏好。","reviewStatus":"pending_independent_review"}
+{"id":"EX-15-S1","script":"15","description":"空。","originalRow":"U:项目要不要换SQLite？→A:可以考虑。→U:还没决定，下周再说。 G=空。","reviewStatus":"pending_independent_review"}
+{"id":"EX-15-S2","script":"15","description":"空。","originalRow":"U:项目要不要换SQLite？→A:可以考虑。→U:还没决定，下周再说。 G=空。","reviewStatus":"pending_independent_review"}
+{"id":"EX-15-S3","script":"15","description":"空。","originalRow":"U:项目要不要换SQLite？→A:可以考虑。→U:还没决定，下周再说。 G=空。","reviewStatus":"pending_independent_review"}
+{"id":"EX-15-S4","script":"15","description":"空。","originalRow":"U:项目要不要换SQLite？→A:可以考虑。→U:还没决定，下周再说。 G=空。","reviewStatus":"pending_independent_review"}
+{"id":"EX-15-S5","script":"15","description":"空。","originalRow":"U:项目要不要换SQLite？→A:可以考虑。→U:还没决定，下周再说。 G=空。","reviewStatus":"pending_independent_review"}
+{"id":"EX-16-S1","script":"16","description":"空。","originalRow":"U:假如我是医生，你会怎么称呼我？→A:医生。→U:只是举例，我没说职业。 G=空。","reviewStatus":"pending_independent_review"}
+{"id":"EX-16-S2","script":"16","description":"空。","originalRow":"U:假如我是医生，你会怎么称呼我？→A:医生。→U:只是举例，我没说职业。 G=空。","reviewStatus":"pending_independent_review"}
+{"id":"EX-16-S3","script":"16","description":"空。","originalRow":"U:假如我是医生，你会怎么称呼我？→A:医生。→U:只是举例，我没说职业。 G=空。","reviewStatus":"pending_independent_review"}
+{"id":"EX-16-S4","script":"16","description":"空。","originalRow":"U:假如我是医生，你会怎么称呼我？→A:医生。→U:只是举例，我没说职业。 G=空。","reviewStatus":"pending_independent_review"}
+{"id":"EX-16-S5","script":"16","description":"空。","originalRow":"U:假如我是医生，你会怎么称呼我？→A:医生。→U:只是举例，我没说职业。 G=空。","reviewStatus":"pending_independent_review"}
+{"id":"EX-17-S1","script":"17","description":"语言/英文的替代候选，旧中文确认前active不变；源U1。","originalRow":"预置自动active 用户回答语言/中文。 U:我以前偏好中文，现在长期改为英文。 G=语言/英文的替代候选，旧中文确认前active不变；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-17-S2","script":"17","description":"语言/英文的替代候选，旧中文确认前active不变；源U1。","originalRow":"预置自动active 用户回答语言/中文。 U:我以前偏好中文，现在长期改为英文。 G=语言/英文的替代候选，旧中文确认前active不变；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-17-S3","script":"17","description":"语言/英文的替代候选，旧中文确认前active不变；源U1。","originalRow":"预置自动active 用户回答语言/中文。 U:我以前偏好中文，现在长期改为英文。 G=语言/英文的替代候选，旧中文确认前active不变；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-17-S4","script":"17","description":"语言/英文的替代候选，旧中文确认前active不变；源U1。","originalRow":"预置自动active 用户回答语言/中文。 U:我以前偏好中文，现在长期改为英文。 G=语言/英文的替代候选，旧中文确认前active不变；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-17-S5","script":"17","description":"语言/英文的替代候选，旧中文确认前active不变；源U1。","originalRow":"预置自动active 用户回答语言/中文。 U:我以前偏好中文，现在长期改为英文。 G=语言/英文的替代候选，旧中文确认前active不变；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-18-S1","script":"18","description":"称呼/小周替代候选，手动锁定旧项不变；源U1。","originalRow":"预置手动锁定active 用户称呼/小林。 U:以后称呼我小周。 G=称呼/小周替代候选，手动锁定旧项不变；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-18-S2","script":"18","description":"称呼/小周替代候选，手动锁定旧项不变；源U1。","originalRow":"预置手动锁定active 用户称呼/小林。 U:以后称呼我小周。 G=称呼/小周替代候选，手动锁定旧项不变；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-18-S3","script":"18","description":"称呼/小周替代候选，手动锁定旧项不变；源U1。","originalRow":"预置手动锁定active 用户称呼/小林。 U:以后称呼我小周。 G=称呼/小周替代候选，手动锁定旧项不变；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-18-S4","script":"18","description":"称呼/小周替代候选，手动锁定旧项不变；源U1。","originalRow":"预置手动锁定active 用户称呼/小林。 U:以后称呼我小周。 G=称呼/小周替代候选，手动锁定旧项不变；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-18-S5","script":"18","description":"称呼/小周替代候选，手动锁定旧项不变；源U1。","originalRow":"预置手动锁定active 用户称呼/小林。 U:以后称呼我小周。 G=称呼/小周替代候选，手动锁定旧项不变；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-19-S1","script":"19","description":"空新增；N=同义重复。","originalRow":"预置自动active 回答顺序/先结论后依据。 U:我喜欢先给结论，再给必要依据。 G=空新增；N=同义重复。","reviewStatus":"pending_independent_review"}
+{"id":"EX-19-S2","script":"19","description":"空新增；N=同义重复。","originalRow":"预置自动active 回答顺序/先结论后依据。 U:我喜欢先给结论，再给必要依据。 G=空新增；N=同义重复。","reviewStatus":"pending_independent_review"}
+{"id":"EX-19-S3","script":"19","description":"空新增；N=同义重复。","originalRow":"预置自动active 回答顺序/先结论后依据。 U:我喜欢先给结论，再给必要依据。 G=空新增；N=同义重复。","reviewStatus":"pending_independent_review"}
+{"id":"EX-19-S4","script":"19","description":"空新增；N=同义重复。","originalRow":"预置自动active 回答顺序/先结论后依据。 U:我喜欢先给结论，再给必要依据。 G=空新增；N=同义重复。","reviewStatus":"pending_independent_review"}
+{"id":"EX-19-S5","script":"19","description":"空新增；N=同义重复。","originalRow":"预置自动active 回答顺序/先结论后依据。 U:我喜欢先给结论，再给必要依据。 G=空新增；N=同义重复。","reviewStatus":"pending_independent_review"}
+{"id":"EX-20-S1","script":"20","description":"专业/电子工程仅1条global，来源可合并U1/U3；N=重复记录。","originalRow":"U:我的专业是电子工程。→A:好的。→U:我再说一遍，专业是电子工程。 G=专业/电子工程仅1条global，来源可合并U1/U3；N=重复记录。","reviewStatus":"pending_independent_review"}
+{"id":"EX-20-S2","script":"20","description":"专业/电子工程仅1条global，来源可合并U1/U3；N=重复记录。","originalRow":"U:我的专业是电子工程。→A:好的。→U:我再说一遍，专业是电子工程。 G=专业/电子工程仅1条global，来源可合并U1/U3；N=重复记录。","reviewStatus":"pending_independent_review"}
+{"id":"EX-20-S3","script":"20","description":"专业/电子工程仅1条global，来源可合并U1/U3；N=重复记录。","originalRow":"U:我的专业是电子工程。→A:好的。→U:我再说一遍，专业是电子工程。 G=专业/电子工程仅1条global，来源可合并U1/U3；N=重复记录。","reviewStatus":"pending_independent_review"}
+{"id":"EX-20-S4","script":"20","description":"专业/电子工程仅1条global，来源可合并U1/U3；N=重复记录。","originalRow":"U:我的专业是电子工程。→A:好的。→U:我再说一遍，专业是电子工程。 G=专业/电子工程仅1条global，来源可合并U1/U3；N=重复记录。","reviewStatus":"pending_independent_review"}
+{"id":"EX-20-S5","script":"20","description":"专业/电子工程仅1条global，来源可合并U1/U3；N=重复记录。","originalRow":"U:我的专业是电子工程。→A:好的。→U:我再说一遍，专业是电子工程。 G=专业/电子工程仅1条global，来源可合并U1/U3；N=重复记录。","reviewStatus":"pending_independent_review"}
+{"id":"EX-21-S1","script":"21","description":"P技术栈/Vue替代候选，旧React仍有效；源U1；N=直接覆盖。","originalRow":"预置P手动active 技术栈/React。 P U:本项目决定改用Vue。 G=P技术栈/Vue替代候选，旧React仍有效；源U1；N=直接覆盖。","reviewStatus":"pending_independent_review"}
+{"id":"EX-21-S2","script":"21","description":"P技术栈/Vue替代候选，旧React仍有效；源U1；N=直接覆盖。","originalRow":"预置P手动active 技术栈/React。 P U:本项目决定改用Vue。 G=P技术栈/Vue替代候选，旧React仍有效；源U1；N=直接覆盖。","reviewStatus":"pending_independent_review"}
+{"id":"EX-21-S3","script":"21","description":"P技术栈/Vue替代候选，旧React仍有效；源U1；N=直接覆盖。","originalRow":"预置P手动active 技术栈/React。 P U:本项目决定改用Vue。 G=P技术栈/Vue替代候选，旧React仍有效；源U1；N=直接覆盖。","reviewStatus":"pending_independent_review"}
+{"id":"EX-21-S4","script":"21","description":"P技术栈/Vue替代候选，旧React仍有效；源U1；N=直接覆盖。","originalRow":"预置P手动active 技术栈/React。 P U:本项目决定改用Vue。 G=P技术栈/Vue替代候选，旧React仍有效；源U1；N=直接覆盖。","reviewStatus":"pending_independent_review"}
+{"id":"EX-21-S5","script":"21","description":"P技术栈/Vue替代候选，旧React仍有效；源U1；N=直接覆盖。","originalRow":"预置P手动active 技术栈/React。 P U:本项目决定改用Vue。 G=P技术栈/Vue替代候选，旧React仍有效；源U1；N=直接覆盖。","reviewStatus":"pending_independent_review"}
+{"id":"EX-22-S1","script":"22","description":"新冲突候选；旧锁定不变；源U1。","originalRow":"预置global候选习惯/早起、locked=true。 U:我长期习惯晚起。 G=新冲突候选；旧锁定不变；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-22-S2","script":"22","description":"新冲突候选；旧锁定不变；源U1。","originalRow":"预置global候选习惯/早起、locked=true。 U:我长期习惯晚起。 G=新冲突候选；旧锁定不变；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-22-S3","script":"22","description":"新冲突候选；旧锁定不变；源U1。","originalRow":"预置global候选习惯/早起、locked=true。 U:我长期习惯晚起。 G=新冲突候选；旧锁定不变；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-22-S4","script":"22","description":"新冲突候选；旧锁定不变；源U1。","originalRow":"预置global候选习惯/早起、locked=true。 U:我长期习惯晚起。 G=新冲突候选；旧锁定不变；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-22-S5","script":"22","description":"新冲突候选；旧锁定不变；源U1。","originalRow":"预置global候选习惯/早起、locked=true。 U:我长期习惯晚起。 G=新冲突候选；旧锁定不变；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-23-S1","script":"23","description":"空；敏感消息全文不得发自动提取模型。","originalRow":"U:我的密码是匿名测试口令，不要保存。 G=空；敏感消息全文不得发自动提取模型。","reviewStatus":"pending_independent_review"}
+{"id":"EX-23-S2","script":"23","description":"空；敏感消息全文不得发自动提取模型。","originalRow":"U:我的密码是匿名测试口令，不要保存。 G=空；敏感消息全文不得发自动提取模型。","reviewStatus":"pending_independent_review"}
+{"id":"EX-23-S3","script":"23","description":"空；敏感消息全文不得发自动提取模型。","originalRow":"U:我的密码是匿名测试口令，不要保存。 G=空；敏感消息全文不得发自动提取模型。","reviewStatus":"pending_independent_review"}
+{"id":"EX-23-S4","script":"23","description":"空；敏感消息全文不得发自动提取模型。","originalRow":"U:我的密码是匿名测试口令，不要保存。 G=空；敏感消息全文不得发自动提取模型。","reviewStatus":"pending_independent_review"}
+{"id":"EX-23-S5","script":"23","description":"空；敏感消息全文不得发自动提取模型。","originalRow":"U:我的密码是匿名测试口令，不要保存。 G=空；敏感消息全文不得发自动提取模型。","reviewStatus":"pending_independent_review"}
+{"id":"EX-24-S1","script":"24","description":"空；全文不外发自动提取；N=医学事实。","originalRow":"U:我有过敏诊断，病历只在本轮讨论。 G=空；全文不外发自动提取；N=医学事实。","reviewStatus":"pending_independent_review"}
+{"id":"EX-24-S2","script":"24","description":"空；全文不外发自动提取；N=医学事实。","originalRow":"U:我有过敏诊断，病历只在本轮讨论。 G=空；全文不外发自动提取；N=医学事实。","reviewStatus":"pending_independent_review"}
+{"id":"EX-24-S3","script":"24","description":"空；全文不外发自动提取；N=医学事实。","originalRow":"U:我有过敏诊断，病历只在本轮讨论。 G=空；全文不外发自动提取；N=医学事实。","reviewStatus":"pending_independent_review"}
+{"id":"EX-24-S4","script":"24","description":"空；全文不外发自动提取；N=医学事实。","originalRow":"U:我有过敏诊断，病历只在本轮讨论。 G=空；全文不外发自动提取；N=医学事实。","reviewStatus":"pending_independent_review"}
+{"id":"EX-24-S5","script":"24","description":"空；全文不外发自动提取；N=医学事实。","originalRow":"U:我有过敏诊断，病历只在本轮讨论。 G=空；全文不外发自动提取；N=医学事实。","reviewStatus":"pending_independent_review"}
+{"id":"EX-25-S1","script":"25","description":"显式instruction/先结论，E global；脚本化用户确认后恰好1条；源U1。","originalRow":"U:记住：以后技术回答先写结论。 G=显式instruction/先结论，E global；脚本化用户确认后恰好1条；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-25-S2","script":"25","description":"显式instruction/先结论，E global；脚本化用户确认后恰好1条；源U1。","originalRow":"U:记住：以后技术回答先写结论。 G=显式instruction/先结论，E global；脚本化用户确认后恰好1条；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-25-S3","script":"25","description":"显式instruction/先结论，E global；脚本化用户确认后恰好1条；源U1。","originalRow":"U:记住：以后技术回答先写结论。 G=显式instruction/先结论，E global；脚本化用户确认后恰好1条；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-25-S4","script":"25","description":"显式instruction/先结论，E global；脚本化用户确认后恰好1条；源U1。","originalRow":"U:记住：以后技术回答先写结论。 G=显式instruction/先结论，E global；脚本化用户确认后恰好1条；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-25-S5","script":"25","description":"显式instruction/先结论，E global；脚本化用户确认后恰好1条；源U1。","originalRow":"U:记住：以后技术回答先写结论。 G=显式instruction/先结论，E global；脚本化用户确认后恰好1条；源U1。","reviewStatus":"pending_independent_review"}
+{"id":"EX-26-S1","script":"26","description":"显式P技术栈/Rust，E；确认后恰好1条；N=全局Rust偏好。","originalRow":"P U:保存为长期记忆：只有本项目使用Rust。 G=显式P技术栈/Rust，E；确认后恰好1条；N=全局Rust偏好。","reviewStatus":"pending_independent_review"}
+{"id":"EX-26-S2","script":"26","description":"显式P技术栈/Rust，E；确认后恰好1条；N=全局Rust偏好。","originalRow":"P U:保存为长期记忆：只有本项目使用Rust。 G=显式P技术栈/Rust，E；确认后恰好1条；N=全局Rust偏好。","reviewStatus":"pending_independent_review"}
+{"id":"EX-26-S3","script":"26","description":"显式P技术栈/Rust，E；确认后恰好1条；N=全局Rust偏好。","originalRow":"P U:保存为长期记忆：只有本项目使用Rust。 G=显式P技术栈/Rust，E；确认后恰好1条；N=全局Rust偏好。","reviewStatus":"pending_independent_review"}
+{"id":"EX-26-S4","script":"26","description":"显式P技术栈/Rust，E；确认后恰好1条；N=全局Rust偏好。","originalRow":"P U:保存为长期记忆：只有本项目使用Rust。 G=显式P技术栈/Rust，E；确认后恰好1条；N=全局Rust偏好。","reviewStatus":"pending_independent_review"}
+{"id":"EX-26-S5","script":"26","description":"显式P技术栈/Rust，E；确认后恰好1条；N=全局Rust偏好。","originalRow":"P U:保存为长期记忆：只有本项目使用Rust。 G=显式P技术栈/Rust，E；确认后恰好1条；N=全局Rust偏好。","reviewStatus":"pending_independent_review"}
+{"id":"EX-27-S1","script":"27","description":"空；N=语言/英文。","originalRow":"U:不要记住我刚才说的，今天只是临时偏好英文。 G=空；N=语言/英文。","reviewStatus":"pending_independent_review"}
+{"id":"EX-27-S2","script":"27","description":"空；N=语言/英文。","originalRow":"U:不要记住我刚才说的，今天只是临时偏好英文。 G=空；N=语言/英文。","reviewStatus":"pending_independent_review"}
+{"id":"EX-27-S3","script":"27","description":"空；N=语言/英文。","originalRow":"U:不要记住我刚才说的，今天只是临时偏好英文。 G=空；N=语言/英文。","reviewStatus":"pending_independent_review"}
+{"id":"EX-27-S4","script":"27","description":"空；N=语言/英文。","originalRow":"U:不要记住我刚才说的，今天只是临时偏好英文。 G=空；N=语言/英文。","reviewStatus":"pending_independent_review"}
+{"id":"EX-27-S5","script":"27","description":"空；N=语言/英文。","originalRow":"U:不要记住我刚才说的，今天只是临时偏好英文。 G=空；N=语言/英文。","reviewStatus":"pending_independent_review"}
+{"id":"EX-28-S1","script":"28","description":"空；N=将询问当保存请求。","originalRow":"U:你还记住我的习惯了吗？→A:需要先查看记录。 G=空；N=将询问当保存请求。","reviewStatus":"pending_independent_review"}
+{"id":"EX-28-S2","script":"28","description":"空；N=将询问当保存请求。","originalRow":"U:你还记住我的习惯了吗？→A:需要先查看记录。 G=空；N=将询问当保存请求。","reviewStatus":"pending_independent_review"}
+{"id":"EX-28-S3","script":"28","description":"空；N=将询问当保存请求。","originalRow":"U:你还记住我的习惯了吗？→A:需要先查看记录。 G=空；N=将询问当保存请求。","reviewStatus":"pending_independent_review"}
+{"id":"EX-28-S4","script":"28","description":"空；N=将询问当保存请求。","originalRow":"U:你还记住我的习惯了吗？→A:需要先查看记录。 G=空；N=将询问当保存请求。","reviewStatus":"pending_independent_review"}
+{"id":"EX-28-S5","script":"28","description":"空；N=将询问当保存请求。","originalRow":"U:你还记住我的习惯了吗？→A:需要先查看记录。 G=空；N=将询问当保存请求。","reviewStatus":"pending_independent_review"}
+{"id":"EX-29-S1","script":"29","description":"P/SQLite与Q/PostgreSQL各1条；各自U来源；无互相替代。","originalRow":"P U:本项目采用SQLite。→A:收到。→[切到Q、同会话] U:本项目采用PostgreSQL。 G=P/SQLite与Q/PostgreSQL各1条；各自U来源；无互相替代。","reviewStatus":"pending_independent_review"}
+{"id":"EX-29-S2","script":"29","description":"P/SQLite与Q/PostgreSQL各1条；各自U来源；无互相替代。","originalRow":"P U:本项目采用SQLite。→A:收到。→[切到Q、同会话] U:本项目采用PostgreSQL。 G=P/SQLite与Q/PostgreSQL各1条；各自U来源；无互相替代。","reviewStatus":"pending_independent_review"}
+{"id":"EX-29-S3","script":"29","description":"P/SQLite与Q/PostgreSQL各1条；各自U来源；无互相替代。","originalRow":"P U:本项目采用SQLite。→A:收到。→[切到Q、同会话] U:本项目采用PostgreSQL。 G=P/SQLite与Q/PostgreSQL各1条；各自U来源；无互相替代。","reviewStatus":"pending_independent_review"}
+{"id":"EX-29-S4","script":"29","description":"P/SQLite与Q/PostgreSQL各1条；各自U来源；无互相替代。","originalRow":"P U:本项目采用SQLite。→A:收到。→[切到Q、同会话] U:本项目采用PostgreSQL。 G=P/SQLite与Q/PostgreSQL各1条；各自U来源；无互相替代。","reviewStatus":"pending_independent_review"}
+{"id":"EX-29-S5","script":"29","description":"P/SQLite与Q/PostgreSQL各1条；各自U来源；无互相替代。","originalRow":"P U:本项目采用SQLite。→A:收到。→[切到Q、同会话] U:本项目采用PostgreSQL。 G=P/SQLite与Q/PostgreSQL各1条；各自U来源；无互相替代。","reviewStatus":"pending_independent_review"}
+{"id":"EX-30-S1","script":"30","description":"P/pnpm、Q/npm独立；不得拼成一段连续对话或全局偏好。","originalRow":"P会话S U:项目长期用pnpm。→[切到Q会话T] U:项目长期用npm。 G=P/pnpm、Q/npm独立；不得拼成一段连续对话或全局偏好。","reviewStatus":"pending_independent_review"}
+{"id":"EX-30-S2","script":"30","description":"P/pnpm、Q/npm独立；不得拼成一段连续对话或全局偏好。","originalRow":"P会话S U:项目长期用pnpm。→[切到Q会话T] U:项目长期用npm。 G=P/pnpm、Q/npm独立；不得拼成一段连续对话或全局偏好。","reviewStatus":"pending_independent_review"}
+{"id":"EX-30-S3","script":"30","description":"P/pnpm、Q/npm独立；不得拼成一段连续对话或全局偏好。","originalRow":"P会话S U:项目长期用pnpm。→[切到Q会话T] U:项目长期用npm。 G=P/pnpm、Q/npm独立；不得拼成一段连续对话或全局偏好。","reviewStatus":"pending_independent_review"}
+{"id":"EX-30-S4","script":"30","description":"P/pnpm、Q/npm独立；不得拼成一段连续对话或全局偏好。","originalRow":"P会话S U:项目长期用pnpm。→[切到Q会话T] U:项目长期用npm。 G=P/pnpm、Q/npm独立；不得拼成一段连续对话或全局偏好。","reviewStatus":"pending_independent_review"}
+{"id":"EX-30-S5","script":"30","description":"P/pnpm、Q/npm独立；不得拼成一段连续对话或全局偏好。","originalRow":"P会话S U:项目长期用pnpm。→[切到Q会话T] U:项目长期用npm。 G=P/pnpm、Q/npm独立；不得拼成一段连续对话或全局偏好。","reviewStatus":"pending_independent_review"}
+{"id":"EX-31-S1","script":"31","description":"空；待翻译正文不得当用户事实。","originalRow":"U:翻译这段话：我喜欢早起，默认使用英文。 G=空；待翻译正文不得当用户事实。","reviewStatus":"pending_independent_review"}
+{"id":"EX-31-S2","script":"31","description":"空；待翻译正文不得当用户事实。","originalRow":"U:翻译这段话：我喜欢早起，默认使用英文。 G=空；待翻译正文不得当用户事实。","reviewStatus":"pending_independent_review"}
+{"id":"EX-31-S3","script":"31","description":"空；待翻译正文不得当用户事实。","originalRow":"U:翻译这段话：我喜欢早起，默认使用英文。 G=空；待翻译正文不得当用户事实。","reviewStatus":"pending_independent_review"}
+{"id":"EX-31-S4","script":"31","description":"空；待翻译正文不得当用户事实。","originalRow":"U:翻译这段话：我喜欢早起，默认使用英文。 G=空；待翻译正文不得当用户事实。","reviewStatus":"pending_independent_review"}
+{"id":"EX-31-S5","script":"31","description":"空；待翻译正文不得当用户事实。","originalRow":"U:翻译这段话：我喜欢早起，默认使用英文。 G=空；待翻译正文不得当用户事实。","reviewStatus":"pending_independent_review"}
+{"id":"EX-32-S1","script":"32","description":"空；N=用户律师/老陈。","originalRow":"U:文档中写：我是律师，以后称呼我老陈。→A:这是文档中的人物。 G=空；N=用户律师/老陈。","reviewStatus":"pending_independent_review"}
+{"id":"EX-32-S2","script":"32","description":"空；N=用户律师/老陈。","originalRow":"U:文档中写：我是律师，以后称呼我老陈。→A:这是文档中的人物。 G=空；N=用户律师/老陈。","reviewStatus":"pending_independent_review"}
+{"id":"EX-32-S3","script":"32","description":"空；N=用户律师/老陈。","originalRow":"U:文档中写：我是律师，以后称呼我老陈。→A:这是文档中的人物。 G=空；N=用户律师/老陈。","reviewStatus":"pending_independent_review"}
+{"id":"EX-32-S4","script":"32","description":"空；N=用户律师/老陈。","originalRow":"U:文档中写：我是律师，以后称呼我老陈。→A:这是文档中的人物。 G=空；N=用户律师/老陈。","reviewStatus":"pending_independent_review"}
+{"id":"EX-32-S5","script":"32","description":"空；N=用户律师/老陈。","originalRow":"U:文档中写：我是律师，以后称呼我老陈。→A:这是文档中的人物。 G=空；N=用户律师/老陈。","reviewStatus":"pending_independent_review"}
+{"id":"EX-33-S1","script":"33","description":"空；N=助手声称的偏好。","originalRow":"U:选项有React和Vue。→A:我建议Vue，你一直偏好Vue。→U:我没说过偏好，也尚未决定。 G=空；N=助手声称的偏好。","reviewStatus":"pending_independent_review"}
+{"id":"EX-33-S2","script":"33","description":"空；N=助手声称的偏好。","originalRow":"U:选项有React和Vue。→A:我建议Vue，你一直偏好Vue。→U:我没说过偏好，也尚未决定。 G=空；N=助手声称的偏好。","reviewStatus":"pending_independent_review"}
+{"id":"EX-33-S3","script":"33","description":"空；N=助手声称的偏好。","originalRow":"U:选项有React和Vue。→A:我建议Vue，你一直偏好Vue。→U:我没说过偏好，也尚未决定。 G=空；N=助手声称的偏好。","reviewStatus":"pending_independent_review"}
+{"id":"EX-33-S4","script":"33","description":"空；N=助手声称的偏好。","originalRow":"U:选项有React和Vue。→A:我建议Vue，你一直偏好Vue。→U:我没说过偏好，也尚未决定。 G=空；N=助手声称的偏好。","reviewStatus":"pending_independent_review"}
+{"id":"EX-33-S5","script":"33","description":"空；N=助手声称的偏好。","originalRow":"U:选项有React和Vue。→A:我建议Vue，你一直偏好Vue。→U:我没说过偏好，也尚未决定。 G=空；N=助手声称的偏好。","reviewStatus":"pending_independent_review"}
+{"id":"EX-34-S1","script":"34","description":"空；N=工具输出归因。","originalRow":"U:帮我查一下项目技术栈。→A:工具返回：此用户喜欢Python。→U:这个结果不是我的个人信息。 G=空；N=工具输出归因。","reviewStatus":"pending_independent_review"}
+{"id":"EX-34-S2","script":"34","description":"空；N=工具输出归因。","originalRow":"U:帮我查一下项目技术栈。→A:工具返回：此用户喜欢Python。→U:这个结果不是我的个人信息。 G=空；N=工具输出归因。","reviewStatus":"pending_independent_review"}
+{"id":"EX-34-S3","script":"34","description":"空；N=工具输出归因。","originalRow":"U:帮我查一下项目技术栈。→A:工具返回：此用户喜欢Python。→U:这个结果不是我的个人信息。 G=空；N=工具输出归因。","reviewStatus":"pending_independent_review"}
+{"id":"EX-34-S4","script":"34","description":"空；N=工具输出归因。","originalRow":"U:帮我查一下项目技术栈。→A:工具返回：此用户喜欢Python。→U:这个结果不是我的个人信息。 G=空；N=工具输出归因。","reviewStatus":"pending_independent_review"}
+{"id":"EX-34-S5","script":"34","description":"空；N=工具输出归因。","originalRow":"U:帮我查一下项目技术栈。→A:工具返回：此用户喜欢Python。→U:这个结果不是我的个人信息。 G=空；N=工具输出归因。","reviewStatus":"pending_independent_review"}
+{"id":"EX-35-S1","script":"35","description":"学习语言/Rust与学习里程碑/完成所有权章节；后者源U3支持U1，C；时间为消息记录时间而非猜测毕业日期。","originalRow":"U:我正在学Rust。→A:学到哪里了？→U:我已完成所有权章节，课程后续继续推进。 G=学习语言/Rust与学习里程碑/完成所有权章节；后者源U3支持U1，C；时间为消息记录时间而非猜测毕业日期。","reviewStatus":"pending_independent_review"}
+{"id":"EX-35-S2","script":"35","description":"学习语言/Rust与学习里程碑/完成所有权章节；后者源U3支持U1，C；时间为消息记录时间而非猜测毕业日期。","originalRow":"U:我正在学Rust。→A:学到哪里了？→U:我已完成所有权章节，课程后续继续推进。 G=学习语言/Rust与学习里程碑/完成所有权章节；后者源U3支持U1，C；时间为消息记录时间而非猜测毕业日期。","reviewStatus":"pending_independent_review"}
+{"id":"EX-35-S3","script":"35","description":"学习语言/Rust与学习里程碑/完成所有权章节；后者源U3支持U1，C；时间为消息记录时间而非猜测毕业日期。","originalRow":"U:我正在学Rust。→A:学到哪里了？→U:我已完成所有权章节，课程后续继续推进。 G=学习语言/Rust与学习里程碑/完成所有权章节；后者源U3支持U1，C；时间为消息记录时间而非猜测毕业日期。","reviewStatus":"pending_independent_review"}
+{"id":"EX-35-S4","script":"35","description":"学习语言/Rust与学习里程碑/完成所有权章节；后者源U3支持U1，C；时间为消息记录时间而非猜测毕业日期。","originalRow":"U:我正在学Rust。→A:学到哪里了？→U:我已完成所有权章节，课程后续继续推进。 G=学习语言/Rust与学习里程碑/完成所有权章节；后者源U3支持U1，C；时间为消息记录时间而非猜测毕业日期。","reviewStatus":"pending_independent_review"}
+{"id":"EX-35-S5","script":"35","description":"学习语言/Rust与学习里程碑/完成所有权章节；后者源U3支持U1，C；时间为消息记录时间而非猜测毕业日期。","originalRow":"U:我正在学Rust。→A:学到哪里了？→U:我已完成所有权章节，课程后续继续推进。 G=学习语言/Rust与学习里程碑/完成所有权章节；后者源U3支持U1，C；时间为消息记录时间而非猜测毕业日期。","reviewStatus":"pending_independent_review"}
+{"id":"EX-36-S1","script":"36","description":"P构建工具/Vite与迁移完成事件；源U1；不得因“今天”一概丢弃已确定长期决策。","originalRow":"P U:我们今天已完成项目从Webpack迁移到Vite，后续长期用Vite。 G=P构建工具/Vite与迁移完成事件；源U1；不得因“今天”一概丢弃已确定长期决策。","reviewStatus":"pending_independent_review"}
+{"id":"EX-36-S2","script":"36","description":"P构建工具/Vite与迁移完成事件；源U1；不得因“今天”一概丢弃已确定长期决策。","originalRow":"P U:我们今天已完成项目从Webpack迁移到Vite，后续长期用Vite。 G=P构建工具/Vite与迁移完成事件；源U1；不得因“今天”一概丢弃已确定长期决策。","reviewStatus":"pending_independent_review"}
+{"id":"EX-36-S3","script":"36","description":"P构建工具/Vite与迁移完成事件；源U1；不得因“今天”一概丢弃已确定长期决策。","originalRow":"P U:我们今天已完成项目从Webpack迁移到Vite，后续长期用Vite。 G=P构建工具/Vite与迁移完成事件；源U1；不得因“今天”一概丢弃已确定长期决策。","reviewStatus":"pending_independent_review"}
+{"id":"EX-36-S4","script":"36","description":"P构建工具/Vite与迁移完成事件；源U1；不得因“今天”一概丢弃已确定长期决策。","originalRow":"P U:我们今天已完成项目从Webpack迁移到Vite，后续长期用Vite。 G=P构建工具/Vite与迁移完成事件；源U1；不得因“今天”一概丢弃已确定长期决策。","reviewStatus":"pending_independent_review"}
+{"id":"EX-36-S5","script":"36","description":"P构建工具/Vite与迁移完成事件；源U1；不得因“今天”一概丢弃已确定长期决策。","originalRow":"P U:我们今天已完成项目从Webpack迁移到Vite，后续长期用Vite。 G=P构建工具/Vite与迁移完成事件；源U1；不得因“今天”一概丢弃已确定长期决策。","reviewStatus":"pending_independent_review"}
+{"id":"EX-37-S1","script":"37","description":"专业/数学、长期目标/研究数论；源分别U1/U3；不得默默丢弃超长尾部。","originalRow":"U:我的专业是数学。→A:收到。→U:[将“谢谢。”精确重复3500次后接“我的长期目标是研究数论。”] G=专业/数学、长期目标/研究数论；源分别U1/U3；不得默默丢弃超长尾部。","reviewStatus":"pending_independent_review"}
+{"id":"EX-37-S2","script":"37","description":"专业/数学、长期目标/研究数论；源分别U1/U3；不得默默丢弃超长尾部。","originalRow":"U:我的专业是数学。→A:收到。→U:[将“谢谢。”精确重复3500次后接“我的长期目标是研究数论。”] G=专业/数学、长期目标/研究数论；源分别U1/U3；不得默默丢弃超长尾部。","reviewStatus":"pending_independent_review"}
+{"id":"EX-37-S3","script":"37","description":"专业/数学、长期目标/研究数论；源分别U1/U3；不得默默丢弃超长尾部。","originalRow":"U:我的专业是数学。→A:收到。→U:[将“谢谢。”精确重复3500次后接“我的长期目标是研究数论。”] G=专业/数学、长期目标/研究数论；源分别U1/U3；不得默默丢弃超长尾部。","reviewStatus":"pending_independent_review"}
+{"id":"EX-37-S4","script":"37","description":"专业/数学、长期目标/研究数论；源分别U1/U3；不得默默丢弃超长尾部。","originalRow":"U:我的专业是数学。→A:收到。→U:[将“谢谢。”精确重复3500次后接“我的长期目标是研究数论。”] G=专业/数学、长期目标/研究数论；源分别U1/U3；不得默默丢弃超长尾部。","reviewStatus":"pending_independent_review"}
+{"id":"EX-37-S5","script":"37","description":"专业/数学、长期目标/研究数论；源分别U1/U3；不得默默丢弃超长尾部。","originalRow":"U:我的专业是数学。→A:收到。→U:[将“谢谢。”精确重复3500次后接“我的长期目标是研究数论。”] G=专业/数学、长期目标/研究数论；源分别U1/U3；不得默默丢弃超长尾部。","reviewStatus":"pending_independent_review"}
+{"id":"EX-38-S1","script":"38","description":"P数据库/SQLite的C，来源最终U5支持U1/A2；若窗口预算缺失依据可不写但计FN，不得猜B。","originalRow":"P U:本项目候选方案是A和B。→A:A是桌面SQLite，B是服务端PostgreSQL。→U:[“普通填充。”重复2500次]→A:继续。→U:我们决定长期用第一个。 G=P数据库/SQLite的C，来源最终U5支持U1/A2；若窗口预算缺失依据可不写但计FN，不得猜B。","reviewStatus":"pending_independent_review"}
+{"id":"EX-38-S2","script":"38","description":"P数据库/SQLite的C，来源最终U5支持U1/A2；若窗口预算缺失依据可不写但计FN，不得猜B。","originalRow":"P U:本项目候选方案是A和B。→A:A是桌面SQLite，B是服务端PostgreSQL。→U:[“普通填充。”重复2500次]→A:继续。→U:我们决定长期用第一个。 G=P数据库/SQLite的C，来源最终U5支持U1/A2；若窗口预算缺失依据可不写但计FN，不得猜B。","reviewStatus":"pending_independent_review"}
+{"id":"EX-38-S3","script":"38","description":"P数据库/SQLite的C，来源最终U5支持U1/A2；若窗口预算缺失依据可不写但计FN，不得猜B。","originalRow":"P U:本项目候选方案是A和B。→A:A是桌面SQLite，B是服务端PostgreSQL。→U:[“普通填充。”重复2500次]→A:继续。→U:我们决定长期用第一个。 G=P数据库/SQLite的C，来源最终U5支持U1/A2；若窗口预算缺失依据可不写但计FN，不得猜B。","reviewStatus":"pending_independent_review"}
+{"id":"EX-38-S4","script":"38","description":"P数据库/SQLite的C，来源最终U5支持U1/A2；若窗口预算缺失依据可不写但计FN，不得猜B。","originalRow":"P U:本项目候选方案是A和B。→A:A是桌面SQLite，B是服务端PostgreSQL。→U:[“普通填充。”重复2500次]→A:继续。→U:我们决定长期用第一个。 G=P数据库/SQLite的C，来源最终U5支持U1/A2；若窗口预算缺失依据可不写但计FN，不得猜B。","reviewStatus":"pending_independent_review"}
+{"id":"EX-38-S5","script":"38","description":"P数据库/SQLite的C，来源最终U5支持U1/A2；若窗口预算缺失依据可不写但计FN，不得猜B。","originalRow":"P U:本项目候选方案是A和B。→A:A是桌面SQLite，B是服务端PostgreSQL。→U:[“普通填充。”重复2500次]→A:继续。→U:我们决定长期用第一个。 G=P数据库/SQLite的C，来源最终U5支持U1/A2；若窗口预算缺失依据可不写但计FN，不得猜B。","reviewStatus":"pending_independent_review"}
+{"id":"EX-39-S1","script":"39","description":"最终无新增；迟到不得写。S4在恢复前删除持久源。","originalRow":"U:我的专业是天文学。→A:收到。→[首个提取已发出、返回前删除源U1；无请求则在结束前删除] G=最终无新增；迟到不得写。S4在恢复前删除持久源。","reviewStatus":"pending_independent_review"}
+{"id":"EX-39-S2","script":"39","description":"最终无新增；迟到不得写。S4在恢复前删除持久源。","originalRow":"U:我的专业是天文学。→A:收到。→[首个提取已发出、返回前删除源U1；无请求则在结束前删除] G=最终无新增；迟到不得写。S4在恢复前删除持久源。","reviewStatus":"pending_independent_review"}
+{"id":"EX-39-S3","script":"39","description":"最终无新增；迟到不得写。S4在恢复前删除持久源。","originalRow":"U:我的专业是天文学。→A:收到。→[首个提取已发出、返回前删除源U1；无请求则在结束前删除] G=最终无新增；迟到不得写。S4在恢复前删除持久源。","reviewStatus":"pending_independent_review"}
+{"id":"EX-39-S4","script":"39","description":"最终无新增；迟到不得写。S4在恢复前删除持久源。","originalRow":"U:我的专业是天文学。→A:收到。→[首个提取已发出、返回前删除源U1；无请求则在结束前删除] G=最终无新增；迟到不得写。S4在恢复前删除持久源。","reviewStatus":"pending_independent_review"}
+{"id":"EX-39-S5","script":"39","description":"最终无新增；迟到不得写。S4在恢复前删除持久源。","originalRow":"U:我的专业是天文学。→A:收到。→[首个提取已发出、返回前删除源U1；无请求则在结束前删除] G=最终无新增；迟到不得写。S4在恢复前删除持久源。","reviewStatus":"pending_independent_review"}
+{"id":"EX-40-S1","script":"40","description":"最终无新增；metadata-only变化使旧证据失效。S4在恢复前修改。","originalRow":"P U:项目长期使用Deno。→A:收到。→[模型返回前将源可见快照改成“只是引用，非项目约定”，raw content保持不变] G=最终无新增；metadata-only变化使旧证据失效。S4在恢复前修改。","reviewStatus":"pending_independent_review"}
+{"id":"EX-40-S2","script":"40","description":"最终无新增；metadata-only变化使旧证据失效。S4在恢复前修改。","originalRow":"P U:项目长期使用Deno。→A:收到。→[模型返回前将源可见快照改成“只是引用，非项目约定”，raw content保持不变] G=最终无新增；metadata-only变化使旧证据失效。S4在恢复前修改。","reviewStatus":"pending_independent_review"}
+{"id":"EX-40-S3","script":"40","description":"最终无新增；metadata-only变化使旧证据失效。S4在恢复前修改。","originalRow":"P U:项目长期使用Deno。→A:收到。→[模型返回前将源可见快照改成“只是引用，非项目约定”，raw content保持不变] G=最终无新增；metadata-only变化使旧证据失效。S4在恢复前修改。","reviewStatus":"pending_independent_review"}
+{"id":"EX-40-S4","script":"40","description":"最终无新增；metadata-only变化使旧证据失效。S4在恢复前修改。","originalRow":"P U:项目长期使用Deno。→A:收到。→[模型返回前将源可见快照改成“只是引用，非项目约定”，raw content保持不变] G=最终无新增；metadata-only变化使旧证据失效。S4在恢复前修改。","reviewStatus":"pending_independent_review"}
+{"id":"EX-40-S5","script":"40","description":"最终无新增；metadata-only变化使旧证据失效。S4在恢复前修改。","originalRow":"P U:项目长期使用Deno。→A:收到。→[模型返回前将源可见快照改成“只是引用，非项目约定”，raw content保持不变] G=最终无新增；metadata-only变化使旧证据失效。S4在恢复前修改。","reviewStatus":"pending_independent_review"}

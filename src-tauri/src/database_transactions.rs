@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
     Row, Sqlite, SqlitePool, Transaction,
@@ -529,6 +530,318 @@ pub async fn persist_document_transaction(
     run_persist_document(&pool, request).await
 }
 
+/// Optional v2 intake. The caller computes SHA-256 over the exact source snapshot;
+/// the worker must recheck it before use. The receipt never stores message text.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistMemoryIntakeRequest {
+    message: MemoryIntakeMessage,
+    scope_key: Option<String>,
+    source_fingerprint: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistChatMessageWithMemoryIntakeRequest {
+    session: PersistChatSessionInput,
+    message: PersistChatMessageInput,
+    policy_version: u8,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistChatSessionInput {
+    id: String,
+    title: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistChatMessageInput {
+    id: String,
+    session_id: String,
+    role: String,
+    content: String,
+    metadata: Option<String>,
+    created_at: i64,
+}
+
+async fn run_persist_chat_message_with_memory_intake(
+    pool: &SqlitePool,
+    request: PersistChatMessageWithMemoryIntakeRequest,
+) -> Result<bool, String> {
+    let session = &request.session;
+    let message = &request.message;
+    if request.policy_version != 3
+        || session.id.is_empty()
+        || session.id.len() > 300
+        || session.title.len() > 300
+        || message.id.is_empty()
+        || message.id.len() > 300
+        || message.session_id != session.id
+        || message.role != "user"
+        || message.created_at <= 0
+        || message.content.len() > 1_500_000
+        || message
+            .metadata
+            .as_ref()
+            .is_some_and(|value| value.len() > 64_000)
+    {
+        return Err("invalid_memory_v3_intake".into());
+    }
+
+    let visible_text = message
+        .metadata
+        .as_deref()
+        .and_then(|metadata| serde_json::from_str::<serde_json::Value>(metadata).ok())
+        .and_then(|metadata| {
+            metadata
+                .get("displayContent")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| message.content.clone());
+    let source_fingerprint = Sha256::digest(
+        serde_json::to_vec(&(&visible_text, message.created_at))
+            .map_err(|error| error.to_string())?,
+    );
+    let source_fingerprint: String = source_fingerprint
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let mut tx = pool.begin().await.map_err(|error| error.to_string())?;
+    let now = chrono_timestamp_millis();
+    sqlx::query("INSERT INTO chat_sessions (id, title, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at")
+        .bind(&session.id).bind(&session.title).bind(now / 1000).bind(now / 1000)
+        .execute(&mut *tx).await.map_err(|error| error.to_string())?;
+
+    let receipt_key = format!("memory-extraction:v3:intake:{}", message.id);
+    let previous: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
+        .bind(&receipt_key)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| error.to_string())?;
+    sqlx::query("INSERT OR IGNORE INTO chat_messages (id, session_id, role, parent_id, content, metadata, created_at) VALUES (?, ?, 'user', NULL, ?, ?, ?)")
+        .bind(&message.id).bind(&session.id).bind(&message.content).bind(&message.metadata).bind(message.created_at)
+        .execute(&mut *tx).await.map_err(|error| error.to_string())?;
+    let matches: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chat_messages WHERE id = ? AND session_id = ? AND role = 'user' AND parent_id IS NULL AND content = ? AND metadata IS ? AND created_at = ?")
+        .bind(&message.id).bind(&session.id).bind(&message.content).bind(&message.metadata).bind(message.created_at)
+        .fetch_one(&mut *tx).await.map_err(|error| error.to_string())?;
+    if matches != 1 {
+        return Err("memory_v3_source_changed".into());
+    }
+
+    if let Some(value) = previous {
+        let old: serde_json::Value =
+            serde_json::from_str(&value).map_err(|_| "invalid_memory_v3_receipt")?;
+        if old.get("version").and_then(|item| item.as_u64()) != Some(3)
+            || old.get("sourceId").and_then(|item| item.as_str()) != Some(message.id.as_str())
+            || old.get("sessionId").and_then(|item| item.as_str()) != Some(session.id.as_str())
+            || old.get("sourceFingerprint").and_then(|item| item.as_str())
+                != Some(source_fingerprint.as_str())
+        {
+            return Err("memory_v3_receipt_conflict".into());
+        }
+        tx.commit().await.map_err(|error| error.to_string())?;
+        return Ok(false);
+    }
+
+    let session_key = format!("memory-extraction:v3:session:{}", session.id);
+    let state: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
+        .bind(&session_key)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut state: MemoryIntakeSession = match state {
+        Some(value) => serde_json::from_str(&value).map_err(|_| "invalid_memory_v3_session")?,
+        None => MemoryIntakeSession {
+            version: 3,
+            scope_key: None,
+            sequence: 0,
+            epoch: 0,
+        },
+    };
+    if state.version != 3 || state.scope_key.is_some() {
+        return Err("invalid_memory_v3_session".into());
+    }
+    state.sequence = state
+        .sequence
+        .checked_add(1)
+        .ok_or("memory_v3_sequence_overflow")?;
+    let receipt = serde_json::json!({ "version": 3, "sourceId": message.id, "sessionId": session.id,
+        "scopeKey": null, "sequence": state.sequence, "epoch": state.epoch, "sourceFingerprint": source_fingerprint,
+        "status": "pending", "createdAt": now });
+    let state_json = serde_json::to_string(&state).map_err(|error| error.to_string())?;
+    sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, unixepoch()) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at")
+        .bind(session_key).bind(state_json).execute(&mut *tx).await.map_err(|error| error.to_string())?;
+    sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, unixepoch())")
+        .bind(receipt_key)
+        .bind(receipt.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| error.to_string())?;
+    tx.commit().await.map_err(|error| error.to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn persist_chat_message_with_memory_intake(
+    app: AppHandle,
+    request: PersistChatMessageWithMemoryIntakeRequest,
+) -> Result<bool, String> {
+    let pool = open_write_pool(database_path(&app)?).await?;
+    run_persist_chat_message_with_memory_intake(&pool, request).await
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MemoryIntakeMessage {
+    id: String,
+    session_id: String,
+    content: String,
+    metadata: Option<String>,
+    created_at: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MemoryIntakeSession {
+    version: u8,
+    scope_key: Option<String>,
+    sequence: u64,
+    epoch: u64,
+}
+
+async fn run_persist_memory_intake(
+    pool: &SqlitePool,
+    request: PersistMemoryIntakeRequest,
+) -> Result<bool, String> {
+    const MAX_PENDING_MEMORY_INTAKE: i64 = 512;
+    let msg = &request.message;
+    if msg.id.is_empty()
+        || msg.id.len() > 300
+        || msg.session_id.is_empty()
+        || msg.session_id.len() > 300
+        || msg.created_at <= 0
+        || request
+            .scope_key
+            .as_ref()
+            .is_some_and(|key| key.is_empty() || key.len() > 4096)
+        || request.source_fingerprint.len() != 64
+        || !request
+            .source_fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("invalid_memory_intake".into());
+    }
+
+    let mut tx = pool.begin().await.map_err(|error| error.to_string())?;
+    let receipt_key = format!("memory-extraction:v2:intake:{}", msg.id);
+    let previous: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
+        .bind(&receipt_key)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| error.to_string())?;
+    // Existing sources are never overwritten by this command; changed content must be
+    // handled by the ordinary conversation path. A retry must not recreate a deleted source.
+    if previous.is_none() {
+        sqlx::query("INSERT OR IGNORE INTO chat_messages (id, session_id, role, parent_id, content, metadata, created_at) VALUES (?, ?, 'user', NULL, ?, ?, ?)")
+            .bind(&msg.id).bind(&msg.session_id).bind(&msg.content).bind(&msg.metadata).bind(msg.created_at)
+            .execute(&mut *tx).await.map_err(|error| error.to_string())?;
+    }
+    let matches: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chat_messages WHERE id = ? AND session_id = ? AND role = 'user' AND parent_id IS NULL AND content = ? AND metadata IS ? AND created_at = ?")
+        .bind(&msg.id).bind(&msg.session_id).bind(&msg.content).bind(&msg.metadata).bind(msg.created_at)
+        .fetch_one(&mut *tx).await.map_err(|error| error.to_string())?;
+    if matches != 1 {
+        return Err("memory_intake_source_changed".into());
+    }
+
+    if let Some(value) = previous {
+        let old: serde_json::Value =
+            serde_json::from_str(&value).map_err(|_| "invalid_memory_intake_receipt")?;
+        if old.get("version").and_then(|value| value.as_u64()) != Some(2)
+            || old.get("sourceId").and_then(|value| value.as_str()) != Some(msg.id.as_str())
+            || old.get("sessionId").and_then(|value| value.as_str())
+                != Some(msg.session_id.as_str())
+            || old.get("scopeKey") != Some(&serde_json::json!(request.scope_key))
+            || old
+                .get("sourceFingerprint")
+                .and_then(|value| value.as_str())
+                != Some(request.source_fingerprint.as_str())
+        {
+            return Err("memory_intake_receipt_conflict".into());
+        }
+        tx.commit().await.map_err(|error| error.to_string())?;
+        return Ok(false);
+    }
+
+    let pending: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM settings WHERE key LIKE 'memory-extraction:v2:intake:%' \
+         AND CASE WHEN json_valid(value) THEN json_extract(value, '$.status') = 'pending' ELSE 0 END",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|error| error.to_string())?;
+    if pending >= MAX_PENDING_MEMORY_INTAKE {
+        return Err("memory_intake_capacity".into());
+    }
+
+    let session_key = format!("memory-extraction:v2:session:{}", msg.session_id);
+    let state: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
+        .bind(&session_key)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut state = match state {
+        Some(value) => serde_json::from_str::<MemoryIntakeSession>(&value)
+            .map_err(|_| "invalid_memory_intake_session")?,
+        None => MemoryIntakeSession {
+            version: 2,
+            scope_key: request.scope_key.clone(),
+            sequence: 0,
+            epoch: 0,
+        },
+    };
+    if state.version != 2 {
+        return Err("invalid_memory_intake_session".into());
+    }
+    if state.scope_key != request.scope_key {
+        state.epoch = state
+            .epoch
+            .checked_add(1)
+            .ok_or("memory_intake_epoch_overflow")?;
+        state.scope_key = request.scope_key.clone();
+    }
+    state.sequence = state
+        .sequence
+        .checked_add(1)
+        .ok_or("memory_intake_sequence_overflow")?;
+    let receipt = serde_json::json!({ "version": 2, "sourceId": msg.id, "sessionId": msg.session_id,
+        "scopeKey": request.scope_key, "sequence": state.sequence, "epoch": state.epoch,
+        "sourceFingerprint": request.source_fingerprint, "status": "pending", "createdAt": chrono_timestamp_millis() });
+    let state_json = serde_json::to_string(&state).map_err(|error| error.to_string())?;
+    sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, unixepoch()) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at")
+        .bind(&session_key).bind(state_json).execute(&mut *tx).await.map_err(|error| error.to_string())?;
+    sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, unixepoch())")
+        .bind(&receipt_key)
+        .bind(receipt.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| error.to_string())?;
+    tx.commit().await.map_err(|error| error.to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn persist_memory_intake_transaction(
+    app: AppHandle,
+    request: PersistMemoryIntakeRequest,
+) -> Result<bool, String> {
+    let pool = open_write_pool(database_path(&app)?).await?;
+    run_persist_memory_intake(&pool, request).await
+}
+
 // Same non-cryptographic UTF-16 version hash as memoryPolicy.contentHash.
 fn memory_content_version_hash(content: &str) -> String {
     let mut hash = 2_166_136_261_u32;
@@ -544,6 +857,959 @@ struct MemoryReplacementSnapshot {
     id: String,
     content_hash: String,
     updated_at: i64,
+}
+
+fn valid_memory_evidence(value: &serde_json::Value, expected_version: u64) -> bool {
+    let Some(session) = value
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty() && v.encode_utf16().count() <= 300)
+    else {
+        return false;
+    };
+    let Some(primary) = value
+        .get("sourceId")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty() && v.encode_utf16().count() <= 300)
+    else {
+        return false;
+    };
+    if value.get("version").and_then(|v| v.as_u64()) != Some(expected_version)
+        || value.get("policyVersion").and_then(|v| v.as_u64()) != Some(expected_version)
+        || !matches!(
+            value.get("kind").and_then(|v| v.as_str()),
+            Some("semantic" | "episodic")
+        )
+        || !value
+            .get("windowId")
+            .and_then(|v| v.as_str())
+            .is_some_and(|v| !v.is_empty() && v.encode_utf16().count() <= 300)
+        || !value
+            .get("excerpt")
+            .and_then(|v| v.as_str())
+            .is_some_and(|v| v.encode_utf16().count() <= 1200)
+        || ["recordedAt", "occurredAt"].iter().any(|key| {
+            value.get(key).is_some_and(|v| {
+                !v.as_f64()
+                    .is_some_and(|n| n.is_finite() && n > 0.0 && n <= 8.64e15)
+            })
+        })
+    {
+        return false;
+    }
+    let Some(sources) = value
+        .get("sources")
+        .and_then(|v| v.as_array())
+        .filter(|v| !v.is_empty() && v.len() <= 12)
+    else {
+        return false;
+    };
+    let mut ids = std::collections::HashSet::new();
+    let mut users = std::collections::HashSet::new();
+    let mut previous = 0_u64;
+    let mut primary_sequence = None;
+    for source in sources {
+        let Some(id) = source
+            .get("id")
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty() && v.encode_utf16().count() <= 300)
+        else {
+            return false;
+        };
+        let Some(role) = source.get("role").and_then(|v| v.as_str()) else {
+            return false;
+        };
+        let Some(sequence) = source.get("sequence").and_then(|v| v.as_u64()) else {
+            return false;
+        };
+        let Some(created_at) = source.get("createdAt").and_then(|v| v.as_u64()) else {
+            return false;
+        };
+        let Some(hash) = source.get("textHash").and_then(|v| v.as_str()) else {
+            return false;
+        };
+        if !ids.insert(id)
+            || source.get("sessionId").and_then(|v| v.as_str()) != Some(session)
+            || sequence <= previous
+            || created_at == 0
+            || created_at > 8_640_000_000_000_000
+            || hash.len() != 64
+            || !hash
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return false;
+        }
+        match role {
+            "user" if source.get("parentId").is_some_and(|v| v.is_null()) => {
+                users.insert(id);
+            }
+            "assistant"
+                if source
+                    .get("parentId")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|parent| users.contains(parent)) => {}
+            _ => return false,
+        }
+        if let Some(segment) = source.get("segment") {
+            let Some(index) = segment.get("index").and_then(|v| v.as_u64()) else {
+                return false;
+            };
+            let Some(total) = segment.get("total").and_then(|v| v.as_u64()) else {
+                return false;
+            };
+            if !(2..=128).contains(&total) || index >= total {
+                return false;
+            }
+        }
+        if id == primary {
+            if role != "user" {
+                return false;
+            }
+            primary_sequence = Some(sequence);
+        }
+        previous = sequence;
+    }
+    primary_sequence == Some(previous)
+        && (expected_version != 3
+            || matches!(
+                value.get("sensitivity").and_then(|v| v.as_str()),
+                Some("normal" | "sensitive")
+            ))
+}
+
+fn valid_memory_evidence_v2(value: &serde_json::Value) -> bool {
+    valid_memory_evidence(value, 2)
+}
+
+fn valid_memory_evidence_v3(value: &serde_json::Value) -> bool {
+    valid_memory_evidence(value, 3)
+        && value.get("sensitivity").and_then(|item| item.as_str()) == Some("sensitive")
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistMemoryV2Request {
+    operation_id: String,
+    memory: MemoryV2Record,
+    source: MemoryV2Guard,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MemoryV2Record {
+    id: String,
+    content: String,
+    category: String,
+    status: String,
+    scope_type: String,
+    scope_key: Option<String>,
+    subject: String,
+    fact_key: String,
+    fact_value: String,
+    confidence: f64,
+    evidence: String,
+    supersedes_id: Option<String>,
+    created_at: i64,
+    updated_at: i64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MemoryV2Guard {
+    id: String,
+    snapshots: Vec<MemoryV2Snapshot>,
+    lease: MemoryV2Lease,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MemoryV2Snapshot {
+    id: String,
+    session_id: String,
+    role: String,
+    parent_id: Option<String>,
+    content: String,
+    metadata: Option<String>,
+    created_at: i64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct MemoryV2Lease {
+    key: String,
+    value: String,
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn normalized_memory_identity(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn memory_operation_id(memory: &MemoryV2Record, evidence: &serde_json::Value) -> Option<String> {
+    let session = evidence.get("sessionId")?.as_str()?;
+    let primary = evidence.get("sourceId")?.as_str()?;
+    let sources = evidence.get("sources")?.as_array()?;
+    let version = evidence.get("version")?.as_u64()?;
+    if ![2, 3].contains(&version) {
+        return None;
+    }
+    let mut parts = vec![
+        version.to_string(),
+        memory.scope_type.clone(),
+        memory.scope_key.clone().unwrap_or_default(),
+        memory.category.clone(),
+        session.to_string(),
+    ];
+    for source in sources {
+        parts.push(source.get("id")?.as_str()?.to_string());
+        parts.push(source.get("role")?.as_str()?.to_string());
+    }
+    parts.extend([
+        primary.to_string(),
+        normalized_memory_identity(&memory.subject),
+        normalized_memory_identity(&memory.fact_key),
+        normalized_memory_identity(&memory.fact_value),
+        "add".to_string(),
+    ]);
+    let mut canonical = String::new();
+    for part in parts {
+        canonical.push_str(&part.as_bytes().len().to_string());
+        canonical.push(':');
+        canonical.push_str(&part);
+    }
+    let digest = Sha256::digest(canonical.as_bytes());
+    Some(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn memory_v2_operation_id(memory: &MemoryV2Record, evidence: &serde_json::Value) -> Option<String> {
+    memory_operation_id(memory, evidence)
+}
+
+fn memory_snapshot_visible_text(snapshot: &MemoryV2Snapshot) -> Option<String> {
+    let metadata = snapshot
+        .metadata
+        .as_deref()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .transpose()
+        .ok()?;
+    if metadata.as_ref().is_some_and(|value| {
+        !value.is_object()
+            || value.get("hidden").is_some_and(|hidden| hidden != false)
+            || value
+                .get("displayContent")
+                .is_some_and(|display| !display.is_string())
+    }) {
+        return None;
+    }
+    let context = metadata.as_ref().and_then(|value| value.get("contextMeta"));
+    if context.is_some_and(|value| !value.is_object()) {
+        return None;
+    }
+    if snapshot.role == "assistant"
+        && metadata.as_ref().is_some_and(|value| {
+            value.get("tags").is_some()
+                || value.get("sources").is_some_and(|sources| {
+                    !sources.as_array().is_some_and(|items| items.is_empty())
+                })
+                || context.is_some_and(|context| {
+                    ["tagCount", "ragSourceCount"].iter().any(|key| {
+                        context
+                            .get(*key)
+                            .is_some_and(|count| count.as_f64() != Some(0.0))
+                    }) || context
+                        .get("webSearchUsed")
+                        .is_some_and(|used| used != false)
+                })
+        })
+    {
+        return None;
+    }
+    if snapshot.content.contains("【上下文") {
+        return None;
+    }
+    if let Some(display) = metadata
+        .as_ref()
+        .and_then(|value| value.get("displayContent"))
+        .and_then(|value| value.as_str())
+    {
+        return Some(display.to_string());
+    }
+    if snapshot.role == "user"
+        && metadata.as_ref().is_some_and(|value| {
+            value
+                .get("tags")
+                .and_then(|tags| tags.as_array())
+                .is_some_and(|tags| !tags.is_empty())
+        })
+    {
+        return None;
+    }
+    Some(snapshot.content.clone())
+}
+
+fn obvious_sensitive_memory(value: &str) -> bool {
+    let lower = value.to_lowercase();
+    let compact: String = lower.chars().filter(|c| !c.is_whitespace()).collect();
+    if [
+        "密码",
+        "口令",
+        "验证码",
+        "密钥",
+        "私钥",
+        "助记词",
+        "身份证",
+        "银行卡",
+        "信用卡",
+        "病历",
+        "诊断",
+        "过敏",
+        "住址",
+        "家庭地址",
+        "电话号码",
+        "手机号",
+        "password",
+        "secret",
+        "api_key",
+        "api-key",
+        "apikey",
+        "token:",
+        "token=",
+        "sk-",
+    ]
+    .iter()
+    .any(|needle| compact.contains(needle))
+    {
+        return true;
+    }
+    let bytes = compact.as_bytes();
+    bytes.windows(11).any(|window| {
+        window[0] == b'1'
+            && (b'3'..=b'9').contains(&window[1])
+            && window.iter().all(u8::is_ascii_digit)
+    }) || bytes.windows(18).any(|window| {
+        window[..17].iter().all(u8::is_ascii_digit)
+            && (window[17].is_ascii_digit() || window[17] == b'x')
+    })
+}
+
+fn obvious_forbidden_memory(value: &str) -> bool {
+    let lower = value.to_lowercase();
+    let compact: String = lower.chars().filter(|c| !c.is_whitespace()).collect();
+    if [
+        "密码",
+        "口令",
+        "验证码",
+        "密钥",
+        "私钥",
+        "助记词",
+        "身份证",
+        "银行卡",
+        "信用卡",
+        "账号",
+        "账户号码",
+        "卡号",
+        "住址",
+        "家庭地址",
+        "详细地址",
+        "门牌号",
+        "电话号码",
+        "手机号",
+        "联系方式",
+        "电子邮箱",
+        "邮箱地址",
+        "微信号",
+        "qq号",
+        "password",
+        "secret",
+        "api_key",
+        "api-key",
+        "apikey",
+        "access_token",
+        "access-token",
+        "account number",
+        "token:",
+        "token=",
+        "sk-",
+    ]
+    .iter()
+    .any(|needle| compact.contains(needle))
+    {
+        return true;
+    }
+    let bytes = compact.as_bytes();
+    bytes.windows(11).any(|window| {
+        window[0] == b'1'
+            && (b'3'..=b'9').contains(&window[1])
+            && window.iter().all(u8::is_ascii_digit)
+    }) || bytes.windows(18).any(|window| {
+        window[..17].iter().all(u8::is_ascii_digit)
+            && (window[17].is_ascii_digit() || window[17] == b'x')
+    }) || value.split_whitespace().any(|token| {
+        token.contains('@')
+            && token
+                .split_once('.')
+                .is_some_and(|(left, right)| !left.is_empty() && right.len() >= 2)
+    })
+}
+
+fn reviewable_sensitive_memory(value: &str) -> bool {
+    let lower = value.to_lowercase();
+    [
+        "病历",
+        "诊断",
+        "过敏",
+        "疾病",
+        "患有",
+        "病情",
+        "慢性病",
+        "高血压",
+        "糖尿病",
+        "哮喘",
+        "心脏病",
+        "用药",
+        "治疗",
+        "就医",
+        "健康状况",
+        "健康",
+        "财务状况",
+        "经济状况",
+        "财务",
+        "收入",
+        "工资",
+        "月薪",
+        "年薪",
+        "负债",
+        "债务",
+        "欠款",
+        "存款",
+        "投资",
+        "资产",
+        "medical",
+        "health",
+        "financial",
+        "income",
+        "debt",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn has_explicit_memory_acceptance(value: &str) -> bool {
+    let lower = value.to_lowercase();
+    [
+        "同意",
+        "接受",
+        "就用",
+        "就按",
+        "选这个",
+        "选第",
+        "选择",
+        "采用",
+        "按你说的",
+        "按这个",
+        "以后就",
+        "确实",
+        "没错",
+        "是的",
+        "that's right",
+        "i agree",
+        "use that",
+        "choose that",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+async fn run_persist_memory_policy(
+    pool: &SqlitePool,
+    request: PersistMemoryV2Request,
+    policy_version: u64,
+) -> Result<String, String> {
+    let memory = &request.memory;
+    let evidence: serde_json::Value =
+        serde_json::from_str(&memory.evidence).map_err(|_| "invalid_memory_v2_evidence")?;
+    if !is_sha256_hex(&request.operation_id)
+        || memory_operation_id(memory, &evidence).as_deref() != Some(request.operation_id.as_str())
+        || memory.id != format!("mem-v{}-{}", policy_version, request.operation_id)
+        || !(6..=80).contains(&memory.content.chars().count())
+        || ![
+            "preference",
+            "project",
+            "learning",
+            "profile",
+            "instruction",
+        ]
+        .contains(&memory.category.as_str())
+        || !["candidate", "active"].contains(&memory.status.as_str())
+        || !["global", "project"].contains(&memory.scope_type.as_str())
+        || memory.subject.trim().is_empty()
+        || memory.subject.len() > 320
+        || memory.fact_key.trim().is_empty()
+        || memory.fact_key.len() > 320
+        || memory.fact_value.trim().is_empty()
+        || memory.fact_value.len() > 640
+        || !(0.0..=1.0).contains(&memory.confidence)
+        || !memory
+            .content
+            .to_lowercase()
+            .contains(&memory.fact_value.trim().to_lowercase())
+        || memory.created_at <= 0
+        || memory.updated_at <= 0
+        || memory.evidence.encode_utf16().count() > 6000
+        || [
+            memory.content.as_str(),
+            memory.subject.as_str(),
+            memory.fact_key.as_str(),
+            memory.fact_value.as_str(),
+        ]
+        .iter()
+        .any(|value| {
+            if policy_version == 3 {
+                obvious_forbidden_memory(value)
+            } else {
+                obvious_sensitive_memory(value)
+            }
+        })
+        || !valid_memory_evidence(&evidence, policy_version)
+        || evidence.get("sourceId").and_then(|v| v.as_str()) != Some(request.source.id.as_str())
+        || request.source.snapshots.is_empty()
+        || request.source.snapshots.len() > 12
+    {
+        return Err("invalid_memory_v2_request".into());
+    }
+    let key_prefix = format!("memory-extraction:v{policy_version}:window:");
+    if !request
+        .source
+        .lease
+        .key
+        .strip_prefix(&key_prefix)
+        .is_some_and(is_sha256_hex)
+    {
+        return Err("invalid_memory_v2_lease".into());
+    }
+    let lease: serde_json::Value =
+        serde_json::from_str(&request.source.lease.value).map_err(|_| "invalid_memory_v2_lease")?;
+    let session = lease
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .ok_or("invalid_memory_v2_lease")?;
+    let owner = lease
+        .get("owner")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+        .ok_or("invalid_memory_v2_lease")?;
+    let _ = owner;
+    let lease_until = lease
+        .get("leaseUntil")
+        .and_then(|v| v.as_i64())
+        .ok_or("invalid_memory_v2_lease")?;
+    let new_ids = lease
+        .get("sourceIds")
+        .and_then(|v| v.as_array())
+        .ok_or("invalid_memory_v2_lease")?;
+    let new_values = lease
+        .get("receiptValues")
+        .and_then(|v| v.as_array())
+        .ok_or("invalid_memory_v2_lease")?;
+    let prefix_ids = lease
+        .get("prefixIds")
+        .and_then(|v| v.as_array())
+        .ok_or("invalid_memory_v2_lease")?;
+    let prefix_values = lease
+        .get("prefixReceiptValues")
+        .and_then(|v| v.as_array())
+        .ok_or("invalid_memory_v2_lease")?;
+    let lease_scope = lease.get("scopeKey").and_then(|v| v.as_str());
+    if lease.get("version").and_then(|v| v.as_u64()) != Some(policy_version)
+        || lease.get("status").and_then(|v| v.as_str()) != Some("running")
+        || lease.get("windowId").and_then(|v| v.as_str())
+            != evidence.get("windowId").and_then(|v| v.as_str())
+        || !lease
+            .get("windowId")
+            .and_then(|v| v.as_str())
+            .is_some_and(|id| id.starts_with(&(request.source.lease.key.clone() + ":")))
+        || evidence.get("sessionId").and_then(|v| v.as_str()) != Some(session)
+        || new_ids.is_empty()
+        || new_ids.len() > if policy_version == 3 { 8 } else { 4 }
+        || new_ids.len() != new_values.len()
+        || prefix_ids.len() > 2
+        || prefix_ids.len() != prefix_values.len()
+        || !new_ids
+            .iter()
+            .any(|id| id.as_str() == Some(request.source.id.as_str()))
+        || (memory.scope_type == "project"
+            && (memory.scope_key.as_deref().is_none()
+                || memory.scope_key.as_deref() != lease_scope))
+        || (memory.scope_type == "global"
+            && (memory.scope_key.is_some() || memory.category == "project"))
+        || (policy_version == 3
+            && (memory.scope_type != "global"
+                || memory.scope_key.is_some()
+                || memory.category == "project"
+                || lease.get("scopeKey") != Some(&serde_json::Value::Null)
+                || memory.supersedes_id.is_some()
+                || evidence.get("replacement").is_some()))
+    {
+        return Err("invalid_memory_v2_lease".into());
+    }
+    if memory.scope_type == "project"
+        && [
+            "后续项目",
+            "所有项目",
+            "其他项目",
+            "未来项目",
+            "all projects",
+            "future projects",
+            "other projects",
+        ]
+        .iter()
+        .any(|phrase| memory.content.to_lowercase().contains(phrase))
+    {
+        return Err("invalid_memory_v2_scope".into());
+    }
+    let mut unique = std::collections::HashSet::new();
+    for snapshot in &request.source.snapshots {
+        if !unique.insert(snapshot.id.as_str())
+            || snapshot.session_id != session
+            || !["user", "assistant"].contains(&snapshot.role.as_str())
+            || snapshot.created_at <= 0
+            || (snapshot.role == "user" && snapshot.parent_id.is_some())
+            || (snapshot.role == "assistant"
+                && !request.source.snapshots.iter().any(|parent| {
+                    parent.role == "user" && Some(&parent.id) == snapshot.parent_id.as_ref()
+                }))
+        {
+            return Err("invalid_memory_v2_sources".into());
+        }
+    }
+    let evidence_sources = evidence
+        .get("sources")
+        .and_then(|v| v.as_array())
+        .ok_or("invalid_memory_v2_evidence")?;
+    let mut source_sensitive = false;
+    for item in evidence_sources {
+        if item.get("role").and_then(|v| v.as_str()) == Some("user")
+            && !new_ids
+                .iter()
+                .chain(prefix_ids.iter())
+                .any(|id| id.as_str() == item.get("id").and_then(|v| v.as_str()))
+        {
+            return Err("invalid_memory_v2_sources".into());
+        }
+        let snapshot = request.source.snapshots.iter().find(|snapshot| {
+            item.get("id").and_then(|v| v.as_str()) == Some(snapshot.id.as_str())
+                && item.get("sessionId").and_then(|v| v.as_str())
+                    == Some(snapshot.session_id.as_str())
+                && item.get("role").and_then(|v| v.as_str()) == Some(snapshot.role.as_str())
+                && item.get("parentId") == Some(&serde_json::json!(snapshot.parent_id))
+                && item.get("createdAt").and_then(|v| v.as_i64()) == Some(snapshot.created_at)
+        });
+        let Some(snapshot) = snapshot else {
+            return Err("invalid_memory_v2_sources".into());
+        };
+        let visible = memory_snapshot_visible_text(snapshot).ok_or("invalid_memory_v2_sources")?;
+        if policy_version == 3 && snapshot.role == "user" && obvious_forbidden_memory(&visible) {
+            return Err("invalid_memory_v3_source".into());
+        }
+        if policy_version == 3 && snapshot.role == "user" && reviewable_sensitive_memory(&visible) {
+            source_sensitive = true;
+        }
+        if item.get("segment").is_none() {
+            let actual_hash = Sha256::digest(visible.as_bytes());
+            let actual_hash: String = actual_hash
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            if item.get("textHash").and_then(|value| value.as_str()) != Some(actual_hash.as_str()) {
+                return Err("invalid_memory_v2_sources".into());
+            }
+        }
+    }
+    let evidence_sensitive = policy_version == 3
+        && evidence.get("sensitivity").and_then(|v| v.as_str()) == Some("sensitive");
+    let content_sensitive = policy_version == 3
+        && (source_sensitive
+            || [
+                memory.content.as_str(),
+                memory.subject.as_str(),
+                memory.fact_key.as_str(),
+                memory.fact_value.as_str(),
+            ]
+            .iter()
+            .any(|value| reviewable_sensitive_memory(value)));
+    if policy_version == 3 && content_sensitive && !evidence_sensitive {
+        return Err("invalid_memory_v3_sensitivity".into());
+    }
+    if policy_version == 3 && evidence_sensitive && memory.status != "candidate" {
+        return Err("invalid_memory_v3_sensitivity".into());
+    }
+    if policy_version == 3 && memory.status == "candidate" && !evidence_sensitive {
+        return Err("invalid_memory_v3_sensitivity".into());
+    }
+    if memory.status == "active" {
+        if (policy_version == 2 && evidence_sources.len() != 1)
+            || evidence_sources.is_empty()
+            || evidence_sensitive
+            || evidence_sources
+                .iter()
+                .any(|source| source.get("segment").is_some())
+            || memory.confidence < 0.85
+            || memory.supersedes_id.is_some()
+        {
+            return Err("invalid_memory_v2_activation".into());
+        }
+        let primary = request
+            .source
+            .snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == request.source.id && snapshot.role == "user")
+            .ok_or("invalid_memory_v2_sources")?;
+        let metadata = primary
+            .metadata
+            .as_deref()
+            .map(serde_json::from_str::<serde_json::Value>)
+            .transpose()
+            .map_err(|_| "invalid_memory_v2_activation")?;
+        if metadata.as_ref().is_some_and(|value| {
+            !value.is_object()
+                || value.get("hidden").is_some_and(|v| v != false)
+                || value.get("displayContent").is_some_and(|v| !v.is_string())
+        }) {
+            return Err("invalid_memory_v2_activation".into());
+        }
+        let visible = match metadata.as_ref() {
+            Some(value)
+                if value
+                    .get("displayContent")
+                    .and_then(|v| v.as_str())
+                    .is_some() =>
+            {
+                value
+                    .get("displayContent")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+            }
+            Some(value) if value.get("tags").is_some() => {
+                return Err("invalid_memory_v2_activation".into())
+            }
+            _ if primary.content.contains("【上下文") => {
+                return Err("invalid_memory_v2_activation".into())
+            }
+            _ => primary.content.as_str(),
+        };
+        let primary_contains_value = visible
+            .to_lowercase()
+            .contains(&memory.fact_value.to_lowercase());
+        let accepted_assistant_value = policy_version == 3
+            && has_explicit_memory_acceptance(visible)
+            && evidence_sources.iter().any(|source| {
+                if source.get("role").and_then(|v| v.as_str()) != Some("assistant") {
+                    return false;
+                }
+                let source_id = source
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                request
+                    .source
+                    .snapshots
+                    .iter()
+                    .find(|snapshot| snapshot.id == source_id)
+                    .and_then(memory_snapshot_visible_text)
+                    .is_some_and(|text| {
+                        text.to_lowercase()
+                            .contains(&memory.fact_value.to_lowercase())
+                    })
+            });
+        if !primary_contains_value && !accepted_assistant_value {
+            return Err("invalid_memory_v2_activation".into());
+        }
+    }
+
+    let mut tx = pool.begin().await.map_err(|error| error.to_string())?;
+    let active_lease: Option<String> =
+        sqlx::query_scalar("SELECT value FROM settings WHERE key = ? AND value = ?")
+            .bind(&request.source.lease.key)
+            .bind(&request.source.lease.value)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|error| error.to_string())?;
+    if active_lease.is_none() || lease_until <= chrono_timestamp_millis() {
+        return Ok("lost_lease".into());
+    }
+    for (ids, values, allowed) in [
+        (new_ids, new_values, &["pending"][..]),
+        (prefix_ids, prefix_values, &["completed", "noop"][..]),
+    ] {
+        for (id, expected) in ids.iter().zip(values) {
+            let id = id.as_str().ok_or("invalid_memory_v2_lease")?;
+            let expected = expected.as_str().ok_or("invalid_memory_v2_lease")?;
+            let receipt: serde_json::Value =
+                serde_json::from_str(expected).map_err(|_| "invalid_memory_v2_lease")?;
+            if receipt.get("version").and_then(|v| v.as_u64()) != Some(policy_version)
+                || receipt.get("sourceId").and_then(|v| v.as_str()) != Some(id)
+                || receipt.get("sessionId").and_then(|v| v.as_str()) != Some(session)
+                || receipt.get("scopeKey") != lease.get("scopeKey")
+                || receipt.get("epoch") != lease.get("epoch")
+                || !receipt
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|status| allowed.contains(&status))
+            {
+                return Err("invalid_memory_v2_lease".into());
+            }
+            let matching: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM settings WHERE key = ? AND value = ?")
+                    .bind(format!("memory-extraction:v{policy_version}:intake:{id}"))
+                    .bind(expected)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            if matching != 1 {
+                return Ok("lost_lease".into());
+            }
+        }
+    }
+    for snapshot in &request.source.snapshots {
+        let matching: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chat_messages WHERE id = ? AND session_id = ? AND role = ? AND parent_id IS ? AND content = ? AND metadata IS ? AND created_at = ?")
+            .bind(&snapshot.id).bind(&snapshot.session_id).bind(&snapshot.role).bind(&snapshot.parent_id).bind(&snapshot.content).bind(&snapshot.metadata).bind(snapshot.created_at)
+            .fetch_one(&mut *tx).await.map_err(|error| error.to_string())?;
+        if matching != 1 {
+            return Ok("invalidated".into());
+        }
+    }
+    let operation_key = format!(
+        "memory-extraction:v{policy_version}:op:{}",
+        request.operation_id
+    );
+    let prior: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
+        .bind(&operation_key)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| error.to_string())?;
+    if prior.is_some() {
+        return Ok("already_applied".into());
+    }
+    let existing_id: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE id = ?")
+        .bind(&memory.id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|error| error.to_string())?;
+    if existing_id != 0 {
+        return Ok("conflict".into());
+    }
+    let duplicate: Option<String> = sqlx::query_scalar("SELECT id FROM memories WHERE category = ? AND COALESCE(scope_type, 'global') = ? AND COALESCE(scope_key, '') = COALESCE(?, '') AND lower(trim(subject)) = lower(trim(?)) AND lower(trim(fact_key)) = lower(trim(?)) AND lower(trim(fact_value)) = lower(trim(?)) AND status IN ('active','candidate','ignored','archived') LIMIT 1")
+        .bind(&memory.category).bind(&memory.scope_type).bind(&memory.scope_key).bind(&memory.subject).bind(&memory.fact_key).bind(&memory.fact_value)
+        .fetch_optional(&mut *tx).await.map_err(|error| error.to_string())?;
+    if let Some(duplicate) = duplicate {
+        if lease_until <= chrono_timestamp_millis() {
+            return Ok("lost_lease".into());
+        }
+        let receipt =
+            serde_json::json!({"version": policy_version, "memoryId": duplicate, "outcome": "duplicate"})
+                .to_string();
+        sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, unixepoch())")
+            .bind(&operation_key)
+            .bind(receipt)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| error.to_string())?;
+        tx.commit().await.map_err(|error| error.to_string())?;
+        return Ok("duplicate".into());
+    }
+    let conflicts = sqlx::query("SELECT id, content, updated_at FROM memories WHERE category = ? AND COALESCE(scope_type, 'global') = ? AND COALESCE(scope_key, '') = COALESCE(?, '') AND lower(trim(subject)) = lower(trim(?)) AND lower(trim(fact_key)) = lower(trim(?)) AND status = 'active' LIMIT 2")
+        .bind(&memory.category).bind(&memory.scope_type).bind(&memory.scope_key).bind(&memory.subject).bind(&memory.fact_key)
+        .fetch_all(&mut *tx).await.map_err(|error| error.to_string())?;
+    if conflicts.len() > 1 {
+        return Ok("conflict".into());
+    }
+    if let Some(old) = conflicts.first() {
+        if policy_version == 3 {
+            return Ok("conflict".into());
+        }
+        let id: String = old.try_get("id").map_err(|error| error.to_string())?;
+        let content: String = old.try_get("content").map_err(|error| error.to_string())?;
+        let mut updated: i64 = old
+            .try_get("updated_at")
+            .map_err(|error| error.to_string())?;
+        if updated > 0 && updated < 1_000_000_000_000 {
+            updated *= 1000;
+        }
+        let replacement = evidence
+            .get("replacement")
+            .cloned()
+            .and_then(|value| serde_json::from_value::<MemoryReplacementSnapshot>(value).ok());
+        if memory.status != "candidate"
+            || memory.supersedes_id.as_deref() != Some(id.as_str())
+            || !replacement.is_some_and(|item| {
+                item.id == id
+                    && item.updated_at == updated
+                    && item.content_hash == memory_content_version_hash(&content)
+            })
+        {
+            return Ok("conflict".into());
+        }
+    } else if memory.supersedes_id.is_some() {
+        return Ok("conflict".into());
+    }
+    if lease_until <= chrono_timestamp_millis() {
+        return Ok("lost_lease".into());
+    }
+    sqlx::query("INSERT INTO memories (id, content, category, source, locked, status, scope_type, scope_key, subject, fact_key, fact_value, confidence, evidence, supersedes_id, created_at, updated_at) VALUES (?, ?, ?, 'auto_extracted', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(&memory.id).bind(&memory.content).bind(&memory.category).bind(&memory.status).bind(&memory.scope_type).bind(&memory.scope_key)
+        .bind(&memory.subject).bind(&memory.fact_key).bind(&memory.fact_value).bind(memory.confidence).bind(&memory.evidence).bind(&memory.supersedes_id)
+        .bind(memory.created_at).bind(memory.updated_at).execute(&mut *tx).await.map_err(|error| error.to_string())?;
+    let receipt = serde_json::json!({"version": policy_version, "memoryId": memory.id, "outcome": "inserted"}).to_string();
+    sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, unixepoch())")
+        .bind(&operation_key)
+        .bind(receipt)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| error.to_string())?;
+    tx.commit().await.map_err(|error| error.to_string())?;
+    Ok("inserted".into())
+}
+
+async fn run_persist_memory_v2(
+    pool: &SqlitePool,
+    request: PersistMemoryV2Request,
+) -> Result<String, String> {
+    run_persist_memory_policy(pool, request, 2).await
+}
+
+async fn run_persist_memory_v3(
+    pool: &SqlitePool,
+    request: PersistMemoryV2Request,
+) -> Result<String, String> {
+    run_persist_memory_policy(pool, request, 3).await
+}
+
+#[tauri::command]
+pub async fn persist_memory_v2_transaction(
+    app: AppHandle,
+    request: PersistMemoryV2Request,
+) -> Result<String, String> {
+    let pool = open_write_pool(database_path(&app)?).await?;
+    run_persist_memory_v2(&pool, request).await
+}
+
+#[tauri::command]
+pub async fn persist_memory_v3_transaction(
+    app: AppHandle,
+    request: PersistMemoryV2Request,
+) -> Result<String, String> {
+    let pool = open_write_pool(database_path(&app)?).await?;
+    run_persist_memory_v3(&pool, request).await
 }
 
 async fn run_confirm_memory_candidate(pool: &SqlitePool, id: &str) -> Result<bool, String> {
@@ -565,18 +1831,45 @@ async fn run_confirm_memory_candidate(pool: &SqlitePool, id: &str) -> Result<boo
     let supersedes_id: Option<String> = candidate
         .try_get("supersedes_id")
         .map_err(|error| error.to_string())?;
-    if let Some(supersedes_id) = supersedes_id {
-        let evidence: Option<String> = candidate
-            .try_get("evidence")
+    let evidence: Option<String> = candidate
+        .try_get("evidence")
+        .map_err(|error| error.to_string())?;
+    let evidence_too_long = evidence
+        .as_ref()
+        .is_some_and(|text| text.encode_utf16().count() > 6000);
+    let evidence = evidence
+        .as_deref()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok());
+    let version = evidence.as_ref().and_then(|value| value.get("version"));
+    let version_number = version.and_then(|value| value.as_i64());
+    if (supersedes_id.is_some() && version.is_some() && !matches!(version_number, Some(1 | 2)))
+        || (id.starts_with("mem-v2-") && version_number != Some(2))
+        || (id.starts_with("mem-v3-")
+            && (version_number != Some(3)
+                || supersedes_id.is_some()
+                || evidence_too_long
+                || !evidence.as_ref().is_some_and(valid_memory_evidence_v3)))
+        || (version_number == Some(2)
+            && (evidence_too_long || !evidence.as_ref().is_some_and(valid_memory_evidence_v2)))
+    {
+        transaction
+            .rollback()
+            .await
             .map_err(|error| error.to_string())?;
-        let evidence = evidence
-            .as_deref()
-            .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok());
-        if let Some(snapshot) = evidence
-            .as_ref()
-            .filter(|value| value.get("version").and_then(|v| v.as_i64()) == Some(1))
-            .and_then(|value| value.get("replacement"))
-        {
+        return Ok(false);
+    }
+    if let Some(supersedes_id) = supersedes_id {
+        let replacement = evidence.as_ref().and_then(|value| value.get("replacement"));
+        // Legacy text and v1 without a snapshot remain readable. New evidence must
+        // never fall through that compatibility path and replace an unchecked row.
+        if version_number == Some(2) && replacement.is_none() {
+            transaction
+                .rollback()
+                .await
+                .map_err(|error| error.to_string())?;
+            return Ok(false);
+        }
+        if let Some(snapshot) = replacement.filter(|_| matches!(version_number, Some(1 | 2))) {
             let snapshot = serde_json::from_value::<MemoryReplacementSnapshot>(snapshot.clone());
             let current = sqlx::query(
                 "SELECT content, updated_at FROM memories WHERE id = ? AND status = 'active'",
@@ -1200,6 +2493,7 @@ mod tests {
             "CREATE TABLE embedding_jobs (id TEXT PRIMARY KEY, document_id TEXT NOT NULL, file_path TEXT NOT NULL, status TEXT NOT NULL, error TEXT, retry_count INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE)",
             "CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
             "CREATE TABLE chat_messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, parent_id TEXT, role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT, created_at INTEGER NOT NULL, FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE)",
+            "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL DEFAULT (unixepoch()))",
             "CREATE TABLE memories (id TEXT PRIMARY KEY, content TEXT NOT NULL, category TEXT NOT NULL, source TEXT NOT NULL, locked INTEGER NOT NULL, status TEXT NOT NULL, scope_type TEXT NOT NULL, scope_key TEXT, subject TEXT, fact_key TEXT, fact_value TEXT, confidence REAL NOT NULL, evidence TEXT, supersedes_id TEXT, embedding TEXT, embedding_model TEXT, content_hash TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
             "CREATE TABLE reading_artifacts (id TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL, structured_content TEXT, source_file_path TEXT, source_file_name TEXT, source_content_hash TEXT, source_heading_path TEXT, source_start_line INTEGER, source_end_line INTEGER, source_quote TEXT, source_message_id TEXT, source_scope TEXT, status TEXT NOT NULL DEFAULT 'active', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
             "CREATE TABLE reading_reminders (id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT, due_at_utc INTEGER NOT NULL, created_timezone TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', source_artifact_id TEXT, source_file_path TEXT, source_message_id TEXT, notification_id INTEGER, error_code TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
@@ -1210,6 +2504,610 @@ mod tests {
             sqlx::query(statement).execute(&pool).await.unwrap();
         }
         pool
+    }
+
+    fn intake(id: &str, scope: Option<&str>) -> PersistMemoryIntakeRequest {
+        PersistMemoryIntakeRequest {
+            message: MemoryIntakeMessage {
+                id: id.into(),
+                session_id: "s".into(),
+                content: "匿名对话内容".into(),
+                metadata: None,
+                created_at: 1_700_000_000_000,
+            },
+            scope_key: scope.map(str::to_string),
+            source_fingerprint: "a".repeat(64),
+        }
+    }
+
+    async fn intake_session(pool: &SqlitePool) {
+        sqlx::query("INSERT INTO chat_sessions (id, title, created_at, updated_at) VALUES ('s', '匿名', 1, 1)")
+            .execute(pool).await.unwrap();
+    }
+
+    async fn memory_v2_fixture(pool: &SqlitePool) -> PersistMemoryV2Request {
+        intake_session(pool).await;
+        let created = 1_700_000_000_000_i64;
+        let text = "我喜欢技术回答先给结论";
+        sqlx::query("INSERT INTO chat_messages (id,session_id,role,parent_id,content,metadata,created_at) VALUES ('u1','s','user',NULL,?,NULL,?)")
+            .bind(text).bind(created).execute(pool).await.unwrap();
+        let receipt = serde_json::json!({"version":2,"sourceId":"u1","sessionId":"s","scopeKey":null,"epoch":0,"sequence":1,
+            "sourceFingerprint":"a".repeat(64),"status":"pending","createdAt":created}).to_string();
+        sqlx::query("INSERT INTO settings (key,value) VALUES ('memory-extraction:v2:intake:u1',?)")
+            .bind(&receipt)
+            .execute(pool)
+            .await
+            .unwrap();
+        let key = format!("memory-extraction:v2:window:{}", "c".repeat(64));
+        let window_id = format!("{key}:1");
+        let lease = serde_json::json!({"version":2,"sessionId":"s","scopeKey":null,"epoch":0,"windowId":window_id,
+            "status":"running","owner":"worker","leaseUntil":chrono_timestamp_millis()+60_000,
+            "sourceIds":["u1"],"receiptValues":[receipt],"prefixIds":[],"prefixReceiptValues":[]}).to_string();
+        sqlx::query("INSERT INTO settings (key,value) VALUES (?,?)")
+            .bind(&key)
+            .bind(&lease)
+            .execute(pool)
+            .await
+            .unwrap();
+        let text_hash: String = Sha256::digest(text.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let evidence = serde_json::json!({"version":2,"policyVersion":2,"kind":"semantic","sourceId":"u1","sessionId":"s",
+            "windowId":window_id,"excerpt":text,"sources":[{"id":"u1","sessionId":"s","role":"user","parentId":null,
+            "sequence":1,"createdAt":created,"textHash":text_hash}]}).to_string();
+        let mut request = PersistMemoryV2Request {
+            operation_id: "".into(),
+            memory: MemoryV2Record {
+                id: String::new(),
+                content: "技术回答先给结论".into(),
+                category: "preference".into(),
+                status: "candidate".into(),
+                scope_type: "global".into(),
+                scope_key: None,
+                subject: "user".into(),
+                fact_key: "answer_order".into(),
+                fact_value: "结论".into(),
+                confidence: 0.95,
+                evidence,
+                supersedes_id: None,
+                created_at: created,
+                updated_at: created,
+            },
+            source: MemoryV2Guard {
+                id: "u1".into(),
+                snapshots: vec![MemoryV2Snapshot {
+                    id: "u1".into(),
+                    session_id: "s".into(),
+                    role: "user".into(),
+                    parent_id: None,
+                    content: text.into(),
+                    metadata: None,
+                    created_at: created,
+                }],
+                lease: MemoryV2Lease { key, value: lease },
+            },
+        };
+        let evidence: serde_json::Value = serde_json::from_str(&request.memory.evidence).unwrap();
+        request.operation_id = memory_v2_operation_id(&request.memory, &evidence).unwrap();
+        request.memory.id = format!("mem-v2-{}", request.operation_id);
+        request
+    }
+
+    fn global_intake_request(
+        id: &str,
+        created_at: i64,
+    ) -> PersistChatMessageWithMemoryIntakeRequest {
+        PersistChatMessageWithMemoryIntakeRequest {
+            session: PersistChatSessionInput { id: "global-session".into(), title: "匿名".into() },
+            message: PersistChatMessageInput {
+                id: id.into(), session_id: "global-session".into(), role: "user".into(),
+                content: "我喜欢技术回答先给结论".into(),
+                metadata: Some(serde_json::json!({"displayContent":"我喜欢技术回答先给结论","tags":[{"type":"document"}]}).to_string()),
+                created_at,
+            },
+            policy_version: 3,
+        }
+    }
+
+    async fn memory_v3_fixture(
+        pool: &SqlitePool,
+        source_text: &str,
+        content: &str,
+        fact_value: &str,
+        sensitivity: &str,
+        status: &str,
+    ) -> PersistMemoryV2Request {
+        intake_session(pool).await;
+        let created = 1_700_000_000_000_i64;
+        sqlx::query("INSERT INTO chat_messages (id,session_id,role,parent_id,content,metadata,created_at) VALUES ('u1','s','user',NULL,?,NULL,?)")
+            .bind(source_text).bind(created).execute(pool).await.unwrap();
+        let receipt = serde_json::json!({"version":3,"sourceId":"u1","sessionId":"s","scopeKey":null,"epoch":0,
+            "sequence":1,"sourceFingerprint":"a".repeat(64),"status":"pending","createdAt":created}).to_string();
+        sqlx::query("INSERT INTO settings (key,value) VALUES ('memory-extraction:v3:intake:u1',?)")
+            .bind(&receipt)
+            .execute(pool)
+            .await
+            .unwrap();
+        let key = format!("memory-extraction:v3:window:{}", "d".repeat(64));
+        let window_id = format!("{key}:1");
+        let lease = serde_json::json!({"version":3,"sessionId":"s","scopeKey":null,"epoch":0,"windowId":window_id,
+            "status":"running","owner":"worker","leaseUntil":chrono_timestamp_millis()+60_000,
+            "sourceIds":["u1"],"receiptValues":[receipt],"prefixIds":[],"prefixReceiptValues":[]}).to_string();
+        sqlx::query("INSERT INTO settings (key,value) VALUES (?,?)")
+            .bind(&key)
+            .bind(&lease)
+            .execute(pool)
+            .await
+            .unwrap();
+        let text_hash: String = Sha256::digest(source_text.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let evidence = serde_json::json!({"version":3,"policyVersion":3,"sensitivity":sensitivity,"kind":"semantic",
+            "sourceId":"u1","sessionId":"s","windowId":window_id,"excerpt":source_text,
+            "sources":[{"id":"u1","sessionId":"s","role":"user","parentId":null,"sequence":1,
+                "createdAt":created,"textHash":text_hash}]}).to_string();
+        let mut request = PersistMemoryV2Request {
+            operation_id: String::new(),
+            memory: MemoryV2Record {
+                id: String::new(),
+                content: content.into(),
+                category: "preference".into(),
+                status: status.into(),
+                scope_type: "global".into(),
+                scope_key: None,
+                subject: "user".into(),
+                fact_key: "test_fact".into(),
+                fact_value: fact_value.into(),
+                confidence: 0.95,
+                evidence,
+                supersedes_id: None,
+                created_at: created,
+                updated_at: created,
+            },
+            source: MemoryV2Guard {
+                id: "u1".into(),
+                snapshots: vec![MemoryV2Snapshot {
+                    id: "u1".into(),
+                    session_id: "s".into(),
+                    role: "user".into(),
+                    parent_id: None,
+                    content: source_text.into(),
+                    metadata: None,
+                    created_at: created,
+                }],
+                lease: MemoryV2Lease { key, value: lease },
+            },
+        };
+        let evidence: serde_json::Value = serde_json::from_str(&request.memory.evidence).unwrap();
+        request.operation_id = memory_operation_id(&request.memory, &evidence).unwrap();
+        request.memory.id = format!("mem-v3-{}", request.operation_id);
+        request
+    }
+
+    #[tokio::test]
+    async fn memory_v3_intake_is_atomic_idempotent_and_has_no_512_source_rejection() {
+        let pool = test_pool().await;
+        let request = global_intake_request("u1", 1_700_000_000_000);
+        assert!(
+            run_persist_chat_message_with_memory_intake(&pool, request.clone())
+                .await
+                .unwrap()
+        );
+        assert!(!run_persist_chat_message_with_memory_intake(&pool, request)
+            .await
+            .unwrap());
+        for index in 2..=513 {
+            let mut next = global_intake_request(&format!("u{index}"), 1_700_000_000_000 + index);
+            next.message.content = format!("我喜欢技术回答先给结论 {index}");
+            next.message.metadata =
+                Some(serde_json::json!({"displayContent":next.message.content}).to_string());
+            assert!(run_persist_chat_message_with_memory_intake(&pool, next)
+                .await
+                .unwrap());
+        }
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM settings WHERE key LIKE 'memory-extraction:v3:intake:%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 513);
+
+        let failing_pool = test_pool().await;
+        sqlx::query("CREATE TRIGGER fail_v3_receipt BEFORE INSERT ON settings WHEN NEW.key LIKE 'memory-extraction:v3:intake:%' BEGIN SELECT RAISE(ABORT, 'injected failure'); END")
+            .execute(&failing_pool).await.unwrap();
+        assert!(run_persist_chat_message_with_memory_intake(
+            &failing_pool,
+            global_intake_request("rollback", 1_700_000_000_001)
+        )
+        .await
+        .is_err());
+        let messages: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM chat_messages WHERE id = 'rollback'")
+                .fetch_one(&failing_pool)
+                .await
+                .unwrap();
+        let sessions: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM chat_sessions WHERE id = 'global-session'")
+                .fetch_one(&failing_pool)
+                .await
+                .unwrap();
+        assert_eq!((messages, sessions), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn memory_v3_activates_normal_facts_and_requires_confirmation_for_sensitive_candidates() {
+        let normal_pool = test_pool().await;
+        let normal = memory_v3_fixture(
+            &normal_pool,
+            "我喜欢技术回答先给结论",
+            "技术回答先给结论",
+            "结论",
+            "normal",
+            "active",
+        )
+        .await;
+        assert_eq!(
+            run_persist_memory_v3(&normal_pool, normal.clone())
+                .await
+                .unwrap(),
+            "inserted"
+        );
+
+        let sensitive_pool = test_pool().await;
+        let sensitive = memory_v3_fixture(
+            &sensitive_pool,
+            "我长期有高血压，希望饮食清淡",
+            "用户长期有高血压",
+            "高血压",
+            "sensitive",
+            "candidate",
+        )
+        .await;
+        assert_eq!(
+            run_persist_memory_v3(&sensitive_pool, sensitive.clone())
+                .await
+                .unwrap(),
+            "inserted"
+        );
+        assert!(
+            run_confirm_memory_candidate(&sensitive_pool, &sensitive.memory.id)
+                .await
+                .unwrap()
+        );
+
+        let forged_pool = test_pool().await;
+        let forged = memory_v3_fixture(
+            &forged_pool,
+            "我长期有高血压，希望饮食清淡",
+            "用户长期有高血压",
+            "高血压",
+            "sensitive",
+            "active",
+        )
+        .await;
+        assert!(run_persist_memory_v3(&forged_pool, forged).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn memory_v3_rejects_secret_source_and_skips_existing_active_conflicts() {
+        let secret_pool = test_pool().await;
+        let secret = memory_v3_fixture(
+            &secret_pool,
+            "我的密码是ExampleSecret123",
+            "技术回答先给结论",
+            "结论",
+            "normal",
+            "active",
+        )
+        .await;
+        assert!(run_persist_memory_v3(&secret_pool, secret).await.is_err());
+
+        let conflict_pool = test_pool().await;
+        let request = memory_v3_fixture(
+            &conflict_pool,
+            "我喜欢技术回答先给结论",
+            "技术回答先给结论",
+            "结论",
+            "normal",
+            "active",
+        )
+        .await;
+        sqlx::query("INSERT INTO memories (id,content,category,source,locked,status,scope_type,scope_key,subject,fact_key,fact_value,confidence,created_at,updated_at) VALUES ('manual','技术回答先给推导','preference','manual_created',1,'active','global',NULL,'user','test_fact','推导',1,1,1)")
+            .execute(&conflict_pool).await.unwrap();
+        assert_eq!(
+            run_persist_memory_v3(&conflict_pool, request)
+                .await
+                .unwrap(),
+            "conflict"
+        );
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE id LIKE 'mem-v3-%'")
+                .fetch_one(&conflict_pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn memory_v2_atomic_receipt_prevents_resurrection_after_user_deletion() {
+        let pool = test_pool().await;
+        let request = memory_v2_fixture(&pool).await;
+        assert_eq!(
+            run_persist_memory_v2(&pool, request.clone()).await.unwrap(),
+            "inserted"
+        );
+        sqlx::query("DELETE FROM memories WHERE id = ?")
+            .bind(&request.memory.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            run_persist_memory_v2(&pool, request.clone()).await.unwrap(),
+            "already_applied"
+        );
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE id = ?")
+            .bind(&request.memory.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn memory_v2_atomic_receipt_rolls_back_on_failure() {
+        let pool = test_pool().await;
+        let request = memory_v2_fixture(&pool).await;
+        sqlx::query("CREATE TRIGGER fail_v2_operation BEFORE INSERT ON settings WHEN NEW.key LIKE 'memory-extraction:v2:op:%' BEGIN SELECT RAISE(ABORT, 'injected failure'); END")
+            .execute(&pool).await.unwrap();
+        assert!(run_persist_memory_v2(&pool, request.clone()).await.is_err());
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE id = ?")
+            .bind(&request.memory.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn memory_v2_rejects_changed_sources_and_lost_lease() {
+        let pool = test_pool().await;
+        let request = memory_v2_fixture(&pool).await;
+        sqlx::query("UPDATE chat_messages SET metadata = '{}' WHERE id = 'u1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            run_persist_memory_v2(&pool, request.clone()).await.unwrap(),
+            "invalidated"
+        );
+        sqlx::query("UPDATE settings SET value = '{}' WHERE key = ?")
+            .bind(&request.source.lease.key)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            run_persist_memory_v2(&pool, request).await.unwrap(),
+            "lost_lease"
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_v2_rejects_tampered_source_hash_and_operation_identity() {
+        let pool = test_pool().await;
+        let request = memory_v2_fixture(&pool).await;
+        let mut tampered_source = request.clone();
+        let mut evidence: serde_json::Value =
+            serde_json::from_str(&tampered_source.memory.evidence).unwrap();
+        evidence["sources"][0]["textHash"] = serde_json::Value::String("a".repeat(64));
+        tampered_source.memory.evidence = evidence.to_string();
+        assert!(run_persist_memory_v2(&pool, tampered_source).await.is_err());
+
+        let mut forged = request;
+        forged.memory.subject = "someone".into();
+        assert!(run_persist_memory_v2(&pool, forged).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn memory_v2_protects_manual_conflicts_and_rejects_forged_operation_ids() {
+        let pool = test_pool().await;
+        let mut request = memory_v2_fixture(&pool).await;
+        sqlx::query("INSERT INTO memories (id,content,category,source,locked,status,scope_type,subject,fact_key,fact_value,confidence,created_at,updated_at) VALUES ('manual','技术回答先给推导','preference','manual_created',1,'active','global','user','answer_order','推导',1,1,1000)")
+            .execute(&pool).await.unwrap();
+        assert_eq!(
+            run_persist_memory_v2(&pool, request.clone()).await.unwrap(),
+            "conflict"
+        );
+        let mut evidence: serde_json::Value =
+            serde_json::from_str(&request.memory.evidence).unwrap();
+        evidence["replacement"] = serde_json::json!({"id":"manual","contentHash":memory_content_version_hash("技术回答先给推导"),"updatedAt":1_000_000});
+        request.memory.evidence = evidence.to_string();
+        request.memory.supersedes_id = Some("manual".into());
+        assert_eq!(
+            run_persist_memory_v2(&pool, request.clone()).await.unwrap(),
+            "inserted"
+        );
+        let status: String = sqlx::query_scalar("SELECT status FROM memories WHERE id = 'manual'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "active");
+        let mut duplicate = request.clone();
+        duplicate.operation_id = "d".repeat(64);
+        duplicate.memory.id = format!("mem-v2-{}", duplicate.operation_id);
+        assert!(run_persist_memory_v2(&pool, duplicate).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn memory_v2_only_activates_direct_supported_sources_and_rejects_secrets() {
+        let pool = test_pool().await;
+        let mut request = memory_v2_fixture(&pool).await;
+        request.memory.status = "active".into();
+        assert_eq!(
+            run_persist_memory_v2(&pool, request.clone()).await.unwrap(),
+            "inserted"
+        );
+        let mut secret = request.clone();
+        secret.operation_id = "d".repeat(64);
+        secret.memory.id = format!("mem-v2-{}", secret.operation_id);
+        secret.memory.content = "手机号码 13800138000 作为结论".into();
+        assert!(run_persist_memory_v2(&pool, secret).await.is_err());
+        request.operation_id = "e".repeat(64);
+        request.memory.id = format!("mem-v2-{}", request.operation_id);
+        request.memory.fact_value = "英语".into();
+        request.memory.content = "技术回答先给英语结论".into();
+        assert!(run_persist_memory_v2(&pool, request).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn memory_intake_is_atomic_and_keeps_stable_scope_epochs() {
+        let pool = test_pool().await;
+        intake_session(&pool).await;
+        assert!(run_persist_memory_intake(&pool, intake("u1", Some("P")))
+            .await
+            .unwrap());
+        assert!(!run_persist_memory_intake(&pool, intake("u1", Some("P")))
+            .await
+            .unwrap());
+        assert!(run_persist_memory_intake(&pool, intake("u2", Some("Q")))
+            .await
+            .unwrap());
+        assert!(run_persist_memory_intake(&pool, intake("u3", Some("P")))
+            .await
+            .unwrap());
+        let rows = sqlx::query("SELECT key, value FROM settings WHERE key LIKE 'memory-extraction:v2:intake:%' ORDER BY key")
+            .fetch_all(&pool).await.unwrap();
+        assert_eq!(rows.len(), 3);
+        for (index, row) in rows.iter().enumerate() {
+            let value: String = row.try_get("value").unwrap();
+            assert!(!value.contains("匿名对话内容"));
+            let value: serde_json::Value = serde_json::from_str(&value).unwrap();
+            assert_eq!(value["sequence"].as_u64(), Some(index as u64 + 1));
+            assert_eq!(value["epoch"].as_u64(), Some(index as u64));
+            assert_eq!(value["status"], "pending");
+        }
+        assert!(run_persist_memory_intake(&pool, intake("u1", Some("Q")))
+            .await
+            .is_err());
+        assert!(run_persist_memory_intake(&pool, intake("u1", Some("P")))
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn memory_intake_never_restores_deleted_or_modified_sources() {
+        let pool = test_pool().await;
+        intake_session(&pool).await;
+        let request = intake("u1", None);
+        assert!(run_persist_memory_intake(&pool, request.clone())
+            .await
+            .unwrap());
+        let mut changed_time = request.clone();
+        changed_time.message.created_at += 1;
+        assert!(run_persist_memory_intake(&pool, changed_time)
+            .await
+            .is_err());
+        sqlx::query("UPDATE chat_messages SET metadata = '{}' WHERE id = 'u1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(run_persist_memory_intake(&pool, request.clone())
+            .await
+            .is_err());
+        sqlx::query("DELETE FROM chat_messages WHERE id = 'u1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(run_persist_memory_intake(&pool, request).await.is_err());
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chat_messages WHERE id = 'u1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn memory_intake_full_capacity_must_preserve_saved_source_work() {
+        let pool = test_pool().await;
+        intake_session(&pool).await;
+        let request = intake("capacity-source", Some("P"));
+        sqlx::query("INSERT INTO chat_messages (id, session_id, role, parent_id, content, metadata, created_at) VALUES (?, ?, 'user', NULL, ?, ?, ?)")
+            .bind(&request.message.id).bind(&request.message.session_id).bind(&request.message.content)
+            .bind(&request.message.metadata).bind(request.message.created_at).execute(&pool).await.unwrap();
+        for index in 0..512 {
+            let receipt = serde_json::json!({"version":2,"sourceId":format!("old-{index}"),
+                "sessionId":"s","scopeKey":null,"epoch":0,"sequence":index + 1,
+                "sourceFingerprint":"a".repeat(64),"status":"pending","createdAt":1});
+            sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, unixepoch())")
+                .bind(format!("memory-extraction:v2:intake:old-{index}"))
+                .bind(receipt.to_string())
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let _ = run_persist_memory_intake(&pool, request).await;
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM settings WHERE key = 'memory-extraction:v2:intake:capacity-source' OR key = 'memory-extraction:v2:outbox:capacity-source'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            count, 1,
+            "saved source must retain durable extraction work when intake is full"
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_intake_caps_pending_receipts_without_committing_a_new_source() {
+        let pool = test_pool().await;
+        intake_session(&pool).await;
+        for index in 0..512 {
+            let receipt = serde_json::json!({"version":2,"sourceId":format!("old-{index}"),
+                "sessionId":"s","scopeKey":null,"epoch":0,"sequence":index + 1,
+                "sourceFingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "status":"pending","createdAt":1});
+            sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, unixepoch())")
+                .bind(format!("memory-extraction:v2:intake:old-{index}"))
+                .bind(receipt.to_string())
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            run_persist_memory_intake(&pool, intake("u1", None))
+                .await
+                .unwrap_err(),
+            "memory_intake_capacity"
+        );
+        let source_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM chat_messages WHERE id = 'u1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let receipt_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM settings WHERE key = 'memory-extraction:v2:intake:u1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(source_count, 0);
+        assert_eq!(receipt_count, 0);
+    }
+
+    #[tokio::test]
+    async fn memory_intake_rolls_back_message_if_receipt_write_fails() {
+        let pool = test_pool().await;
+        intake_session(&pool).await;
+        // Fail after source insertion, not before the transaction starts.
+        sqlx::query("CREATE TRIGGER fail_intake BEFORE INSERT ON settings BEGIN SELECT RAISE(ABORT, 'injected failure'); END")
+            .execute(&pool).await.unwrap();
+        assert!(run_persist_memory_intake(&pool, intake("u1", None))
+            .await
+            .is_err());
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chat_messages WHERE id = 'u1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     fn document_with_chunks(contents: &[&str]) -> PersistDocumentRequest {
@@ -1817,6 +3715,64 @@ mod tests {
                     .unwrap();
             assert_eq!(old_status, if expected { "superseded" } else { "active" });
         }
+    }
+
+    #[tokio::test]
+    async fn candidate_confirmation_enforces_v2_evidence_and_replacement_snapshot() {
+        for (version, has_replacement, current_content, expected) in [
+            (2, true, "匿名旧事实😀", true),
+            (2, true, "用户刚修改的事实", false),
+            (2, false, "匿名旧事实😀", false),
+            (3, true, "匿名旧事实😀", false),
+        ] {
+            let pool = test_pool().await;
+            sqlx::query("INSERT INTO memories (id, content, category, source, locked, status, scope_type, confidence, created_at, updated_at) VALUES ('old', ?, 'preference', 'manual_created', 0, 'active', 'global', 1, 1, 1)")
+                .bind(current_content).execute(&pool).await.unwrap();
+            let mut evidence = serde_json::json!({ "version": version, "policyVersion": 2, "kind": "semantic", "sourceId": "u1",
+                "sessionId": "s", "windowId": "window:1", "excerpt": "匿名用户消息", "sources": [{ "id": "u1", "sessionId": "s",
+                "role": "user", "parentId": null, "sequence": 1, "createdAt": 1000, "textHash": "a".repeat(64) }] });
+            if has_replacement {
+                evidence["replacement"] = serde_json::json!({ "id": "old", "contentHash": "78cb990a", "updatedAt": 1000 });
+            }
+            sqlx::query("INSERT INTO memories (id, content, category, source, locked, status, scope_type, confidence, supersedes_id, evidence, created_at, updated_at) VALUES ('mem-v2-candidate', '匿名新事实', 'preference', 'auto_extracted', 0, 'candidate', 'global', 1, 'old', ?, 1, 1)")
+                .bind(evidence.to_string()).execute(&pool).await.unwrap();
+            assert_eq!(
+                run_confirm_memory_candidate(&pool, "mem-v2-candidate")
+                    .await
+                    .unwrap(),
+                expected
+            );
+            let old_status: String =
+                sqlx::query_scalar("SELECT status FROM memories WHERE id = 'old'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(old_status, if expected { "superseded" } else { "active" });
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate_confirmation_rejects_malformed_v2_even_without_replacement() {
+        let pool = test_pool().await;
+        sqlx::query("INSERT INTO memories (id, content, category, source, locked, status, scope_type, confidence, evidence, created_at, updated_at) VALUES ('mem-v2-bad', '匿名新事实', 'preference', 'auto_extracted', 0, 'candidate', 'global', 1, '{\"version\":2}', 1, 1)")
+            .execute(&pool).await.unwrap();
+        assert!(!run_confirm_memory_candidate(&pool, "mem-v2-bad")
+            .await
+            .unwrap());
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM memories WHERE id = 'mem-v2-bad'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(status, "candidate");
+    }
+
+    #[tokio::test]
+    async fn candidate_confirmation_keeps_legacy_nonreplacement_json_evidence() {
+        let pool = test_pool().await;
+        sqlx::query("INSERT INTO memories (id, content, category, source, locked, status, scope_type, confidence, evidence, created_at, updated_at) VALUES ('legacy', '匿名旧事实', 'preference', 'auto_extracted', 0, 'candidate', 'global', 1, '{\"version\":\"user-text\"}', 1, 1)")
+            .execute(&pool).await.unwrap();
+        assert!(run_confirm_memory_candidate(&pool, "legacy").await.unwrap());
     }
 
     #[tokio::test]

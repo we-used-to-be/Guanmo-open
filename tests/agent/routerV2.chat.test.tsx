@@ -9,8 +9,12 @@ import { getAgentScopeContext } from '@/services/aiScope'
 import { getDirectChatMetrics } from '@/services/agent/directChat'
 import type { Memory } from '@/services/database/persistence'
 import type { AgentResult, AgentRunRequest } from '@/services/agent/types'
+import { prepareConversationContext } from '@/services/agent/conversationRequest'
 
 const mocks = vi.hoisted(() => ({
+  foreground: vi.fn(),
+  hydrate: vi.fn(async () => {}),
+  aiReady: vi.fn(() => true),
   classify: vi.fn<(request: ChatRequest) => Promise<ChatResponse>>(),
   answer: vi.fn(),
   memory: vi.fn<() => Promise<Memory[]>>(async () => []),
@@ -27,11 +31,19 @@ const client = {
 }
 vi.mock('@/services/ai/aiClient', () => ({
   getAiClient: () => client, getAiConfig: () => useSettingsStore.getState().ai,
-  initAiClient: () => client, isAiReady: () => true, isEmbeddingReady: () => false,
+  initAiClient: () => client, isAiReady: mocks.aiReady, isEmbeddingReady: () => false,
   getEmbeddingConfig: () => null, isLocalApi: () => true, resetAiClient: () => {},
   createChatProvider: () => client,
 }))
-vi.mock('@/services/settingsSecrets', () => ({ ensureSettingsSecretsHydrated: async () => {} }))
+vi.mock('@/services/settingsSecrets', () => ({ ensureSettingsSecretsHydrated: mocks.hydrate }))
+vi.mock('@/services/memory/memoryIntake', () => ({ persistGlobalMemoryMessage: async () => true }))
+vi.mock('@/services/memory/memoryWindowScheduler', () => ({
+  setWindowSchedulerForegroundBusy: mocks.foreground, scheduleGlobalWindowExtraction: async () => {},
+}))
+vi.mock('@/services/agent/conversationRequest', async importOriginal => {
+  const real = await importOriginal<typeof import('@/services/agent/conversationRequest')>()
+  return { ...real, prepareConversationContext: vi.fn(real.prepareConversationContext) }
+})
 vi.mock('@/services/rag/pipeline', async importOriginal => ({
   ...await importOriginal<typeof import('@/services/rag/pipeline')>(), searchRelevant: mocks.knowledge, getKnowledgeDocumentStates: async () => [],
 }))
@@ -44,6 +56,10 @@ vi.mock('@/services/memory/memoryService', async importOriginal => ({
 }))
 
 beforeEach(() => {
+  mocks.foreground.mockClear()
+  mocks.hydrate.mockReset().mockResolvedValue(undefined)
+  mocks.aiReady.mockReset().mockReturnValue(true)
+  vi.mocked(prepareConversationContext).mockClear()
   mocks.classify.mockReset()
   mocks.answer.mockClear()
   mocks.agent.mockClear()
@@ -56,6 +72,37 @@ beforeEach(() => {
 })
 
 describe('Router V2 real chat orchestration', () => {
+  it.each(['context', 'client-ready', 'client-unconfigured'] as const)('keeps the new foreground request busy when the cancelled request returns late from %s', async stage => {
+    const prepared = await prepareConversationContext({ content: '匿名上下文', readFile: async () => '' })
+    vi.mocked(prepareConversationContext).mockClear()
+    let releaseA!: () => void
+    let releaseB!: () => void
+    if (stage === 'context') {
+      vi.mocked(prepareConversationContext).mockImplementationOnce(() => new Promise(resolve => { releaseA = () => resolve(prepared) }))
+    } else {
+      mocks.hydrate.mockImplementationOnce(() => new Promise(resolve => { releaseA = () => resolve() }))
+    }
+    const { result } = renderHook(() => useAiChat())
+    let taskA!: Promise<void>, taskB!: Promise<void>
+    act(() => { taskA = result.current.sendMessage('匿名请求 A') })
+    await waitFor(() => expect(releaseA).toBeTypeOf('function'))
+    act(() => result.current.cancelStream())
+    vi.mocked(prepareConversationContext).mockImplementationOnce(() => new Promise(resolve => { releaseB = () => resolve(prepared) }))
+    act(() => { taskB = result.current.sendMessage('匿名请求 B') })
+    await waitFor(() => expect(releaseB).toBeTypeOf('function'))
+    if (stage === 'client-unconfigured') {
+      mocks.aiReady.mockReturnValue(false)
+      act(() => useSettingsStore.setState({ ai: { ...DEFAULT_AI_CONFIG } }))
+    }
+    await act(async () => { releaseA(); await taskA })
+    expect(useChatStore.getState().streaming).toBe(true)
+    expect(mocks.foreground).toHaveBeenLastCalledWith(true)
+    expect(useChatStore.getState().error).toBeNull()
+    act(() => result.current.cancelStream())
+    await act(async () => { releaseB(); await taskB })
+    expect(mocks.foreground).toHaveBeenLastCalledWith(false)
+    expect(mocks.answer).not.toHaveBeenCalled()
+  })
   it('retains qualified fallback reads in the route and subsequent task continuation', async () => {
     mocks.agent.mockResolvedValueOnce({ answer: 'anonymous lookup result', toolCalls: 1, reason: 'completed', steps: [
       { type: 'action', toolName: 'search_knowledge', content: 'search', timestamp: 1 },

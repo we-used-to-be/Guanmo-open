@@ -20,7 +20,7 @@ interface ExtractionJob {
   leaseUntil: number
 }
 interface JobRow { key: string; value: string }
-interface SourceRow { id: string; session_id: string; role: string; content: string; metadata: string | null; created_at: number }
+interface SourceRow { id: string; session_id: string; role: string; parent_id: string | null; content: string; metadata: string | null; created_at: number }
 type Client = { chat(request: ChatRequest): Promise<{ content: string }> }
 
 function decodeJob(row: JobRow): ExtractionJob | null {
@@ -37,7 +37,7 @@ function decodeJob(row: JobRow): ExtractionJob | null {
 
 async function readSource(job: ExtractionJob): Promise<{ message: ChatMessage; raw: SourceRow } | null> {
   const [row] = await getDatabase().select<SourceRow>(
-    "SELECT id, session_id, role, content, metadata, created_at FROM chat_messages WHERE id = $1 AND session_id = $2 AND role = 'user'",
+    "SELECT id, session_id, role, parent_id, content, metadata, created_at FROM chat_messages WHERE id = $1 AND session_id = $2 AND role = 'user'",
     [job.sourceId, job.sessionId],
   )
   if (!row) return null
@@ -112,7 +112,8 @@ export class MemoryExtractionQueue {
         if (controller.signal.aborted || !isDatabaseReady()) return false
         for (const item of claimed) {
           const current = await readSource(item.job)
-          if (!current || current.raw.content !== item.source.raw.content || current.raw.metadata !== item.source.raw.metadata) return false
+          if (!current || current.raw.content !== item.source.raw.content || current.raw.metadata !== item.source.raw.metadata
+            || current.raw.parent_id !== item.source.raw.parent_id || current.raw.created_at !== item.source.raw.created_at) return false
         }
         return true
       }
@@ -123,6 +124,11 @@ export class MemoryExtractionQueue {
             workspacePath: scope, signal: controller.signal, isSourceValid,
             triggerReason: 'idle_batch', throwOnFailure: true,
             sourceContents: Object.fromEntries(claimed.map(item => [item.source.raw.id, item.source.raw.content])),
+            sourceSnapshots: Object.fromEntries(claimed.map(item => [item.source.raw.id, {
+              id: item.source.raw.id, sessionId: item.source.raw.session_id, role: 'user' as const,
+              parentId: item.source.raw.parent_id ?? null, content: item.source.raw.content, metadata: item.source.raw.metadata,
+              createdAt: item.source.raw.created_at,
+            }])),
           }),
           new Promise<never>((_, reject) => controller.signal.addEventListener('abort', () => reject(new Error('memory_timeout')), { once: true })),
         ])

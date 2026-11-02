@@ -7,7 +7,7 @@ import {
   initDatabase,
 } from './services/database/db'
 import { ensureSettingsSecretsHydrated } from './services/settingsSecrets'
-import { initAiClient, initEmbeddingClient, isLocalApi, validateAiStatus } from './services/ai/aiClient'
+import { initAiClient, initEmbeddingClient, isAiReady, isLocalApi, validateAiStatus } from './services/ai/aiClient'
 import { syncDocumentTheme, useSettingsStore } from './stores/settingsStore'
 import { useAppStore } from './stores/appStore'
 import { useExternalFileOpen } from './hooks/useExternalFileOpen'
@@ -518,6 +518,28 @@ function App() {
         scheduleIdleWarmup()
         stopAiPanelPreload = scheduleAiPanelPreload()
         stopRagWarmup = scheduleRagWarmupAfterFirstSurface()
+        if (isTauri()) {
+          const surfaceReady = useEditorStore.getState().activeTabId
+            ? Promise.race([waitForStartupPoint('editor-first-visible'), waitForStartupPoint('preview-first-visible')])
+            : waitForStartupPoint('app-shell-first-visible')
+          void surfaceReady.then(async () => {
+            if (cancelled) return
+            await ensureSettingsSecretsHydrated()
+            const currentAi = useSettingsStore.getState().ai
+            if (!(hasApiCredential(currentAi) || isLocalApi(currentAi.baseUrl)) || !currentAi.baseUrl || !currentAi.chatModel) return
+            if (!isAiReady()) {
+              await singletonManager.init(SINGLETON_IDS.CHAT_AI, async () => initAiClient(currentAi))
+            }
+            if (cancelled || !isAiReady()) return
+            const [{ scheduleWindowRecovery }, { routingModelChat }, { resolveRouterConfig }] = await Promise.all([
+              import('./services/memory/memoryWindowScheduler'),
+              import('./services/agent/routingModel'),
+              import('./services/agent/routerConfig'),
+            ])
+            const model = resolveRouterConfig(currentAi.routing).model || currentAi.chatModel
+            scheduleWindowRecovery({ chat: request => routingModelChat(model, request) }, 3)
+          }).catch((error) => console.warn('[Memory] Startup window recovery failed:', error))
+        }
 
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)

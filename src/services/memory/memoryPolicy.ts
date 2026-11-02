@@ -27,7 +27,16 @@ export interface MemoryCandidateInput {
 }
 
 export function containsSensitiveMemoryText(text: string): boolean {
-  return /(?:密码|口令|验证码|密钥|私钥|助记词|身份证|银行卡|信用卡|病历|诊断|过敏|住址|家庭地址|电话号码|手机号|api[_ -]?key|password|secret|token\s*[:=])|\b(?:sk-[a-z0-9_-]{10,}|1[3-9]\d{9}|\d{17}[\dXx])\b/i.test(text)
+  return /(?:密码|口令|验证码|密钥|私钥|助记词|身份证|银行卡|信用卡|病历|诊断|过敏|疾病|患有|病情|慢性病|高血压|糖尿病|哮喘|心脏病|用药|治疗|就医|健康状况|健康|财务状况|经济状况|财务|收入|工资|月薪|年薪|负债|债务|欠款|存款|投资|资产|住址|家庭地址|电话号码|手机号|api[_ -]?key|password|secret|token\s*[:=])|\b(?:sk-[a-z0-9_-]{10,}|1[3-9]\d{9}|\d{17}[\dXx])\b/i.test(text)
+}
+
+/** Credentials, identifying numbers, addresses and contact details are never sent for extraction. */
+export function containsForbiddenMemorySecret(text: string): boolean {
+  return /(?:密码|口令|验证码|密钥|私钥|助记词|身份证|银行卡|信用卡|账号|账户号码|卡号|住址|家庭地址|详细地址|门牌号|电话号码|手机号|联系方式|电子邮箱|邮箱地址|微信号|QQ号|api[_ -]?key|password|secret|token\s*[:=]|access[_ -]?token|account\s*(?:number|no\.?))|\b(?:sk-[a-z0-9_-]{10,}|1[3-9]\d{9}|\d{17}[\dXx])\b|[\w.+-]{1,64}@[\w.-]+\.[a-z]{2,}/i.test(text)
+}
+
+export function containsReviewableMemorySensitivity(text: string): boolean {
+  return containsSensitiveMemoryText(text) && !containsForbiddenMemorySecret(text)
 }
 
 export function isExplicitMemoryWriteIntent(text: string): boolean {
@@ -369,9 +378,9 @@ export function normalizeMemoryCandidate<T extends MemoryCandidateInput>(candida
   }
 }
 
-export function validateMemoryCandidate(candidate: MemoryCandidateInput): MemoryCandidateValidationResult {
+export function validateMemoryCandidate(candidate: MemoryCandidateInput, options: { allowSensitive?: boolean } = {}): MemoryCandidateValidationResult {
   const content = candidate.content.trim()
-  if (containsSensitiveMemoryText(content)) return { valid: false, reason: 'sensitive' }
+  if (!options.allowSensitive && containsSensitiveMemoryText(content)) return { valid: false, reason: 'sensitive' }
   const contentLength = Array.from(content).length
   if (contentLength < 6) return { valid: false, reason: 'too_short' }
   if (contentLength > 80) return { valid: false, reason: 'too_long' }

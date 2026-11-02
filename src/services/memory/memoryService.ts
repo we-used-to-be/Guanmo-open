@@ -1,5 +1,5 @@
 import type { ChatMessage, MemoryChatMessageSource } from '@/services/ai/types'
-import type { Memory, MemorySourceGuard } from '@/services/database/persistence'
+import type { Memory, MemorySourceGuard, MemorySourceSnapshot } from '@/services/database/persistence'
 import {
   persistMemory,
   loadMemories,
@@ -30,7 +30,7 @@ import {
   areMemoryFactsEquivalent,
 } from './memoryPolicy'
 import type { MemoryCandidateInput, MemoryScopeType } from './memoryPolicy'
-import { decodeMemoryEvidence, encodeMemoryEvidence, withMemoryReplacement } from './memoryEvidence'
+import { decodeMemoryEvidence, encodeMemoryEvidence, memoryEvidenceUserReferences, withMemoryReplacement } from './memoryEvidence'
 import { idleScheduler } from '@/services/idleScheduler'
 
 export { classifyMemoryRetrievalIntent } from './memoryPolicy'
@@ -111,6 +111,7 @@ export interface ExtractionOptions {
   isSourceValid?: () => Promise<boolean>
   throwOnFailure?: boolean
   sourceContents?: Readonly<Record<string, string>>
+  sourceSnapshots?: Readonly<Record<string, MemorySourceSnapshot>>
 }
 
 interface ExtractionClient {
@@ -391,7 +392,8 @@ export async function processMemoryCandidateExtraction(
       if (item.factValue && !sourceText.toLowerCase().includes(item.factValue.toLowerCase())) continue
       const evidence = encodeMemoryEvidence(source, item.kind)
       const sourceGuard = source.id && options?.sourceContents?.[source.id] !== undefined
-        ? { id: source.id, content: options.sourceContents[source.id] } : undefined
+        ? { id: source.id, content: options.sourceContents[source.id],
+          ...(options.sourceSnapshots?.[source.id] ? { snapshots: [options.sourceSnapshots[source.id]] } : {}) } : undefined
       const sourceIdentity = source.id || options?.sourceId
       const candidateId = sourceIdentity
         ? `mem-auto-${sourceIdentity}-${Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(item.content)))).map(byte => byte.toString(16).padStart(2, '0')).join('')}`
@@ -832,9 +834,27 @@ export async function loadMemorySourceContext(memories: Memory[], query: string)
   if (!/原话|原始|细节|为什么|原因|来源|经过/.test(query)) return ''
   const references = filterInjectableMemories(memories).flatMap(memory => {
     const evidence = decodeMemoryEvidence(memory.evidence)
-    return evidence?.sessionId ? [{ id: evidence.sourceId, sessionId: evidence.sessionId }] : []
+    return evidence ? memoryEvidenceUserReferences(evidence) : []
   })
-  const rows = await loadMemorySourceMessages(references)
-  return rows.filter(row => row.content && !containsSensitiveMemoryText(row.content))
-    .map(row => `用户原话（${row.id}）：${row.content}`).join('\n')
+  const unique = new Map<string, { id: string; sessionId: string; hashes: Set<string> }>()
+  for (const reference of references) {
+    const key = JSON.stringify([reference.sessionId, reference.id])
+    if (!unique.has(key)) unique.set(key, { id: reference.id, sessionId: reference.sessionId, hashes: new Set() })
+    if (reference.textHash) unique.get(key)!.hashes.add(reference.textHash)
+  }
+  const selected = [...unique.values()].slice(0, 2)
+  const rows = await loadMemorySourceMessages(selected)
+  const order = new Map(selected.map((reference, index) => [reference.id, index]))
+  rows.sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity))
+  const verified = await Promise.all(rows.map(async row => {
+    const reference = selected.find(item => item.id === row.id)
+    if (!reference || !row.content || containsSensitiveMemoryText(row.content)) return null
+    if (reference.hashes.size) {
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(row.content))
+      const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+      if ([...reference.hashes].some(expected => expected !== hash)) return null
+    }
+    return `用户原话（${row.id}）：${row.content.slice(0, 1600)}`
+  }))
+  return verified.filter((text): text is string => text !== null).join('\n')
 }

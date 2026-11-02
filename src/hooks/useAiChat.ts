@@ -17,10 +17,13 @@ import { resolveDirectRagSources, searchScopedKnowledge, shouldTriggerScopedRag,
 import { buildAgentFinalAnswerMessages, buildChatMessageTags, buildMessagesForModel, buildSupplementalAiContext, countRagSourcesInContext, createContextMeta, createUserChatMessage, prepareChatHistoryForModel, resolveAiAnswerMode } from '@/services/aiChatMessages'
 import { hideLikelyToolJsonPrefix, stripToolCallJson } from '@/services/agent/toolCallParser'
 import { buildMemoryContextWithSources, isPersonalizedRewriteMemoryIntent, loadMemorySourceContext, searchMemories } from '@/services/memory/memoryService'
-import { scheduleMemoryExtraction } from '@/services/memory/memoryExtractionQueue'
+import { scheduleGlobalWindowExtraction, setWindowSchedulerForegroundBusy } from '@/services/memory/memoryWindowScheduler'
+import { persistGlobalMemoryMessage } from '@/services/memory/memoryIntake'
 import { normalizeMemoryScopeKey } from '@/services/memory/memoryPolicy'
 import type { ManualCapability } from '@/components/ai/ManualToolToggle'
 import { ensureSettingsSecretsHydrated } from '@/services/settingsSecrets'
+import { isWebRuntime } from '@/services/runtimeCapabilities'
+import { encodeChatMessageMetadata } from '@/stores/chatStore'
 import { singletonManager, SINGLETON_IDS } from '@/services/singletonPromise'
 import { promoteTask } from '@/services/idleScheduler'
 import { prepareConversationContext, prepareConversationRouting } from '@/services/agent/conversationRequest'
@@ -163,12 +166,13 @@ export function useAiChat() {
   const cancelRef = useRef<() => void>(() => {})
   const activeRequestRef = useRef<{ id: string; assistantMessageId: string; cancelled: boolean } | null>(null)
 
-  const ensureClient = useCallback(async (): Promise<boolean> => {
+  const ensureClient = useCallback(async (isCurrentRequest: () => boolean): Promise<boolean> => {
     try {
       await ensureSettingsSecretsHydrated()
     } catch (err) {
       console.warn('[AI] Settings secret hydration retry failed:', err)
     }
+    if (!isCurrentRequest()) return false
     const currentAi = useSettingsStore.getState().ai
 
     // 初始化对话客户端（本地 API 无需 apiKey）
@@ -188,17 +192,20 @@ export function useAiChat() {
               return provider
             })
           }
+          if (!isCurrentRequest()) return false
           if (!isAiReady() || configKey !== lastConfigRef.current) {
             initAiClient(currentAi)
             lastConfigRef.current = configKey
           }
         } catch (err) {
+          if (!isCurrentRequest()) return false
           const msg = err instanceof Error ? err.message : String(err)
           setError(`AI 初始化失败：${msg}`)
         }
       }
     }
 
+    if (!isCurrentRequest()) return false
     // 初始化 embedding 客户端（独立配置，本地 API 无需 apiKey）
     const emb = currentAi.embedding
     const embReady = ((emb && hasApiCredential(emb)) || isLocalApi(emb?.baseUrl || '')) && emb?.baseUrl && emb?.embeddingModel
@@ -218,6 +225,7 @@ export function useAiChat() {
               return initEmbeddingClient(emb)
             })
           }
+          if (!isCurrentRequest()) return false
           if (!isEmbeddingReady() || embeddingConfigChanged) initEmbeddingClient(emb)
         } catch (err) {
           console.warn('[AI] Embedding client init failed:', err)
@@ -225,6 +233,7 @@ export function useAiChat() {
       }
     }
 
+    if (!isCurrentRequest()) return false
     if (!isAiReady()) {
       setError('请先在设置中配置 API Key 或选择本地模型（如 Ollama）')
       return false
@@ -236,6 +245,7 @@ export function useAiChat() {
   const cancelStream = useCallback(() => {
     cancelRef.current()
     setStreaming(false)
+    setWindowSchedulerForegroundBusy(false)
   }, [setStreaming])
 
   const sendMessage = useCallback(
@@ -245,6 +255,7 @@ export function useAiChat() {
       if ((!hasText && !hasTags) || useChatStore.getState().streaming) return
       const requestStartedAt = performance.now()
       setStreaming(true)
+      setWindowSchedulerForegroundBusy(true)
       setError(null)
       clearTimeline()
       const requestId = `ai-request-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
@@ -266,6 +277,7 @@ export function useAiChat() {
         requestController.abort('user_cancelled')
         removeMessageById(assistantMessageId)
         setStreaming(false)
+        setWindowSchedulerForegroundBusy(false)
       }
 
       const initialUserMessage = createUserChatMessage(content, '', buildChatMessageTags(contextTags))
@@ -279,8 +291,37 @@ export function useAiChat() {
         content: hasTags ? '正在读取上下文...' : '正在准备 AI 请求...',
         timestamp: Date.now(),
       })
+      const persistAcceptedGlobalMessage = async () => {
+        if (isWebRuntime()) return
+        const message = initialUserMessage
+        const title = (message.displayContent || message.content).slice(0, 30).replace(/\n/g, ' ') || '新对话'
+        await persistGlobalMemoryMessage({ id: memorySourceSessionId, title }, {
+          id: message.id!, sessionId: memorySourceSessionId, content: message.content,
+          metadata: encodeChatMessageMetadata(message), createdAt: message.timestamp!,
+        })
+        try {
+          await scheduleGlobalWindowExtraction(message.id!, memorySourceSessionId,
+            { chat: request => routingModelChat(resolveRouterConfig(ai.routing).model || ai.chatModel, request) })
+        } catch (scheduleError) {
+          console.warn('[Memory] global intake scheduling deferred to recovery', scheduleError instanceof Error ? scheduleError.message : scheduleError)
+        }
+      }
       if (contextTags && contextTags.length > 0) {
         addTimelineItem({ type: 'local_search_start', label: '正在读取上下文' })
+      }
+      try {
+        await persistAcceptedGlobalMessage()
+      } catch (persistError) {
+        console.error('[Chat] accepted message was not persisted', persistError instanceof Error ? persistError.message : persistError)
+        if (isCurrentRequest()) {
+          setError('消息未能安全保存，请重试后再发送。')
+          removeMessageById(assistantMessageId)
+          activeRequestRef.current = null
+          cancelRef.current = () => {}
+          setStreaming(false)
+          setWindowSchedulerForegroundBusy(false)
+        }
+        return
       }
       let preparedContext: Awaited<ReturnType<typeof prepareConversationContext>>
       try {
@@ -297,29 +338,37 @@ export function useAiChat() {
           activeRequestRef.current = null
           cancelRef.current = () => {}
           setStreaming(false)
+          setWindowSchedulerForegroundBusy(false)
         }
         return
       }
-      if (!isCurrentRequest()) return
       const { tagContext, tagMetadata } = preparedContext
       const userMsg = { ...preparedContext.userMessage, id: initialUserMessage.id, timestamp: initialUserMessage.timestamp }
       const persistAndQueueMemory = async () => {
         if (useChatStore.getState().currentSessionId !== memorySourceSessionId) return
         await useChatStore.getState().saveCurrentSession()
-        await scheduleMemoryExtraction({ ...initialUserMessage, content: content.trim(), sessionId: memorySourceSessionId },
-          memorySourceSessionId, workspacePath, { chat: request => routingModelChat(resolveRouterConfig(ai.routing).model, request) })
       }
       updateMessageContent(initialUserMessage.id!, userMsg.content)
+      if (!isCurrentRequest()) {
+        if (activeRequestRef.current?.id === requestId) setWindowSchedulerForegroundBusy(false)
+        return
+      }
       updateRequestMessage('正在准备 AI 请求...')
       setRagStatus('idle')
       setRagSources([])
 
       updateRequestMessage('正在读取 AI 配置...')
-      if (!(await ensureClient())) {
+      const clientReady = await ensureClient(isCurrentRequest)
+      if (!isCurrentRequest()) {
+        if (activeRequestRef.current?.id === requestId) setWindowSchedulerForegroundBusy(false)
+        return
+      }
+      if (!clientReady) {
         removeMessageById(assistantMessageId)
         activeRequestRef.current = null
         cancelRef.current = () => {}
         setStreaming(false)
+        setWindowSchedulerForegroundBusy(false)
         return
       }
       updateRequestMessage('正在初始化模型连接...')
@@ -722,6 +771,7 @@ export function useAiChat() {
             activeRequestRef.current = null
             cancelRef.current = () => {}
             setStreaming(false)
+            setWindowSchedulerForegroundBusy(false)
           }
         }
       }
@@ -948,6 +998,7 @@ export function useAiChat() {
           activeRequestRef.current = null
           cancelRef.current = () => {}
           setStreaming(false)
+          setWindowSchedulerForegroundBusy(false)
         }
       }
     },
