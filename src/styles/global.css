@@ -1902,6 +1902,10 @@ html[data-gm-runtime='web'] .gm-settings-tabs--web > div:nth-child(2) {
   margin: 0;
 }
 
+.gm-markdown-preview div:has(> table) {
+  background: var(--gm-code-bg);
+}
+
 .gm-markdown-preview td {
   color: var(--gm-text);
 }

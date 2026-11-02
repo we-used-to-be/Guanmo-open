@@ -45,7 +45,8 @@ html[data-fullscreen-background-ready] .gm-fullscreen-diff-content {
   background-color: color-mix(in srgb, var(--gm-canvas) 55%, transparent) !important;
 }
 
-html[data-fullscreen-background-ready] .gm-fullscreen-preview-content .gm-code-block {
+html[data-fullscreen-background-ready] .gm-fullscreen-preview-content .gm-code-block,
+html[data-fullscreen-background-ready] .gm-fullscreen-preview-content .gm-markdown-preview div:has(> table) {
   background: color-mix(in srgb, var(--gm-code-bg) var(--gm-fullscreen-glass-cover, 100%), transparent);
   border-color: color-mix(in srgb, var(--gm-border) 70%, transparent);
   backdrop-filter: blur(8px) saturate(110%);
