@@ -4,8 +4,8 @@
 
 ## 恢复顺序
 
-1. 工作区 `D:\React\guanmo-open`，核实 `git status --short` 和分支 `feature/agent-router-v2`。不要覆盖当前所有未提交修改。
-2. 读取根 AGENTS.md、`docs/memory/AI_IMPLEMENTATION_PLAN.md` 和完整需求 `C:\Users\惜\.codex\attachments\a339d8fa-4170-4e93-9c55-6e289901931e\goal-objective.md`。根 `AI_IMPLEMENTATION_PLAN.md` 属于 MCP，禁止覆盖；记忆任务计划文件被既有 ignore 规则忽略，仅本机保留。
+1. 工作区为仓库根目录，核实 `git status --short` 和当前分支。不要覆盖当前所有未提交修改。
+2. 读取根 AGENTS.md、`docs/memory/AI_IMPLEMENTATION_PLAN.md` 和用户提供附件中的完整需求文件。根 `AI_IMPLEMENTATION_PLAN.md` 属于 MCP，禁止覆盖；记忆任务计划文件被既有 ignore 规则忽略，仅本机保留。
 3. 不新建 goal 绕过限制，不自行提交/推送/打 tag/发布。不启用 Trellis、子 Agent 或独立模型 Reviewer；用户未授权这些工作流。
 
 ## 已落实与决策
