@@ -1285,7 +1285,7 @@ html[data-fullscreen-transition-phase='focusing'] #root {
 .gm-streaming-word {
   display: inline-block;
   max-width: 100%;
-  animation: gmStreamingWord 280ms ease-out both;
+  animation: gmStreamingWord 280ms ease-out backwards;
 }
 
 .gm-streaming-caret {
