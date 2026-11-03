@@ -132,6 +132,24 @@ function StatefulAnchoredPreview() {
 }
 
 describe('MarkdownPreview 预览内源码编辑', () => {
+  it('预览滚动时保留编辑器的原生光标', async () => {
+    const { container } = renderPreview({ content: '原文' })
+    altClick(screen.getByText('原文'))
+    const editor = await screen.findByRole('textbox', {}, { timeout: 10000 })
+    const text = editor.querySelector('.cm-line')!.firstChild!
+    const selection = window.getSelection()!
+    const range = document.createRange()
+    range.setStart(text, 1)
+    range.collapse(true)
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    fireEvent.scroll(container.querySelector('.gm-markdown-preview')!.parentElement!)
+
+    expect(selection.anchorNode).toBe(text)
+    expect(selection.anchorOffset).toBe(1)
+  })
+
   it.each(['## 标题', '普通段落'])('编辑框顶部对齐首段实际文本而非块外壳：%s', async (content) => {
     const { container } = renderPreview({ content })
     const root = container.querySelector<HTMLElement>('.gm-markdown-preview')!

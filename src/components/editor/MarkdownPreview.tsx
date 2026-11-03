@@ -157,6 +157,7 @@ interface PreviewDragSelection {
   clientY: number
   lastResolvedClientX: number
   lastResolvedClientY: number
+  codeScroller: HTMLElement | null
 }
 
 interface FloatingAnchorRect {
@@ -1019,6 +1020,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     if (!selection || selection.rangeCount === 0) return
     const anchorNode = selection.anchorNode
     const focusNode = selection.focusNode
+    const editor = overlayRef.current
+    if ((anchorNode && editor?.contains(anchorNode)) || (focusNode && editor?.contains(focusNode))) return
     if ((anchorNode && root.contains(anchorNode)) || (focusNode && root.contains(focusNode))) {
       selection.removeAllRanges()
     }
@@ -2213,9 +2216,24 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       if (dy !== 0) container.scrollTop += dy
     }
     // 每帧最多更新一次终点，且只有 offset 真正变化时才写入选区
-    const offset = resolveCaretOffsetRef.current(drag.clientX, drag.clientY)
+    let hitX = drag.clientX
+    const codeScroller = drag.codeScroller
+    if (codeScroller?.isConnected && codeScroller.scrollWidth > codeScroller.clientWidth) {
+      const rect = codeScroller.getBoundingClientRect()
+      if (drag.clientY >= rect.top && drag.clientY <= rect.bottom) {
+        let dx = 0
+        if (drag.clientX < rect.left + DRAG_AUTOSCROLL_EDGE) {
+          dx = -Math.ceil(Math.min(DRAG_AUTOSCROLL_MAX_STEP, (rect.left + DRAG_AUTOSCROLL_EDGE - drag.clientX) / 3))
+        } else if (drag.clientX > rect.right - DRAG_AUTOSCROLL_EDGE) {
+          dx = Math.ceil(Math.min(DRAG_AUTOSCROLL_MAX_STEP, (drag.clientX - rect.right + DRAG_AUTOSCROLL_EDGE) / 3))
+        }
+        codeScroller.scrollLeft += dx
+        hitX = Math.max(rect.left + 1, Math.min(rect.right - 1, drag.clientX))
+      }
+    }
+    const offset = resolveCaretOffsetRef.current(hitX, drag.clientY)
     if (offset !== null) {
-      drag.lastResolvedClientX = drag.clientX
+      drag.lastResolvedClientX = hitX
       drag.lastResolvedClientY = drag.clientY
       if (offset !== drag.focusOffset) {
         drag.focusOffset = offset
@@ -2254,6 +2272,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
         clientY: event.clientY,
         lastResolvedClientX: event.clientX,
         lastResolvedClientY: event.clientY,
+        codeScroller: event.target instanceof Element ? event.target.closest<HTMLElement>('.gm-code-block pre') : null,
       }
       applySelection(anchor === offset ? null : { from: anchor, to: offset }, 'drag-start')
     }
@@ -2278,6 +2297,13 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
     }
 
     const resolveReleaseOffset = (drag: PreviewDragSelection, event: MouseEvent) => {
+      const scroller = drag.codeScroller
+      if (scroller?.isConnected) {
+        const rect = scroller.getBoundingClientRect()
+        if (event.clientY >= rect.top && event.clientY <= rect.bottom && (event.clientX < rect.left || event.clientX > rect.right)) {
+          return drag.focusOffset
+        }
+      }
       const exact = resolveCaretOffsetRef.current(event.clientX, event.clientY)
       if (exact !== null) return exact
       if (Math.abs(event.clientY - drag.lastResolvedClientY) > DRAG_ENDPOINT_SAME_LINE_TOLERANCE) return drag.focusOffset

@@ -367,6 +367,34 @@ describe('MarkdownPreview 批注浮层', () => {
     expect(previewRef.current?.getSelection()?.text).toBe('const')
   })
 
+  it('拖选代码时靠近左右边缘会横向滚动', async () => {
+    const caretDocument = document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
+    caretDocument.caretRangeFromPoint = (x) => {
+      const text = host?.querySelector('code span[data-gm-src-from]')?.firstChild
+      if (!text) return null
+      const range = document.createRange()
+      range.setStart(text, x < 100 ? 0 : text.textContent!.length)
+      range.collapse(true)
+      return range
+    }
+    render(<MarkdownPreview content={codeContent} documentKey="doc-code-scroll" documentVersion={1} />, { container: host! })
+    const pre = host!.querySelector<HTMLElement>('.gm-code-block pre')!
+    const text = pre.querySelector('code span[data-gm-src-from]')!
+    Object.defineProperties(pre, {
+      clientWidth: { configurable: true, value: 200 },
+      scrollWidth: { configurable: true, value: 600 },
+    })
+    vi.spyOn(pre, 'getBoundingClientRect').mockReturnValue(makeRect(100, 0, 200, 80))
+    pre.scrollLeft = 100
+    fireEvent.mouseDown(text, { button: 0, clientX: 100, clientY: 120 })
+    fireEvent.mouseMove(document, { buttons: 1, clientX: 205, clientY: 120 })
+    await waitFor(() => expect(pre.scrollLeft).toBeGreaterThan(100))
+    const right = pre.scrollLeft
+    fireEvent.mouseMove(document, { buttons: 1, clientX: -5, clientY: 120 })
+    await waitFor(() => expect(pre.scrollLeft).toBeLessThan(right))
+    fireEvent.mouseUp(document, { button: 0, clientX: -5, clientY: 120 })
+  })
+
   it('已有代码批注可在语法高亮 token 内恢复命中区域', async () => {
     render(<MarkdownPreview content={codeContent} documentKey="doc-code-existing" documentVersion={1} filePath={documentPath} readingMarks={[makeCodeMark('code-existing', 'target')]} />, { container: host! })
 
