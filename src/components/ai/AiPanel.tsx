@@ -92,6 +92,7 @@ const STREAM_BOTTOM_GAP_PX = 96
 const SAVE_CONTROLS_HIDE_DELAY_MS = 700
 const SEND_ANIMATION_DURATION_MS = 260
 const SEND_ANIMATION_FADE_MS = 120
+const SEND_ANIMATION_REVEAL_MS = 360
 const SEND_ANIMATION_POINT_SIZE = 12
 
 type SendAnimationPhase = 'waiting' | 'flying' | 'arrived' | 'cancelled'
@@ -236,7 +237,7 @@ export function AiPanel({ fullscreenDragHandleProps, productTourActive = false }
       if (sendAnimationRef.current?.token === next.token && sendAnimationRef.current.phase === phase) {
         clearSendAnimation()
       }
-    }, SEND_ANIMATION_FADE_MS)
+    }, phase === 'arrived' ? SEND_ANIMATION_REVEAL_MS : SEND_ANIMATION_FADE_MS)
   }, [clearSendAnimation, updateSendAnimation])
 
   const syncSendAnimationTarget = useCallback(() => {
@@ -1073,7 +1074,7 @@ export function AiPanel({ fullscreenDragHandleProps, productTourActive = false }
               const hideForSendAnimation = isPendingSendMessage
                 || (isSendAnimationTarget && sendAnimation?.phase === 'flying')
               const revealForSendAnimation = isSendAnimationTarget
-                && (sendAnimation?.phase === 'arrived' || sendAnimation?.phase === 'cancelled')
+                && sendAnimation?.phase === 'arrived'
               const parentQuestion = msg.parentId ? userQuestionsById.get(msg.parentId) : undefined
               const originalSelections = msg.parentId ? userSelectionsById.get(msg.parentId) : undefined
               // 历史会话之间的分隔线

@@ -1095,6 +1095,19 @@ html[data-fullscreen-transition-phase='focusing'] #root {
   to { opacity: 1; filter: blur(0); }
 }
 
+.gm-ai-send-message-reveal [data-send-animation-bubble] .whitespace-pre-wrap {
+  animation: gmSendMessageReveal 360ms ease-out;
+}
+
+@keyframes gmSendMessageReveal {
+  0%, 18% { filter: blur(5px); }
+  to { filter: blur(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gm-ai-send-message-reveal [data-send-animation-bubble] .whitespace-pre-wrap { animation: none; }
+}
+
 @keyframes gmTypingDot {
   0%, 80%, 100% { opacity: .38; transform: translateY(0) scale(.86); }
   36% { opacity: 1; transform: translateY(-3px) scale(1); }
