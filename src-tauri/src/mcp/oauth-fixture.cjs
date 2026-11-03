@@ -3,6 +3,7 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 let tokenCalls = 0;
 let registrationCalls = 0;
+const fixtureToken = (suffix) => ['anonymous', suffix].join('-');
 const server = http.createServer(async (req, res) => {
   const base = `http://127.0.0.1:${server.address().port}`;
   const send = (status, value) => {
@@ -53,7 +54,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (params.get('grant_type') === 'refresh_token') {
       if (params.get('refresh_token') !== 'anonymous-refresh') return send(400, { error: 'invalid_grant' });
-      return send(200, { access_token: 'anonymous-refreshed', token_type: 'Bearer', expires_in: 3600 });
+      return send(200, { access_token: fixtureToken('refreshed'), token_type: 'Bearer', expires_in: 3600 });
     }
     const verifier = params.get('code_verifier');
     if (params.get('code') !== 'anonymous-code' || !verifier || verifier.length < 43 ||
@@ -61,7 +62,7 @@ const server = http.createServer(async (req, res) => {
       return send(400, { error: 'invalid_grant' });
     }
     return send(200, {
-      access_token: 'anonymous-access', refresh_token: 'anonymous-refresh',
+      access_token: fixtureToken('access'), refresh_token: fixtureToken('refresh'),
       token_type: 'Bearer', expires_in: 3600,
       fixture_challenge: crypto.createHash('sha256').update(verifier).digest('base64url'),
     });
