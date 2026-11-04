@@ -42,6 +42,7 @@ function invokeMock(command: string, args?: Record<string, unknown>) {
       case 'list_authorized_api_origins':
       case 'load_reading_marks_page': return []
       case 'configure_api_connection': return { configId: 'smoke-config', configured: false }
+      case 'persist_chat_message_with_memory_intake': return true
       case 'authorize_selected_path':
       case 'authorize_workspace_path':
       case 'record_diagnostic_event':
@@ -79,6 +80,8 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useToastStore } from '@/stores/toastStore'
 import { closeDatabase, getDatabaseRuntimeState } from '@/services/database/db'
+import { OpenAICompatibleProvider } from '@/services/ai/providers/openaiCompatible'
+import { resetAiClient } from '@/services/ai/aiClient'
 
 let guard: ReturnType<typeof createRuntimeGuard>
 let root: HTMLDivElement
@@ -136,6 +139,8 @@ afterEach(async () => {
     } finally {
       guard.stop()
       await closeDatabase()
+      resetAiClient('chat')
+      vi.restoreAllMocks()
       clearMocks()
       vi.unstubAllGlobals()
     }
@@ -163,6 +168,37 @@ async function boot() {
 
 describe('Core Smoke（真实 Desktop React Tree，隔离原生 I/O）', () => {
   it('空会话启动并完成主界面首次渲染', async () => { await boot() })
+
+  it('Agent 调用只读工具并展示最终回答', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(OpenAICompatibleProvider.prototype, 'validateConfig').mockResolvedValue({ ok: true })
+    const chat = vi.spyOn(OpenAICompatibleProvider.prototype, 'streamChat')
+      .mockImplementationOnce(async function* () {
+        yield { content: '', done: false, toolCallDeltas: [{ index: 0, id: 'smoke-call', name: 'get_current_time', arguments: '{}' }] }
+        yield { content: '', done: true }
+      })
+      .mockImplementationOnce(async function* () {
+        yield { content: '已获取当前系统时间。', done: false }
+        yield { content: '', done: true }
+      })
+    useSettingsStore.setState(state => ({ ai: { ...state.ai, baseUrl: 'http://127.0.0.1:11434', chatModel: 'smoke-model', streamEnabled: true } }))
+    await boot()
+    await user.click(screen.getByRole('button', { name: /打开 AI 助手/ }))
+    await checkpoint(() => expect(screen.getByPlaceholderText('输入消息... (Enter 发送)')).toBeInTheDocument())
+    const input = screen.getByPlaceholderText('输入消息... (Enter 发送)')
+    await user.type(input, '现在几点？{Enter}')
+    await checkpoint(() => {
+      expect(screen.getByText('已获取当前系统时间。')).toBeInTheDocument()
+      expect(useChatStore.getState().streaming).toBe(false)
+    })
+    expect(chat).toHaveBeenCalledTimes(2)
+    expect(chat.mock.calls[1][0].messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'tool', tool_call_id: 'smoke-call', content: expect.stringContaining('当前系统时间') }),
+    ]))
+    expect(useChatStore.getState().agentSteps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'observation', toolName: 'get_current_time' }),
+    ]))
+  }, 30000)
 
   it('AI 与阅读成果快捷键按当前页面开关侧栏，打开 AI 时聚焦并保留草稿', async () => {
     const user = userEvent.setup()
