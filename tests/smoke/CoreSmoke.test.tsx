@@ -312,7 +312,9 @@ describe('Core Smoke（真实 Desktop React Tree，隔离原生 I/O）', () => {
 
     await user.click(screen.getByTitle('折叠侧边栏'))
     await checkpoint(() => {
-      expect(root.querySelector('.gm-layout-sidebar-content[aria-hidden="true"]')).toBeNull()
+      const content = root.querySelector<HTMLElement>('.gm-layout-sidebar > .gm-layout-sidebar-content')
+      expect(content).not.toBeNull()
+      expect(content?.inert).toBe(true)
       expect(screen.getByRole('button', { name: '展开侧边栏' })).toHaveFocus()
     })
     await user.click(screen.getByRole('button', { name: '展开侧边栏' }))
