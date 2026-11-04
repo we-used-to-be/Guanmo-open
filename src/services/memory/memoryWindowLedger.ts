@@ -33,6 +33,7 @@ interface WindowRecord extends MemoryWindowGroup {
   receiptValues: string[]
   prefixIds: string[]
   prefixReceiptValues?: string[]
+  formatRepairAttempted?: boolean
 }
 export interface MemoryWindowClaim { key: string; value: string; record: WindowRecord }
 export type MemoryWindowResult = 'completed' | 'noop' | 'invalidated' | 'failed'
@@ -70,6 +71,7 @@ function decodeWindow(row: SettingsRow, group: MemoryWindowGroup): WindowRecord 
     || !Array.isArray(item.prefixIds) || item.prefixIds.length > 2
     || (item.prefixIds.length > 0 && (!Array.isArray(item.prefixReceiptValues) || item.prefixReceiptValues.length !== item.prefixIds.length))
     || (item.prefixReceiptValues !== undefined && (!Array.isArray(item.prefixReceiptValues) || item.prefixReceiptValues.length !== item.prefixIds.length))
+    || (item.formatRepairAttempted !== undefined && item.formatRepairAttempted !== true)
     || [...item.sourceIds, ...item.prefixIds].some(id => typeof id !== 'string' || !id || id.length > 300)
     || new Set([...item.sourceIds, ...item.prefixIds]).size !== item.sourceIds.length + item.prefixIds.length) {
     throw new Error('invalid_memory_window')
@@ -219,6 +221,23 @@ export async function isMemoryWindowLeaseCurrent(claim: MemoryWindowClaim): Prom
     `SELECT key FROM settings WHERE key = $1 AND value = $2 AND ${liveLeaseCondition} AND ${guards.join(' AND ')}`, params,
   )
   return isDatabaseReady() && rows.length === 1
+}
+
+/** Persist the one format-repair budget in the window lease, including across restart. */
+export async function reserveMemoryWindowFormatRepair(claim: MemoryWindowClaim): Promise<'reserved' | 'used' | 'lost_lease'> {
+  if (!isDatabaseReady()) return 'lost_lease'
+  const record = decodeWindow({ key: claim.key, value: claim.value }, claim.record)
+  if (record.version !== 3 || record.status !== 'running') return 'lost_lease'
+  if (record.formatRepairAttempted) return 'used'
+  if (!await isMemoryWindowLeaseCurrent(claim)) return 'lost_lease'
+  const next = { ...record, formatRepairAttempted: true }
+  const value = JSON.stringify(next)
+  const result = await getDatabase().execute(`UPDATE settings SET value = $1, updated_at = unixepoch()
+    WHERE key = $2 AND value = $3 AND ${liveLeaseCondition}`, [value, claim.key, claim.value])
+  if (result.rowsAffected !== 1) return 'lost_lease'
+  claim.value = value
+  claim.record = next
+  return 'reserved'
 }
 
 /** Durable claim only. Callers must guard every model call and every write with the active lease. */

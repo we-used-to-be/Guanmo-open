@@ -851,7 +851,7 @@ fn memory_content_version_hash(content: &str) -> String {
     format!("{hash:x}")
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MemoryReplacementSnapshot {
     id: String,
@@ -970,7 +970,53 @@ fn valid_memory_evidence(value: &serde_json::Value, expected_version: u64) -> bo
         }
         previous = sequence;
     }
+    let review = value.get("reviewReason");
+    let quote = value.get("evidenceQuote");
+    let valid_review = match (review, quote) {
+        (None, None) => true,
+        (Some(reason), Some(quote)) if expected_version == 3 => {
+            reason.as_str() == Some("semantic")
+                && quote.as_str().is_some_and(|text| {
+                    !text.trim().is_empty() && text.encode_utf16().count() <= 1200
+                })
+        }
+        _ => false,
+    };
+    let valid_conflicts = match value.get("conflicts") {
+        None => true,
+        Some(conflicts)
+            if expected_version == 3
+                && review.and_then(|item| item.as_str()) == Some("semantic") =>
+        {
+            conflicts.as_array().is_some_and(|items| {
+                let mut seen = std::collections::HashSet::new();
+                !items.is_empty()
+                    && items.len() <= 8
+                    && items.iter().all(|item| {
+                        item.get("id").and_then(|v| v.as_str()).is_some_and(|id| {
+                            !id.is_empty() && id.encode_utf16().count() <= 300 && seen.insert(id)
+                        }) && item
+                            .get("contentHash")
+                            .and_then(|v| v.as_str())
+                            .is_some_and(|hash| {
+                                !hash.is_empty()
+                                    && hash.len() <= 8
+                                    && hash.bytes().all(|byte| {
+                                        byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+                                    })
+                            })
+                            && item
+                                .get("updatedAt")
+                                .and_then(|v| v.as_i64())
+                                .is_some_and(|time| time > 0)
+                    })
+            })
+        }
+        _ => false,
+    };
     primary_sequence == Some(previous)
+        && valid_review
+        && valid_conflicts
         && (expected_version != 3
             || matches!(
                 value.get("sensitivity").and_then(|v| v.as_str()),
@@ -984,7 +1030,67 @@ fn valid_memory_evidence_v2(value: &serde_json::Value) -> bool {
 
 fn valid_memory_evidence_v3(value: &serde_json::Value) -> bool {
     valid_memory_evidence(value, 3)
-        && value.get("sensitivity").and_then(|item| item.as_str()) == Some("sensitive")
+        && (value.get("sensitivity").and_then(|item| item.as_str()) == Some("sensitive")
+            || value.get("reviewReason").and_then(|item| item.as_str()) == Some("semantic"))
+}
+
+fn memory_conflicts_match(
+    rows: &[sqlx::sqlite::SqliteRow],
+    expected: Option<&serde_json::Value>,
+) -> Result<bool, String> {
+    let Some(items) = expected.and_then(|value| value.as_array()) else {
+        return Ok(rows.is_empty());
+    };
+    if rows.len() != items.len() || rows.len() > 8 {
+        return Ok(false);
+    }
+    for row in rows {
+        let id: String = row.try_get("id").map_err(|error| error.to_string())?;
+        let content: String = row.try_get("content").map_err(|error| error.to_string())?;
+        let mut updated: i64 = row
+            .try_get("updated_at")
+            .map_err(|error| error.to_string())?;
+        if updated > 0 && updated < 1_000_000_000_000 {
+            updated *= 1000;
+        }
+        let Some(snapshot) = items
+            .iter()
+            .find(|item| item.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+        else {
+            return Ok(false);
+        };
+        if snapshot.get("updatedAt").and_then(|v| v.as_i64()) != Some(updated)
+            || snapshot.get("contentHash").and_then(|v| v.as_str())
+                != Some(memory_content_version_hash(&content).as_str())
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+async fn memory_add_related_conflicts(
+    conn: &mut sqlx::SqliteConnection,
+    conflicts: &mut Vec<sqlx::sqlite::SqliteRow>,
+    evidence: &serde_json::Value,
+) -> Result<(), String> {
+    let Some(items) = evidence.get("conflicts").and_then(|value| value.as_array()) else {
+        return Ok(());
+    };
+    for item in items {
+        let Some(id) = item.get("id").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        if conflicts
+            .iter()
+            .any(|row| row.try_get::<String, _>("id").ok().as_deref() == Some(id))
+        {
+            continue;
+        }
+        if let Some(row) = sqlx::query("SELECT id, content, updated_at FROM memories WHERE id = ? AND status = 'active' AND COALESCE(scope_type, 'global') = 'global' AND COALESCE(scope_key, '') = ''")
+            .bind(id).fetch_optional(&mut *conn).await.map_err(|error| error.to_string())? { conflicts.push(row); }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -993,6 +1099,8 @@ pub struct PersistMemoryV2Request {
     operation_id: String,
     memory: MemoryV2Record,
     source: MemoryV2Guard,
+    #[serde(default)]
+    merge: Option<MemoryReplacementSnapshot>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1095,7 +1203,7 @@ fn memory_v2_operation_id(memory: &MemoryV2Record, evidence: &serde_json::Value)
     memory_operation_id(memory, evidence)
 }
 
-fn memory_snapshot_visible_text(snapshot: &MemoryV2Snapshot) -> Option<String> {
+fn memory_snapshot_visible_text(snapshot: &MemoryV2Snapshot, policy_version: u64) -> Option<String> {
     let metadata = snapshot
         .metadata
         .as_deref()
@@ -1115,7 +1223,7 @@ fn memory_snapshot_visible_text(snapshot: &MemoryV2Snapshot) -> Option<String> {
     if context.is_some_and(|value| !value.is_object()) {
         return None;
     }
-    if snapshot.role == "assistant"
+    if policy_version != 3 && snapshot.role == "assistant"
         && metadata.as_ref().is_some_and(|value| {
             value.get("tags").is_some()
                 || value.get("sources").is_some_and(|sources| {
@@ -1280,7 +1388,6 @@ fn reviewable_sensitive_memory(value: &str) -> bool {
         "治疗",
         "就医",
         "健康状况",
-        "健康",
         "财务状况",
         "经济状况",
         "财务",
@@ -1359,10 +1466,11 @@ async fn run_persist_memory_policy(
         || memory.fact_value.trim().is_empty()
         || memory.fact_value.len() > 640
         || !(0.0..=1.0).contains(&memory.confidence)
-        || !memory
-            .content
-            .to_lowercase()
-            .contains(&memory.fact_value.trim().to_lowercase())
+        || (policy_version == 2
+            && !memory
+                .content
+                .to_lowercase()
+                .contains(&memory.fact_value.trim().to_lowercase()))
         || memory.created_at <= 0
         || memory.updated_at <= 0
         || memory.evidence.encode_utf16().count() > 6000
@@ -1457,8 +1565,7 @@ async fn run_persist_memory_policy(
                 || memory.scope_key.is_some()
                 || memory.category == "project"
                 || lease.get("scopeKey") != Some(&serde_json::Value::Null)
-                || memory.supersedes_id.is_some()
-                || evidence.get("replacement").is_some()))
+                || (memory.supersedes_id.is_some() != evidence.get("replacement").is_some())))
     {
         return Err("invalid_memory_v2_lease".into());
     }
@@ -1517,7 +1624,7 @@ async fn run_persist_memory_policy(
         let Some(snapshot) = snapshot else {
             return Err("invalid_memory_v2_sources".into());
         };
-        let visible = memory_snapshot_visible_text(snapshot).ok_or("invalid_memory_v2_sources")?;
+        let visible = memory_snapshot_visible_text(snapshot, policy_version).ok_or("invalid_memory_v2_sources")?;
         if policy_version == 3 && snapshot.role == "user" && obvious_forbidden_memory(&visible) {
             return Err("invalid_memory_v3_source".into());
         }
@@ -1553,7 +1660,32 @@ async fn run_persist_memory_policy(
     if policy_version == 3 && evidence_sensitive && memory.status != "candidate" {
         return Err("invalid_memory_v3_sensitivity".into());
     }
-    if policy_version == 3 && memory.status == "candidate" && !evidence_sensitive {
+    let semantic_review = policy_version == 3
+        && evidence
+            .get("reviewReason")
+            .and_then(|value| value.as_str())
+            == Some("semantic");
+    if semantic_review {
+        let primary = request
+            .source
+            .snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == request.source.id && snapshot.role == "user")
+            .and_then(|snapshot| memory_snapshot_visible_text(snapshot, policy_version))
+            .ok_or("invalid_memory_v3_source")?;
+        let quote = evidence
+            .get("evidenceQuote")
+            .and_then(|value| value.as_str())
+            .ok_or("invalid_memory_v3_source")?;
+        if memory.status != "candidate" || !primary.contains(quote) {
+            return Err("invalid_memory_v3_source".into());
+        }
+    }
+    if policy_version == 3
+        && memory.status == "candidate"
+        && !evidence_sensitive
+        && !semantic_review
+    {
         return Err("invalid_memory_v3_sensitivity".into());
     }
     if memory.status == "active" {
@@ -1563,7 +1695,7 @@ async fn run_persist_memory_policy(
             || evidence_sources
                 .iter()
                 .any(|source| source.get("segment").is_some())
-            || memory.confidence < 0.85
+            || (policy_version == 2 && memory.confidence < 0.85)
             || memory.supersedes_id.is_some()
         {
             return Err("invalid_memory_v2_activation".into());
@@ -1625,13 +1757,13 @@ async fn run_persist_memory_policy(
                     .snapshots
                     .iter()
                     .find(|snapshot| snapshot.id == source_id)
-                    .and_then(memory_snapshot_visible_text)
+                    .and_then(|snapshot| memory_snapshot_visible_text(snapshot, policy_version))
                     .is_some_and(|text| {
                         text.to_lowercase()
                             .contains(&memory.fact_value.to_lowercase())
                     })
             });
-        if !primary_contains_value && !accepted_assistant_value {
+        if policy_version == 2 && !primary_contains_value && !accepted_assistant_value {
             return Err("invalid_memory_v2_activation".into());
         }
     }
@@ -1708,8 +1840,51 @@ async fn run_persist_memory_policy(
     if existing_id != 0 {
         return Ok("conflict".into());
     }
-    let duplicate: Option<String> = sqlx::query_scalar("SELECT id FROM memories WHERE category = ? AND COALESCE(scope_type, 'global') = ? AND COALESCE(scope_key, '') = COALESCE(?, '') AND lower(trim(subject)) = lower(trim(?)) AND lower(trim(fact_key)) = lower(trim(?)) AND lower(trim(fact_value)) = lower(trim(?)) AND status IN ('active','candidate','ignored','archived') LIMIT 1")
-        .bind(&memory.category).bind(&memory.scope_type).bind(&memory.scope_key).bind(&memory.subject).bind(&memory.fact_key).bind(&memory.fact_value)
+    if let Some(merge) = &request.merge {
+        if policy_version != 3 || memory.status != "active" || evidence_sensitive || semantic_review
+        {
+            return Err("invalid_memory_v3_merge".into());
+        }
+        let target = sqlx::query("SELECT content, updated_at FROM memories WHERE id = ? AND status = 'active' AND source = 'auto_extracted' AND locked = 0 AND COALESCE(scope_type, 'global') = 'global' AND COALESCE(scope_key, '') = ''")
+            .bind(&merge.id).fetch_optional(&mut *tx).await.map_err(|error| error.to_string())?;
+        let Some(target) = target else {
+            return Ok("conflict".into());
+        };
+        let content: String = target
+            .try_get("content")
+            .map_err(|error| error.to_string())?;
+        let updated: i64 = target
+            .try_get("updated_at")
+            .map_err(|error| error.to_string())?;
+        let updated = if updated > 0 && updated < 1_000_000_000_000 {
+            updated * 1000
+        } else {
+            updated
+        };
+        if merge.updated_at != updated
+            || merge.content_hash != memory_content_version_hash(&content)
+        {
+            return Ok("conflict".into());
+        }
+        let result = sqlx::query("UPDATE memories SET content = ?, content_hash = NULL, embedding = NULL, embedding_model = NULL, evidence = ?, updated_at = ? WHERE id = ? AND status = 'active' AND source = 'auto_extracted' AND locked = 0")
+            .bind(&memory.content).bind(&memory.evidence).bind(memory.updated_at).bind(&merge.id)
+            .execute(&mut *tx).await.map_err(|error| error.to_string())?;
+        if result.rows_affected() != 1 {
+            return Ok("conflict".into());
+        }
+        let receipt = serde_json::json!({"version": policy_version, "memoryId": merge.id, "outcome": "merged"}).to_string();
+        sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, unixepoch())")
+            .bind(&operation_key)
+            .bind(receipt)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| error.to_string())?;
+        tx.commit().await.map_err(|error| error.to_string())?;
+        return Ok("inserted".into());
+    }
+    let duplicate: Option<String> = sqlx::query_scalar("SELECT id FROM memories WHERE category = ? AND COALESCE(scope_type, 'global') = ? AND COALESCE(scope_key, '') = COALESCE(?, '') AND (lower(trim(subject)) = lower(trim(?)) OR (? = 3 AND lower(trim(subject)) IN ('user', '用户') AND lower(trim(?)) IN ('user', '用户'))) AND lower(trim(fact_key)) = lower(trim(?)) AND lower(trim(fact_value)) = lower(trim(?)) AND (? != 3 OR lower(trim(content)) = lower(trim(?))) AND status IN ('active','candidate','ignored','archived') LIMIT 1")
+        .bind(&memory.category).bind(&memory.scope_type).bind(&memory.scope_key).bind(&memory.subject).bind(policy_version as i64).bind(&memory.subject).bind(&memory.fact_key).bind(&memory.fact_value)
+        .bind(policy_version as i64).bind(&memory.content)
         .fetch_optional(&mut *tx).await.map_err(|error| error.to_string())?;
     if let Some(duplicate) = duplicate {
         if lease_until <= chrono_timestamp_millis() {
@@ -1727,16 +1902,52 @@ async fn run_persist_memory_policy(
         tx.commit().await.map_err(|error| error.to_string())?;
         return Ok("duplicate".into());
     }
-    let conflicts = sqlx::query("SELECT id, content, updated_at FROM memories WHERE category = ? AND COALESCE(scope_type, 'global') = ? AND COALESCE(scope_key, '') = COALESCE(?, '') AND lower(trim(subject)) = lower(trim(?)) AND lower(trim(fact_key)) = lower(trim(?)) AND status = 'active' LIMIT 2")
-        .bind(&memory.category).bind(&memory.scope_type).bind(&memory.scope_key).bind(&memory.subject).bind(&memory.fact_key)
+    let mut conflicts = sqlx::query("SELECT id, content, updated_at FROM memories WHERE category = ? AND COALESCE(scope_type, 'global') = ? AND COALESCE(scope_key, '') = COALESCE(?, '') AND (lower(trim(subject)) = lower(trim(?)) OR (? = 3 AND lower(trim(subject)) IN ('user', '用户') AND lower(trim(?)) IN ('user', '用户'))) AND lower(trim(fact_key)) = lower(trim(?)) AND status = 'active' LIMIT 9")
+        .bind(&memory.category).bind(&memory.scope_type).bind(&memory.scope_key).bind(&memory.subject).bind(policy_version as i64).bind(&memory.subject).bind(&memory.fact_key)
         .fetch_all(&mut *tx).await.map_err(|error| error.to_string())?;
-    if conflicts.len() > 1 {
-        return Ok("conflict".into());
-    }
-    if let Some(old) = conflicts.first() {
-        if policy_version == 3 {
+    if policy_version == 3 {
+        memory_add_related_conflicts(&mut tx, &mut conflicts, &evidence).await?;
+        if !memory_conflicts_match(&conflicts, evidence.get("conflicts"))?
+            || (!conflicts.is_empty() && (!semantic_review || memory.status != "candidate"))
+        {
             return Ok("conflict".into());
         }
+        if let Some(id) = &memory.supersedes_id {
+            let replacement = evidence
+                .get("replacement")
+                .cloned()
+                .and_then(|value| serde_json::from_value::<MemoryReplacementSnapshot>(value).ok());
+            if memory.status != "candidate"
+                || !replacement.is_some_and(|item| {
+                    item.id == *id
+                        && conflicts.iter().any(|row| {
+                            row.try_get::<String, _>("id").ok().as_deref() == Some(id.as_str())
+                                && row
+                                    .try_get::<String, _>("content")
+                                    .ok()
+                                    .is_some_and(|content| {
+                                        memory_content_version_hash(&content) == item.content_hash
+                                    })
+                                && row
+                                    .try_get::<i64, _>("updated_at")
+                                    .ok()
+                                    .is_some_and(|time| {
+                                        (if time > 0 && time < 1_000_000_000_000 {
+                                            time * 1000
+                                        } else {
+                                            time
+                                        }) == item.updated_at
+                                    })
+                        })
+                })
+            {
+                return Ok("conflict".into());
+            }
+        }
+    } else if conflicts.len() > 1 {
+        return Ok("conflict".into());
+    }
+    if let Some(old) = conflicts.first().filter(|_| policy_version == 2) {
         let id: String = old.try_get("id").map_err(|error| error.to_string())?;
         let content: String = old.try_get("content").map_err(|error| error.to_string())?;
         let mut updated: i64 = old
@@ -1759,7 +1970,7 @@ async fn run_persist_memory_policy(
         {
             return Ok("conflict".into());
         }
-    } else if memory.supersedes_id.is_some() {
+    } else if policy_version == 2 && memory.supersedes_id.is_some() {
         return Ok("conflict".into());
     }
     if lease_until <= chrono_timestamp_millis() {
@@ -1813,9 +2024,17 @@ pub async fn persist_memory_v3_transaction(
 }
 
 async fn run_confirm_memory_candidate(pool: &SqlitePool, id: &str) -> Result<bool, String> {
+    run_confirm_memory_candidate_with_coexist(pool, id, false).await
+}
+
+async fn run_confirm_memory_candidate_with_coexist(
+    pool: &SqlitePool,
+    id: &str,
+    coexist: bool,
+) -> Result<bool, String> {
     let mut transaction = pool.begin().await.map_err(|error| error.to_string())?;
     let candidate = sqlx::query(
-        "SELECT supersedes_id, evidence FROM memories WHERE id = ? AND status = 'candidate'",
+        "SELECT supersedes_id, evidence, category, subject, fact_key, scope_type, scope_key FROM memories WHERE id = ? AND status = 'candidate'",
     )
     .bind(id)
     .fetch_optional(&mut *transaction)
@@ -1842,11 +2061,10 @@ async fn run_confirm_memory_candidate(pool: &SqlitePool, id: &str) -> Result<boo
         .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok());
     let version = evidence.as_ref().and_then(|value| value.get("version"));
     let version_number = version.and_then(|value| value.as_i64());
-    if (supersedes_id.is_some() && version.is_some() && !matches!(version_number, Some(1 | 2)))
+    if (supersedes_id.is_some() && version.is_some() && !matches!(version_number, Some(1 | 2 | 3)))
         || (id.starts_with("mem-v2-") && version_number != Some(2))
         || (id.starts_with("mem-v3-")
             && (version_number != Some(3)
-                || supersedes_id.is_some()
                 || evidence_too_long
                 || !evidence.as_ref().is_some_and(valid_memory_evidence_v3)))
         || (version_number == Some(2)
@@ -1858,18 +2076,121 @@ async fn run_confirm_memory_candidate(pool: &SqlitePool, id: &str) -> Result<boo
             .map_err(|error| error.to_string())?;
         return Ok(false);
     }
-    if let Some(supersedes_id) = supersedes_id {
-        let replacement = evidence.as_ref().and_then(|value| value.get("replacement"));
-        // Legacy text and v1 without a snapshot remain readable. New evidence must
-        // never fall through that compatibility path and replace an unchecked row.
-        if version_number == Some(2) && replacement.is_none() {
+    if version_number == Some(3)
+        && evidence
+            .as_ref()
+            .and_then(|value| value.get("reviewReason"))
+            .and_then(|value| value.as_str())
+            == Some("semantic")
+    {
+        let item = evidence.as_ref().ok_or("invalid_memory_v3_evidence")?;
+        let sources = item
+            .get("sources")
+            .and_then(|value| value.as_array())
+            .ok_or("invalid_memory_v3_evidence")?;
+        let primary_id = item
+            .get("sourceId")
+            .and_then(|value| value.as_str())
+            .ok_or("invalid_memory_v3_evidence")?;
+        let quote = item
+            .get("evidenceQuote")
+            .and_then(|value| value.as_str())
+            .ok_or("invalid_memory_v3_evidence")?;
+        let mut current = true;
+        for source in sources {
+            let source_id = source
+                .get("id")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let row = sqlx::query("SELECT id, session_id, role, parent_id, content, metadata, created_at FROM chat_messages WHERE id = ? AND session_id = ? AND role = ? AND parent_id IS ? AND created_at = ?")
+                .bind(source_id)
+                .bind(source.get("sessionId").and_then(|value| value.as_str()))
+                .bind(source.get("role").and_then(|value| value.as_str()))
+                .bind(source.get("parentId").and_then(|value| value.as_str()))
+                .bind(source.get("createdAt").and_then(|value| value.as_i64()))
+                .fetch_optional(&mut *transaction).await.map_err(|error| error.to_string())?;
+            let Some(row) = row else {
+                current = false;
+                break;
+            };
+            let snapshot = MemoryV2Snapshot {
+                id: row.try_get("id").map_err(|error| error.to_string())?,
+                session_id: row
+                    .try_get("session_id")
+                    .map_err(|error| error.to_string())?,
+                role: row.try_get("role").map_err(|error| error.to_string())?,
+                parent_id: row
+                    .try_get("parent_id")
+                    .map_err(|error| error.to_string())?,
+                content: row.try_get("content").map_err(|error| error.to_string())?,
+                metadata: row.try_get("metadata").map_err(|error| error.to_string())?,
+                created_at: row
+                    .try_get("created_at")
+                    .map_err(|error| error.to_string())?,
+            };
+            let Some(visible) = memory_snapshot_visible_text(&snapshot, 3) else {
+                current = false;
+                break;
+            };
+            let hash: String = Sha256::digest(visible.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            if source.get("textHash").and_then(|value| value.as_str()) != Some(hash.as_str())
+                || (source_id == primary_id && !visible.contains(quote))
+                || (snapshot.role == "user" && obvious_forbidden_memory(&visible))
+            {
+                current = false;
+                break;
+            }
+        }
+        let category: String = candidate
+            .try_get("category")
+            .map_err(|error| error.to_string())?;
+        let subject: String = candidate
+            .try_get("subject")
+            .map_err(|error| error.to_string())?;
+        let fact_key: String = candidate
+            .try_get("fact_key")
+            .map_err(|error| error.to_string())?;
+        let scope_type: Option<String> = candidate
+            .try_get("scope_type")
+            .map_err(|error| error.to_string())?;
+        let scope_key: Option<String> = candidate
+            .try_get("scope_key")
+            .map_err(|error| error.to_string())?;
+        let mut conflicts = sqlx::query("SELECT id, content, updated_at FROM memories WHERE status = 'active' AND category = ? AND COALESCE(scope_type, 'global') = COALESCE(?, 'global') AND COALESCE(scope_key, '') = COALESCE(?, '') AND (lower(trim(subject)) = lower(trim(?)) OR (lower(trim(subject)) IN ('user', '用户') AND lower(trim(?)) IN ('user', '用户'))) AND lower(trim(fact_key)) = lower(trim(?)) LIMIT 9")
+            .bind(category).bind(scope_type).bind(scope_key).bind(&subject).bind(&subject).bind(fact_key)
+            .fetch_all(&mut *transaction).await.map_err(|error| error.to_string())?;
+        memory_add_related_conflicts(&mut transaction, &mut conflicts, item).await?;
+        if !current
+            || !memory_conflicts_match(&conflicts, item.get("conflicts"))?
+            || supersedes_id.as_ref().is_some_and(|id| {
+                !conflicts
+                    .iter()
+                    .any(|row| row.try_get::<String, _>("id").ok().as_deref() == Some(id.as_str()))
+            })
+            || (!conflicts.is_empty() && !coexist && supersedes_id.is_none())
+        {
             transaction
                 .rollback()
                 .await
                 .map_err(|error| error.to_string())?;
             return Ok(false);
         }
-        if let Some(snapshot) = replacement.filter(|_| matches!(version_number, Some(1 | 2))) {
+    }
+    if let Some(supersedes_id) = supersedes_id.filter(|_| !coexist || version_number != Some(3)) {
+        let replacement = evidence.as_ref().and_then(|value| value.get("replacement"));
+        // Legacy text and v1 without a snapshot remain readable. New evidence must
+        // never fall through that compatibility path and replace an unchecked row.
+        if matches!(version_number, Some(2 | 3)) && replacement.is_none() {
+            transaction
+                .rollback()
+                .await
+                .map_err(|error| error.to_string())?;
+            return Ok(false);
+        }
+        if let Some(snapshot) = replacement.filter(|_| matches!(version_number, Some(1 | 2 | 3))) {
             let snapshot = serde_json::from_value::<MemoryReplacementSnapshot>(snapshot.clone());
             let current = sqlx::query(
                 "SELECT content, updated_at FROM memories WHERE id = ? AND status = 'active'",
@@ -1925,9 +2246,10 @@ async fn run_confirm_memory_candidate(pool: &SqlitePool, id: &str) -> Result<boo
         }
     }
     let result = sqlx::query(
-        "UPDATE memories SET status = 'active', source = 'user_explicit', \
+        "UPDATE memories SET status = 'active', source = 'user_explicit', supersedes_id = CASE WHEN ? THEN NULL ELSE supersedes_id END, \
          updated_at = unixepoch() * 1000 WHERE id = ? AND status = 'candidate'",
     )
+    .bind(coexist && version_number == Some(3))
     .bind(id)
     .execute(&mut *transaction)
     .await
@@ -1943,9 +2265,10 @@ async fn run_confirm_memory_candidate(pool: &SqlitePool, id: &str) -> Result<boo
 pub async fn confirm_memory_candidate_transaction(
     app: AppHandle,
     id: String,
+    coexist: Option<bool>,
 ) -> Result<bool, String> {
     let pool = open_write_pool(database_path(&app)?).await?;
-    run_confirm_memory_candidate(&pool, &id).await
+    run_confirm_memory_candidate_with_coexist(&pool, &id, coexist.unwrap_or(false)).await
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2476,6 +2799,19 @@ pub async fn remove_knowledge_document_by_path(
 mod tests {
     use super::*;
 
+    #[test]
+    fn memory_v3_visible_reply_accepts_tool_metadata() {
+        let snapshot = MemoryV2Snapshot {
+            id: "a1".into(), session_id: "s".into(), role: "assistant".into(),
+            parent_id: Some("u1".into()), content: "原始正文".into(),
+            metadata: Some(serde_json::json!({"displayContent":"可见回复", "sources":[{"text":"工具原文"}],
+                "contextMeta":{"webSearchUsed":true,"ragSourceCount":1}}).to_string()),
+            created_at: 1,
+        };
+        assert_eq!(memory_snapshot_visible_text(&snapshot, 3).as_deref(), Some("可见回复"));
+        assert_eq!(memory_snapshot_visible_text(&snapshot, 2), None);
+    }
+
     async fn test_pool() -> SqlitePool {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -2557,6 +2893,7 @@ mod tests {
             "windowId":window_id,"excerpt":text,"sources":[{"id":"u1","sessionId":"s","role":"user","parentId":null,
             "sequence":1,"createdAt":created,"textHash":text_hash}]}).to_string();
         let mut request = PersistMemoryV2Request {
+            merge: None,
             operation_id: "".into(),
             memory: MemoryV2Record {
                 id: String::new(),
@@ -2649,6 +2986,7 @@ mod tests {
             "sources":[{"id":"u1","sessionId":"s","role":"user","parentId":null,"sequence":1,
                 "createdAt":created,"textHash":text_hash}]}).to_string();
         let mut request = PersistMemoryV2Request {
+            merge: None,
             operation_id: String::new(),
             memory: MemoryV2Record {
                 id: String::new(),
@@ -2684,6 +3022,252 @@ mod tests {
         request.operation_id = memory_operation_id(&request.memory, &evidence).unwrap();
         request.memory.id = format!("mem-v3-{}", request.operation_id);
         request
+    }
+
+    #[tokio::test]
+    async fn memory_v3_semantic_review_requires_current_evidence_and_no_conflict() {
+        async fn semantic_fixture(pool: &SqlitePool) -> PersistMemoryV2Request {
+            let text = "我的职业是独立开发者，我长期从事软件开发。";
+            let mut request = memory_v3_fixture(
+                pool,
+                text,
+                "用户是独立开发者，长期从事软件开发",
+                "独立开发者，长期从事软件开发",
+                "normal",
+                "candidate",
+            )
+            .await;
+            let mut evidence: serde_json::Value =
+                serde_json::from_str(&request.memory.evidence).unwrap();
+            evidence["reviewReason"] = serde_json::json!("semantic");
+            evidence["evidenceQuote"] =
+                serde_json::json!("我的职业是独立开发者，我长期从事软件开发");
+            request.memory.evidence = evidence.to_string();
+            request
+        }
+        let pool = test_pool().await;
+        let request = semantic_fixture(&pool).await;
+        assert_eq!(
+            run_persist_memory_v3(&pool, request.clone()).await.unwrap(),
+            "inserted"
+        );
+        assert!(run_confirm_memory_candidate(&pool, &request.memory.id)
+            .await
+            .unwrap());
+
+        let stale_pool = test_pool().await;
+        let stale = semantic_fixture(&stale_pool).await;
+        assert_eq!(
+            run_persist_memory_v3(&stale_pool, stale.clone())
+                .await
+                .unwrap(),
+            "inserted"
+        );
+        sqlx::query("UPDATE chat_messages SET content = '修改后的匿名消息' WHERE id = 'u1'")
+            .execute(&stale_pool)
+            .await
+            .unwrap();
+        assert!(!run_confirm_memory_candidate(&stale_pool, &stale.memory.id)
+            .await
+            .unwrap());
+
+        let conflict_pool = test_pool().await;
+        let conflict = semantic_fixture(&conflict_pool).await;
+        assert_eq!(
+            run_persist_memory_v3(&conflict_pool, conflict.clone())
+                .await
+                .unwrap(),
+            "inserted"
+        );
+        sqlx::query("INSERT INTO memories (id,content,category,source,locked,status,scope_type,subject,fact_key,confidence,created_at,updated_at) VALUES ('existing','已确认事实','preference','manual_created',1,'active','global','用户','test_fact',1,1,1)")
+            .execute(&conflict_pool).await.unwrap();
+        assert!(
+            !run_confirm_memory_candidate(&conflict_pool, &conflict.memory.id)
+                .await
+                .unwrap()
+        );
+
+        let forged_pool = test_pool().await;
+        let mut forged = semantic_fixture(&forged_pool).await;
+        let mut evidence: serde_json::Value =
+            serde_json::from_str(&forged.memory.evidence).unwrap();
+        evidence["evidenceQuote"] = serde_json::json!("伪造的原文");
+        forged.memory.evidence = evidence.to_string();
+        assert!(run_persist_memory_v3(&forged_pool, forged).await.is_err());
+
+        let active_pool = test_pool().await;
+        let mut active = semantic_fixture(&active_pool).await;
+        active.memory.status = "active".into();
+        assert!(run_persist_memory_v3(&active_pool, active).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn memory_v3_conflicting_facts_require_explicit_coexistence_and_unchanged_snapshots() {
+        async fn setup(pool: &SqlitePool) -> PersistMemoryV2Request {
+            let text = "我的业余爱好是画水彩画。";
+            let mut request = memory_v3_fixture(
+                pool,
+                text,
+                "用户的业余爱好是画水彩画",
+                "画水彩画",
+                "normal",
+                "candidate",
+            )
+            .await;
+            let old = "用户的业余爱好是收藏邮票";
+            sqlx::query("INSERT INTO memories (id,content,category,source,locked,status,scope_type,subject,fact_key,confidence,created_at,updated_at) VALUES ('old',?,'preference','manual_created',1,'active','global','用户','test_fact',1,1700000000000,1700000000000)")
+                .bind(old).execute(pool).await.unwrap();
+            let mut evidence: serde_json::Value =
+                serde_json::from_str(&request.memory.evidence).unwrap();
+            evidence["reviewReason"] = serde_json::json!("semantic");
+            evidence["evidenceQuote"] = serde_json::json!(text);
+            evidence["conflicts"] = serde_json::json!([{ "id": "old", "contentHash": memory_content_version_hash(old), "updatedAt": 1700000000000_i64 }]);
+            request.memory.evidence = evidence.to_string();
+            request
+        }
+        let pool = test_pool().await;
+        let request = setup(&pool).await;
+        assert_eq!(
+            run_persist_memory_v3(&pool, request.clone()).await.unwrap(),
+            "inserted"
+        );
+        assert!(!run_confirm_memory_candidate(&pool, &request.memory.id)
+            .await
+            .unwrap());
+        assert!(
+            run_confirm_memory_candidate_with_coexist(&pool, &request.memory.id, true)
+                .await
+                .unwrap()
+        );
+        let active: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE status = 'active'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(active, 2);
+        let old: (String, i64) =
+            sqlx::query_as("SELECT content, locked FROM memories WHERE id = 'old'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(old, ("用户的业余爱好是收藏邮票".into(), 1));
+
+        let replacement_pool = test_pool().await;
+        let mut replacement = setup(&replacement_pool).await;
+        replacement.memory.supersedes_id = Some("old".into());
+        let mut evidence: serde_json::Value =
+            serde_json::from_str(&replacement.memory.evidence).unwrap();
+        evidence["replacement"] = evidence["conflicts"][0].clone();
+        replacement.memory.evidence = evidence.to_string();
+        assert_eq!(
+            run_persist_memory_v3(&replacement_pool, replacement.clone())
+                .await
+                .unwrap(),
+            "inserted"
+        );
+        assert!(
+            run_confirm_memory_candidate(&replacement_pool, &replacement.memory.id)
+                .await
+                .unwrap()
+        );
+        let status: String = sqlx::query_scalar("SELECT status FROM memories WHERE id = 'old'")
+            .fetch_one(&replacement_pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "superseded");
+
+        let stale_pool = test_pool().await;
+        let stale = setup(&stale_pool).await;
+        assert_eq!(
+            run_persist_memory_v3(&stale_pool, stale.clone())
+                .await
+                .unwrap(),
+            "inserted"
+        );
+        sqlx::query("UPDATE memories SET content = '已有记忆已变化' WHERE id = 'old'")
+            .execute(&stale_pool)
+            .await
+            .unwrap();
+        assert!(
+            !run_confirm_memory_candidate_with_coexist(&stale_pool, &stale.memory.id, true)
+                .await
+                .unwrap()
+        );
+
+        let extra_pool = test_pool().await;
+        let extra = setup(&extra_pool).await;
+        assert_eq!(
+            run_persist_memory_v3(&extra_pool, extra.clone())
+                .await
+                .unwrap(),
+            "inserted"
+        );
+        sqlx::query("INSERT INTO memories (id,content,category,source,locked,status,scope_type,subject,fact_key,confidence,created_at,updated_at) VALUES ('new','新增的已有事实','preference','manual_created',1,'active','global','user','test_fact',1,1,1)")
+            .execute(&extra_pool).await.unwrap();
+        assert!(
+            !run_confirm_memory_candidate_with_coexist(&extra_pool, &extra.memory.id, true)
+                .await
+                .unwrap()
+        );
+
+        let forged_pool = test_pool().await;
+        let mut forged = setup(&forged_pool).await;
+        let mut evidence: serde_json::Value =
+            serde_json::from_str(&forged.memory.evidence).unwrap();
+        evidence["conflicts"][0]["contentHash"] = serde_json::json!("bad");
+        forged.memory.evidence = evidence.to_string();
+        assert_eq!(
+            run_persist_memory_v3(&forged_pool, forged).await.unwrap(),
+            "conflict"
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_v3_merge_checks_version_and_does_not_overwrite_locked_memory() {
+        for (source, locked, changed, expected) in [
+            ("auto_extracted", 0, false, "inserted"),
+            ("auto_extracted", 1, false, "conflict"),
+            ("manual_created", 0, false, "conflict"),
+            ("auto_extracted", 0, true, "conflict"),
+        ] {
+            let pool = test_pool().await;
+            let mut request = memory_v3_fixture(
+                &pool,
+                "我长期从事软件开发。",
+                "用户是长期从事软件开发的独立开发者",
+                "软件开发",
+                "normal",
+                "active",
+            )
+            .await;
+            let old = "用户是独立开发者";
+            sqlx::query("INSERT INTO memories (id,content,category,source,locked,status,scope_type,subject,fact_key,confidence,created_at,updated_at) VALUES ('old',?,'preference',?,?,'active','global','user','old_fact',1,1700000000000,1700000000000)")
+                .bind(if changed { "用户修改了旧事实" } else { old }).bind(source).bind(locked).execute(&pool).await.unwrap();
+            request.merge = Some(MemoryReplacementSnapshot {
+                id: "old".into(),
+                content_hash: memory_content_version_hash(old),
+                updated_at: 1700000000000,
+            });
+            assert_eq!(
+                run_persist_memory_v3(&pool, request).await.unwrap(),
+                expected
+            );
+            let actual: String =
+                sqlx::query_scalar("SELECT content FROM memories WHERE id = 'old'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                actual,
+                if expected == "inserted" {
+                    "用户是长期从事软件开发的独立开发者"
+                } else if changed {
+                    "用户修改了旧事实"
+                } else {
+                    old
+                }
+            );
+        }
     }
 
     #[tokio::test]

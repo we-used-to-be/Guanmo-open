@@ -960,9 +960,9 @@ export async function updateMemoryStatus(id: string, status: MemoryStatus): Prom
   )
 }
 
-export async function confirmMemoryCandidate(id: string): Promise<boolean> {
+export async function confirmMemoryCandidate(id: string, coexist = false): Promise<boolean> {
   if (!isDatabaseReady()) return false
-  return invoke<boolean>('confirm_memory_candidate_transaction', { id })
+  return invoke<boolean>('confirm_memory_candidate_transaction', coexist ? { id, coexist: true } : { id })
 }
 
 function safeParseEmbedding(value: string): number[] | null {
@@ -1059,7 +1059,7 @@ export async function loadChatMessages(sessionId: string): Promise<ChatMessageRo
   if (!isDatabaseReady()) return []
   const db = getDatabase()
   return db.select<ChatMessageRow>(
-    'SELECT * FROM chat_messages WHERE session_id = $1 ORDER BY created_at ASC',
+    'SELECT * FROM chat_messages WHERE session_id = $1 ORDER BY created_at ASC, rowid ASC',
     [sessionId]
   )
 }

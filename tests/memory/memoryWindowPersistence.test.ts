@@ -88,7 +88,7 @@ describe('v2 atomic memory write bridge', () => {
     await expect(persistMemoryWindowCandidate(request)).resolves.toBe('inserted')
   })
 
-  it('writes normal v3 facts active, sensitive facts as candidates, and skips existing conflicts', async () => {
+  it('writes normal v3 facts active, sensitive and conflicting facts as candidates', async () => {
     const normal = await prepareMemoryWindowWrite(claimV3, packetV3(), { candidate: candidateV3(), supported: true }, [], 1700000000100)
     expect(normal).not.toBeNull()
     expect(normal!.memory).toMatchObject({ id: 'mem-v3-' + normal!.operationId, status: 'active', scopeType: 'global', scopeKey: null })
@@ -101,7 +101,33 @@ describe('v2 atomic memory write bridge', () => {
     expect(decodeMemoryEvidence(health!.memory.evidence)).toMatchObject({ version: 3, sensitivity: 'sensitive' })
 
     const conflict = await prepareMemoryWindowWrite(claimV3, packetV3(), { candidate: candidateV3(), supported: true }, [existing()])
-    expect(conflict).toBeNull()
+    expect(conflict?.memory).toMatchObject({ status: 'candidate', supersedesId: null })
+    expect(decodeMemoryEvidence(conflict?.memory.evidence)).toMatchObject({ version: 3, reviewReason: 'semantic',
+      conflicts: [{ id: 'manual', updatedAt: 2000 }] })
+  })
+
+  it('admits a directly stated v3 identity without a personal-fact keyword allowlist', async () => {
+    const candidate = candidateV3({ content: '用户是自由摄影师', category: 'profile', factKey: 'occupation', factValue: '自由摄影师' })
+    const direct = await prepareMemoryWindowWrite(claimV3, packetV3('我是自由摄影师。'), { candidate, supported: true }, [])
+    expect(direct?.memory.status).toBe('active')
+    const question = await prepareMemoryWindowWrite(claimV3, packetV3('我是自由摄影师，你知道吗？'), { candidate, supported: true }, [])
+    expect(question?.memory.status).toBe('active')
+  })
+
+  it('activates a model paraphrase when the source and format are valid', async () => {
+    const text = '我的职业是独立开发者，我长期从事软件开发。'
+    const paraphrase = candidateV3({ content: '用户是独立开发者，长期从事软件开发', category: 'profile', factKey: 'occupation',
+      factValue: '独立开发者，长期从事软件开发', evidenceQuote: '我的职业是独立开发者，我长期从事软件开发' })
+    const request = await prepareMemoryWindowWrite(claimV3, packetV3(text), { candidate: paraphrase, supported: true }, [])
+    expect(request?.memory.status).toBe('active')
+    expect(decodeMemoryEvidence(request?.memory.evidence)).toMatchObject({ version: 3 })
+  })
+
+  it('does not use local keyword heuristics to override the model interpretation', async () => {
+    const candidate = candidateV3({ content: '用户是自由摄影师', category: 'profile', factKey: 'occupation', factValue: '自由摄影师' })
+    for (const text of ['我如果是自由摄影师。', '这次我是自由摄影师。', '我有个朋友是自由摄影师。', '我姐姐是自由摄影师。', '我是自由摄影师吗？']) {
+      expect((await prepareMemoryWindowWrite(claimV3, packetV3(text), { candidate, supported: true }, []))?.memory.status).toBe('active')
+    }
   })
 
   it('promotes an explicitly accepted multi-turn fact and dispatches v3 to its dedicated Rust command', async () => {

@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   getRetryAt: vi.fn(async () => null),
   buildInput: vi.fn(),
   requestProposals: vi.fn(),
+  compareCandidates: vi.fn(async (_claim: unknown, candidates: unknown[]) => ({ kind: 'compared', relations: candidates.map(() => ({ action: 'add' })) })),
   verifyProposals: vi.fn(),
   prepareWrite: vi.fn(),
   persistWrite: vi.fn(),
@@ -54,6 +55,7 @@ vi.mock('@/services/memory/memoryWindowLedger', () => ({
 vi.mock('@/services/memory/memoryWindowInput', () => ({ buildMemoryWindowInput: mocks.buildInput }))
 vi.mock('@/services/memory/memoryWindowModel', () => ({
   requestMemoryWindowProposals: mocks.requestProposals,
+  compareMemoryWindowCandidates: mocks.compareCandidates,
   verifyMemoryWindowProposals: mocks.verifyProposals,
 }))
 vi.mock('@/services/memory/memoryWindowPersistence', () => ({

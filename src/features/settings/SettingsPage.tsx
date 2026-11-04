@@ -1,6 +1,8 @@
 import { DesktopApiKeyControl } from './DesktopApiKeyControl'
+import { MemoryExtractionStatus } from './MemoryExtractionStatus'
+import { MemoryExtractionSimulator } from './MemoryExtractionSimulator'
 import { resolveRouterConfig } from '@/services/agent/routerConfig'
-import { memoryEvidenceText } from '@/services/memory/memoryEvidence'
+import { decodeMemoryEvidence, memoryEvidenceReviewQuote, memoryEvidenceText } from '@/services/memory/memoryEvidence'
 import { hasApiCredential, embeddingConnection } from '@/services/apiConnection'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Button, Collapse, Divider, Footer, Icon, Input, Modal, Select, Switch, Table, Tabs } from 'animal-island-ui'
@@ -1820,11 +1822,17 @@ const MEMORY_SOURCE_LABELS: Record<string, string> = {
 const MEMORY_PAGE_SIZE = 20
 const CANDIDATE_PAGE_SIZE = 10
 
+function memoryConflictSnapshots(memory: Memory) {
+  const evidence = decodeMemoryEvidence(memory.evidence)
+  return evidence?.version === 3 ? evidence.conflicts ?? [] : []
+}
+
 export function MemorySettings() {
   const workspacePath = useAppStore(selectPrimaryWorkspacePath)
   const databaseEnabled = getRuntimeCapabilities().database
   const [memories, setMemories] = useState<Memory[]>([])
   const [candidateMemories, setCandidateMemories] = useState<Memory[]>([])
+  const [conflictMemories, setConflictMemories] = useState<Memory[]>([])
   const [memoryCounts, setMemoryCounts] = useState({ active: 0, candidate: 0, archived: 0 })
   const [activeTotal, setActiveTotal] = useState(0)
   const [candidateTotal, setCandidateTotal] = useState(0)
@@ -1877,6 +1885,12 @@ export function MemorySettings() {
         ])
         if (cancelled) return
 
+        const conflictIds = [...new Set(candidateResult.memories.flatMap(memory => memoryConflictSnapshots(memory).map(item => item.id)))]
+        const conflictResult = conflictIds.length
+          ? await loadSettingsMemoryPage({ statuses: ['active'], ids: conflictIds, limit: conflictIds.length })
+          : { memories: [] }
+        if (cancelled) return
+
         const lastActivePage = Math.max(0, Math.ceil(activeResult.total / MEMORY_PAGE_SIZE) - 1)
         const lastCandidatePage = Math.max(0, Math.ceil(candidateResult.total / CANDIDATE_PAGE_SIZE) - 1)
         if (activePage > lastActivePage || candidatePage > lastCandidatePage) {
@@ -1887,6 +1901,7 @@ export function MemorySettings() {
 
         setMemories(activeResult.memories)
         setCandidateMemories(candidateResult.memories)
+        setConflictMemories(conflictResult.memories)
         setActiveTotal(activeResult.total)
         setCandidateTotal(candidateResult.total)
         setMemoryCounts({
@@ -1936,11 +1951,15 @@ export function MemorySettings() {
     }
   }
 
-  const handleConfirmCandidate = async (id: string) => {
+  const handleConfirmCandidate = async (id: string, coexist?: boolean) => {
     setLoading(true)
     try {
       const candidate = candidateMemories.find((memory) => memory.id === id)
-      const confirmed = await confirmSettingsMemoryCandidate(id)
+      const conflicts = candidate ? memoryConflictSnapshots(candidate) : []
+      const conflictReady = conflicts.every(snapshot => conflictMemories.some(memory => memory.id === snapshot.id
+        && memory.updatedAt === snapshot.updatedAt && contentHash(memory.content) === snapshot.contentHash))
+      if (!conflictReady) { refresh(); toast.error('已有记忆已变化，请刷新后重新核对'); return }
+      const confirmed = await confirmSettingsMemoryCandidate(id, coexist ?? (conflicts.length > 0 && !candidate?.supersedesId))
       if (!confirmed) {
         refresh()
         toast.error('候选记忆或待替代事实已变化，请刷新后重新核实')
@@ -2005,6 +2024,8 @@ export function MemorySettings() {
   return (
     <div className="w-full pb-6">
       <SectionTitle>长期记忆</SectionTitle>
+      {databaseEnabled && <MemoryExtractionStatus />}
+      {databaseEnabled && <MemoryExtractionSimulator />}
       {!isTauri() && (
         <div className="mb-3 rounded-xl border border-gm-border bg-gm-surface-elevated p-3">
           <p className="text-caption text-gm-text-tertiary">
@@ -2069,7 +2090,11 @@ export function MemorySettings() {
             </div>
           </div>
           <div className="space-y-2">
-            {candidateMemories.map((memory) => (
+            {candidateMemories.map((memory) => {
+              const conflicts = memoryConflictSnapshots(memory)
+              const conflictReady = conflicts.every(snapshot => conflictMemories.some(item => item.id === snapshot.id
+                && item.updatedAt === snapshot.updatedAt && contentHash(item.content) === snapshot.contentHash))
+              return (
               <div key={memory.id} className="rounded-xl border border-gm-border bg-gm-surface-elevated p-3">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
@@ -2085,6 +2110,13 @@ export function MemorySettings() {
                       </span>
                     </div>
                     <p className="text-body text-gm-text break-words">{memory.content}</p>
+                    {memoryEvidenceReviewQuote(memory.evidence) && (
+                      <p className="mt-1 text-caption text-gm-text-secondary break-words">请核对原文：{memoryEvidenceReviewQuote(memory.evidence)}</p>
+                    )}
+                    {conflicts.length > 0 && <div className="mt-2 text-caption text-gm-text-secondary">
+                      <p>相关已有记忆；确认并存不会覆盖已有记忆：</p>
+                      {conflicts.map(snapshot => <p key={snapshot.id} className="mt-1 break-words">{conflictReady ? conflictMemories.find(item => item.id === snapshot.id)?.content : '已有记忆已变化，请刷新后重新核对'}</p>)}
+                    </div>}
                     {memory.supersedesId && (
                       <p className="mt-1 text-caption text-gm-warning">
                         将替换：{memories.find((item) => item.id === memory.supersedesId)?.content || '已有记忆'}
@@ -2096,10 +2128,14 @@ export function MemorySettings() {
                       type="primary"
                       size="small"
                       onClick={() => handleConfirmCandidate(memory.id)}
-                       disabled={!databaseEnabled || loading}
+                       disabled={!databaseEnabled || loading || queryLoading || !conflictReady}
                     >
-                      确认保存
+                      {memory.supersedesId ? '确认更新' : conflicts.length ? '确认并存' : '确认保存'}
                     </Button>
+                    {memory.supersedesId && conflicts.length > 0 && <Button type="default" size="small"
+                      onClick={() => handleConfirmCandidate(memory.id, true)} disabled={!databaseEnabled || loading || queryLoading || !conflictReady}>
+                      确认并存
+                    </Button>}
                     <Button
                       type="text"
                       size="small"
@@ -2112,7 +2148,8 @@ export function MemorySettings() {
                   </div>
                 </div>
               </div>
-            ))}
+              )
+            })}
           </div>
           {candidateTotal > CANDIDATE_PAGE_SIZE && (
             <div className="mt-3 flex items-center justify-end gap-2">

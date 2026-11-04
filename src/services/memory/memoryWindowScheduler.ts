@@ -23,8 +23,10 @@ import { acquireMemoryWindow, countPendingMemoryWindowSources, deferMemoryWindow
   getMemoryWindowGroupForSource, getMemoryWindowRetryAt, listPendingMemoryWindowGroupsPage } from './memoryWindowLedger'
 import type { MemoryWindowGroup } from './memoryWindowLedger'
 import { buildMemoryWindowInput } from './memoryWindowInput'
-import { requestMemoryWindowProposals, verifyMemoryWindowProposals } from './memoryWindowModel'
+import { compareMemoryWindowCandidates, requestMemoryWindowProposals, verifyMemoryWindowProposals } from './memoryWindowModel'
 import { prepareMemoryWindowWrite, persistMemoryWindowCandidate } from './memoryWindowPersistence'
+import { saveExtractionHistory } from './memoryExtractionHistory'
+import { findActiveFactConflict } from './memoryPolicy'
 import type { MemoryWindowCandidate } from './memoryWindowCandidates'
 
 // ---------------------------------------------------------------------------
@@ -156,6 +158,7 @@ async function runOneWindow(group: MemoryWindowGroup, strategy: 'B' | 'C', clien
     if (versionOf(group) === 3 && built.packets.length !== 1) throw new Error('invalid_memory_v3_packet_count')
     const invalidated = new Set(built.invalidatedSourceIds)
     const results: Record<string, 'completed' | 'noop' | 'invalidated' | 'failed'> = {}
+    const history: Parameters<typeof saveExtractionHistory>[1] = { modelCalled: false, proposed: 0, rejected: 0, inserted: 0, skipped: 0, decisions: [], rejectionReasons: [] }
     for (const id of claim.record.sourceIds) {
       if (invalidated.has(id)) results[id] = 'invalidated'
     }
@@ -183,6 +186,11 @@ async function runOneWindow(group: MemoryWindowGroup, strategy: 'B' | 'C', clien
         continue
       }
       if (proposals.kind !== 'proposals') continue
+      history.modelCalled = true
+      if (proposals.formatRepaired || claim.record.formatRepairAttempted) history.formatRepaired = true
+      history.proposed += proposals.candidates.length + proposals.rejected
+      history.rejected += proposals.rejected
+      history.rejectionReasons?.push(...(proposals.rejectionReasons ?? []))
 
       if (!proposals.candidates.length) {
         for (const id of packet.newSourceIds) { if (!results[id]) results[id] = 'noop' }
@@ -190,7 +198,13 @@ async function runOneWindow(group: MemoryWindowGroup, strategy: 'B' | 'C', clien
       }
 
       let supportedCandidates: Array<{ candidate: MemoryWindowCandidate; supported: true }>
+      let relations: Awaited<ReturnType<typeof compareMemoryWindowCandidates>> | undefined
       if (versionOf(group) === 3) {
+        relations = await compareMemoryWindowCandidates(claim, proposals.candidates, existingMemories, client,
+          { signal, foregroundBusy: () => foregroundBusy })
+        if (relations.kind !== 'compared') {
+          await deferMemoryWindow(claim, relations.kind === 'deferred' ? 'foreground' : 'retry', Date.now()); return
+        }
         supportedCandidates = proposals.candidates.map(candidate => ({ candidate, supported: true }))
       } else {
         const verified = await verifyMemoryWindowProposals(claim, packet, proposals.candidates, client,
@@ -204,16 +218,52 @@ async function runOneWindow(group: MemoryWindowGroup, strategy: 'B' | 'C', clien
           : []
       }
 
-      for (const verdict of supportedCandidates) {
+      for (const [index, original] of supportedCandidates.entries()) {
         if (signal.aborted || !isDatabaseReady()) { await deferMemoryWindow(claim, signal.aborted ? 'foreground' : 'retry', Date.now()); return }
         try {
-          const writeRequest = await prepareMemoryWindowWrite(claim, packet, verdict, existingMemories)
-          if (!writeRequest) continue
+          const relation = relations?.kind === 'compared' ? relations.relations[index] : undefined
+          if (relation?.action === 'duplicate') {
+            const old = existingMemories.find(memory => memory.id === relation.targetId)
+            const current = (await loadMemories({ scopeType: 'global' })).find(memory => memory.id === relation.targetId)
+            if (!old || !current || current.status !== 'active' || current.content !== old.content || current.updatedAt !== old.updatedAt) {
+              await deferMemoryWindow(claim, 'retry', Date.now()); return
+            }
+            history.skipped++
+            history.decisions?.push({ sourceId: original.candidate.primarySourceId, outcome: 'skipped', reason: 'duplicate' })
+            continue
+          }
+          const target = relation?.targetId ? existingMemories.find(memory => memory.id === relation.targetId) : undefined
+          const merge = relation?.action === 'enrich' && target && target.source === 'auto_extracted' && !target.locked
+            && relation.content ? { target, content: relation.content } : undefined
+          const review = relation && relation.action !== 'add' && !merge && target ? target : undefined
+          const verdict = review && relation?.action === 'enrich' && relation.content
+            ? { ...original, candidate: { ...original.candidate, content: relation.content } } : original
+          const replacement = review && (relation?.action === 'replace' || relation?.action === 'review' || relation?.action === 'enrich') ? review : undefined
+          const writeRequest = await prepareMemoryWindowWrite(claim, packet, { ...verdict, merge, replacement, related: review }, existingMemories)
+          if (!writeRequest) {
+            history.skipped++
+            const reason = findActiveFactConflict(existingMemories, { ...verdict.candidate, scopeType: verdict.candidate.scope, scopeKey }) ? 'conflict' : 'policy'
+            history.decisions?.push({ sourceId: verdict.candidate.primarySourceId, outcome: 'skipped', reason })
+            continue
+          }
           const outcome = await persistMemoryWindowCandidate(writeRequest)
           if (outcome === 'invalidated' || outcome === 'lost_lease' || (outcome === 'conflict' && versionOf(group) === 2)) {
             await deferMemoryWindow(claim, 'retry', Date.now())
             return
           }
+          if (outcome === 'inserted') {
+            history.inserted++
+            if (writeRequest.merge) {
+              const merged = existingMemories.find(memory => memory.id === writeRequest.merge!.id)
+              if (merged) { merged.content = writeRequest.memory.content; merged.updatedAt = writeRequest.memory.updatedAt }
+            } else if (versionOf(group) === 3 && writeRequest.memory.status === 'active') {
+              existingMemories.push({ ...writeRequest.memory, source: 'auto_extracted', locked: false })
+            }
+          }
+          else history.skipped++
+          history.decisions?.push(outcome === 'inserted'
+            ? { sourceId: verdict.candidate.primarySourceId, outcome: 'inserted', state: writeRequest.memory.status }
+            : { sourceId: verdict.candidate.primarySourceId, outcome: 'skipped', reason: outcome === 'conflict' ? 'conflict' : 'duplicate' })
         } catch (err) {
           console.warn('[Memory] window candidate write error', err instanceof Error ? err.message : err)
           await deferMemoryWindow(claim, 'retry', Date.now())
@@ -226,7 +276,11 @@ async function runOneWindow(group: MemoryWindowGroup, strategy: 'B' | 'C', clien
 
     // Fill any remaining unresolved sources as noop.
     for (const id of claim.record.sourceIds) { if (!results[id]) results[id] = 'noop' }
-    await finishMemoryWindow(claim, results, Date.now())
+    const finished = await finishMemoryWindow(claim, results, Date.now())
+    if (finished && versionOf(group) === 3) {
+      try { await saveExtractionHistory(claim, history) }
+      catch { console.warn('[Memory] extraction history unavailable') }
+    }
     const pending = await countPendingMemoryWindowSources(group)
     if (pending >= batchSize(group)) scheduleB(group, client)
     else if (pending > 0) scheduleCIdleTail(group, client, cIdleEntries.get(groupKey(group))?.lastActivityAt ?? Date.now())

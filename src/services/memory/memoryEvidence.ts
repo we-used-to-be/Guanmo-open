@@ -36,6 +36,9 @@ export interface MemoryEvidenceV3 extends MemoryEvidenceBase {
   windowId: string
   policyVersion: 3
   sensitivity: 'normal' | 'sensitive'
+  reviewReason?: 'semantic'
+  evidenceQuote?: string
+  conflicts?: Array<{ id: string; contentHash: string; updatedAt: number }>
   sources: MemoryEvidenceV2['sources']
 }
 
@@ -52,6 +55,9 @@ interface DecodedMemoryEvidence {
   excerpt?: string
   windowId?: string
   sensitivity?: string
+  reviewReason?: string
+  evidenceQuote?: string
+  conflicts?: MemoryEvidenceV3['conflicts']
   replacement?: { id?: string; contentHash?: string; updatedAt?: number }
   sources?: MemoryEvidenceV2['sources']
 }
@@ -65,7 +71,7 @@ export function encodeMemoryEvidence(message: ChatMessage, kind: MemoryEvidence[
 
 /** Store only visible excerpts and hashes; raw source snapshots remain local to atomic write guards. */
 export async function encodeWindowMemoryEvidence(claim: MemoryWindowClaim, packet: MemoryWindowPacket,
-  candidate: MemoryWindowCandidate): Promise<string> {
+  candidate: MemoryWindowCandidate, conflicts: NonNullable<MemoryEvidenceV3['conflicts']> = []): Promise<string> {
   const locked = JSON.parse(claim.value) as MemoryWindowClaim['record']
   if (!locked.sourceIds.includes(candidate.primarySourceId) || !packet.newSourceIds.includes(candidate.primarySourceId)
     || !locked.sessionId || !locked.windowId || locked.windowId.length > 300 || !locked.windowId.startsWith(claim.key + ':')) {
@@ -91,6 +97,9 @@ export async function encodeWindowMemoryEvidence(claim: MemoryWindowClaim, packe
     || selected.some(item => item.turn.role === 'assistant' && !selected.some(parent => parent.turn.id === item.turn.parentId && parent.turn.role === 'user'))) {
     throw new Error('invalid_memory_evidence_attribution')
   }
+  if (candidate.semanticReview && (!candidate.evidenceQuote || !primary.turn.text!.includes(candidate.evidenceQuote))) {
+    throw new Error('invalid_memory_evidence_quote')
+  }
   const sources: MemoryEvidenceV2['sources'] = []
   for (const { turn, index, snapshot } of selected) {
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(turn.text!))
@@ -104,7 +113,9 @@ export async function encodeWindowMemoryEvidence(claim: MemoryWindowClaim, packe
   const recordedAt = primary.snapshot.createdAt < 1e12 ? primary.snapshot.createdAt * 1000 : primary.snapshot.createdAt
   const evidence: MemoryEvidenceV2 | MemoryEvidenceV3 = locked.version === 3
     ? { version: 3, policyVersion: 3, sensitivity: candidate.sensitivity || 'normal', kind: candidate.kind,
-      sourceId: candidate.primarySourceId, sessionId: locked.sessionId, windowId: locked.windowId, recordedAt, excerpt, sources }
+      sourceId: candidate.primarySourceId, sessionId: locked.sessionId, windowId: locked.windowId, recordedAt, excerpt, sources,
+      ...(candidate.semanticReview ? { reviewReason: 'semantic' as const, evidenceQuote: candidate.evidenceQuote } : {}),
+      ...(conflicts.length ? { conflicts } : {}) }
     : { version: 2, policyVersion: 2, kind: candidate.kind, sourceId: candidate.primarySourceId,
       sessionId: locked.sessionId, windowId: locked.windowId, recordedAt, excerpt, sources }
   const result = JSON.stringify(evidence)
@@ -128,6 +139,15 @@ export function decodeMemoryEvidence(value?: string | null): MemoryEvidence | nu
       if (evidence.policyVersion !== evidence.version || typeof evidence.windowId !== 'string' || !evidence.windowId || evidence.windowId.length > 300
         || typeof evidence.sessionId !== 'string' || !evidence.sessionId || evidence.sessionId.length > 300
         || evidence.version === 3 && !['normal', 'sensitive'].includes(String(evidence.sensitivity))
+        || evidence.version === 3 && evidence.reviewReason !== undefined && (evidence.reviewReason !== 'semantic'
+          || typeof evidence.evidenceQuote !== 'string' || !evidence.evidenceQuote.trim() || evidence.evidenceQuote.length > 1200)
+        || evidence.version === 3 && evidence.reviewReason === undefined && evidence.evidenceQuote !== undefined
+        || evidence.version === 3 && evidence.conflicts !== undefined && (evidence.reviewReason !== 'semantic'
+          || !Array.isArray(evidence.conflicts) || evidence.conflicts.length < 1 || evidence.conflicts.length > 8
+          || new Set(evidence.conflicts.map(conflict => conflict?.id)).size !== evidence.conflicts.length
+          || evidence.conflicts.some(conflict => !conflict || typeof conflict.id !== 'string' || !conflict.id || conflict.id.length > 300
+            || typeof conflict.contentHash !== 'string' || !/^[a-f0-9]{1,8}$/.test(conflict.contentHash)
+            || !Number.isSafeInteger(conflict.updatedAt) || conflict.updatedAt <= 0))
         || !Array.isArray(evidence.sources) || evidence.sources.length < 1 || evidence.sources.length > 12) return null
       let previousSequence = 0
       const ids = new Set<string>()
@@ -153,6 +173,11 @@ export function decodeMemoryEvidence(value?: string | null): MemoryEvidence | nu
 
 export function memoryEvidenceText(value?: string | null): string {
   return decodeMemoryEvidence(value)?.excerpt || value || ''
+}
+
+export function memoryEvidenceReviewQuote(value?: string | null): string | null {
+  const evidence = decodeMemoryEvidence(value)
+  return evidence?.version === 3 && evidence.reviewReason === 'semantic' ? evidence.evidenceQuote ?? null : null
 }
 
 /** At most two user turns, including the deciding source; assistant text is never labeled as a user quote. */

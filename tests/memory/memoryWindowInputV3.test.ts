@@ -55,12 +55,33 @@ describe('single-request v3 input and model boundary', () => {
     expect(chat).not.toHaveBeenCalled()
   })
   it('accepts eight users with their eight parented assistant replies', async () => {
-    for (let i = 1; i <= 8; i++) { await addUser('u' + i, i, '我喜欢简洁回答。'); addAssistant('a' + i, 'u' + i, '好的。') }
+    for (let i = 1; i <= 8; i++) { await addUser('u' + i, i, '我喜欢简洁回答。'); addAssistant('a' + i, 'u' + i, '这是可见的最终回复。'.repeat(40)) }
     const result = await buildMemoryWindowInput(await claim())
     if (result.kind !== 'ready') throw new Error(result.kind)
     expect(result.packets).toHaveLength(1)
     expect(result.packets[0].turns).toHaveLength(16)
+    expect(result.packets[0].turns.filter(turn => turn.role === 'assistant').map(turn => turn.text))
+      .toEqual(Array(8).fill('这是可见的最终回复。'.repeat(40)))
     expect(createMemoryWindowRequest(result.packets[0], null, []).kind).toBe('ready')
+  })
+  it('includes visible final replies with tool metadata without sending tool or hidden content', async () => {
+    for (let i = 1; i <= 8; i++) await addUser('u' + i, i, '请继续说明。')
+    addAssistant('a1', 'u1', '正式回复一', JSON.stringify({ sources: [{ text: '匿名工具原文' }], contextMeta: { webSearchUsed: true, ragSourceCount: 1 } }))
+    addAssistant('a2', 'u2', '不可见正文', JSON.stringify({ displayContent: '正式回复二', tags: [{ text: '匿名附件原文' }] }))
+    addAssistant('a3', 'u3', '隐藏回复', JSON.stringify({ hidden: true }))
+    addAssistant('a4', 'u4', 'token:ExampleCredential123')
+    const result = await buildMemoryWindowInput(await claim())
+    if (result.kind !== 'ready') throw new Error(result.kind)
+    const turns = result.packets[0].turns
+    expect(turns).toContainEqual(expect.objectContaining({ id: 'a1', text: '正式回复一' }))
+    expect(turns).toContainEqual(expect.objectContaining({ id: 'a2', text: '正式回复二' }))
+    expect(turns).toContainEqual(expect.objectContaining({ id: 'a3', gap: 'restricted' }))
+    expect(turns).toContainEqual(expect.objectContaining({ id: 'a4', gap: 'restricted' }))
+    const input = JSON.stringify(turns)
+    expect(input).not.toContain('匿名工具原文')
+    expect(input).not.toContain('匿名附件原文')
+    expect(input).not.toContain('不可见正文')
+    expect(input).not.toContain('ExampleCredential123')
   })
   it('makes exactly one model call for eight messages exceeding the old packet budget', async () => {
     for (let i = 1; i <= 8; i++) await addUser('u' + i, i, '我长期偏好清晰的回答。'.repeat(20))

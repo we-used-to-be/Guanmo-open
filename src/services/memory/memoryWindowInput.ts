@@ -48,7 +48,7 @@ function parseReceipt(value: string, sourceId: string, claim: MemoryWindowClaim,
   return receipt
 }
 
-async function assistantUnit(sessionId: string, parentId: string): Promise<{ turn: Omit<MemoryWindowTurn, 'contextOnly'>; snapshot?: MemorySourceSnapshot } | null> {
+export async function assistantUnit(sessionId: string, parentId: string, policyVersion: 2 | 3 = 3): Promise<{ turn: Omit<MemoryWindowTurn, 'contextOnly'>; snapshot?: MemorySourceSnapshot } | null> {
   const rows = await getDatabase().select<AssistantRow>(
     "SELECT id, session_id, role, parent_id, content, metadata, created_at FROM chat_messages WHERE session_id = $1 AND parent_id = $2 AND role = 'assistant' ORDER BY created_at DESC, id DESC LIMIT 2",
     [sessionId, parentId],
@@ -70,18 +70,23 @@ async function assistantUnit(sessionId: string, parentId: string): Promise<{ tur
   if (metadata.contextMeta !== undefined && (!metadata.contextMeta || typeof metadata.contextMeta !== 'object' || Array.isArray(metadata.contextMeta))) {
     return { turn: { id: row.id, role: 'assistant', parentId, gap: 'metadata' } }
   }
+  if (policyVersion === 3 && metadata.displayContent !== undefined && typeof metadata.displayContent !== 'string') {
+    return { turn: { id: row.id, role: 'assistant', parentId, gap: 'metadata' } }
+  }
   const context = metadata.contextMeta ? metadata.contextMeta as Record<string, unknown> : {}
-  if (metadata.hidden !== undefined && metadata.hidden !== false || metadata.sources !== undefined && (!Array.isArray(metadata.sources) || metadata.sources.length > 0)
+  const visibleText = policyVersion === 3 && typeof metadata.displayContent === 'string' ? metadata.displayContent : row.content
+  const restrictedLegacyContext = policyVersion === 2 && (metadata.sources !== undefined && (!Array.isArray(metadata.sources) || metadata.sources.length > 0)
     || metadata.tags !== undefined || context.webSearchUsed !== undefined && context.webSearchUsed !== false
     || context.ragSourceCount !== undefined && (typeof context.ragSourceCount !== 'number' || context.ragSourceCount !== 0)
-    || context.tagCount !== undefined && (typeof context.tagCount !== 'number' || context.tagCount !== 0)
-    || row.content.includes('【上下文') || containsForbiddenMemorySecret(row.content)) {
+    || context.tagCount !== undefined && (typeof context.tagCount !== 'number' || context.tagCount !== 0))
+  if (metadata.hidden !== undefined && metadata.hidden !== false || restrictedLegacyContext
+    || row.content.includes('【上下文') || visibleText.includes('【上下文') || containsForbiddenMemorySecret(visibleText)) {
     return { turn: { id: row.id, role: 'assistant', parentId, gap: 'restricted' } }
   }
-  if (new TextEncoder().encode(JSON.stringify(row.content)).length > 800) {
+  if (new TextEncoder().encode(JSON.stringify(visibleText)).length > (policyVersion === 3 ? 32_000 : 800)) {
     return { turn: { id: row.id, role: 'assistant', parentId, gap: 'oversize' } }
   }
-  return { turn: { id: row.id, role: 'assistant', parentId, text: row.content }, snapshot: {
+  return { turn: { id: row.id, role: 'assistant', parentId, text: visibleText }, snapshot: {
     id: row.id, sessionId, role: 'assistant', parentId, content: row.content, metadata: row.metadata, createdAt: row.created_at,
   } }
 }
@@ -133,7 +138,7 @@ export async function buildMemoryWindowInput(claim: MemoryWindowClaim, maxBytes?
         ...(segments.length > 1 ? { segment: { index, total: segments.length, continuationBefore: index > 0, continuationAfter: index + 1 < segments.length } } : {}) }
       const unit: Unit = { sourceId: item.id, turns: [user], snapshots: [source.snapshot], segmented: segments.length > 1, fresh: item.fresh }
       if (segments.length === 1) {
-        const assistant = await assistantUnit(record.sessionId, item.id)
+        const assistant = await assistantUnit(record.sessionId, item.id, record.version)
         if (assistant) { unit.turns.push(assistant.turn); if (assistant.snapshot) unit.snapshots.push(assistant.snapshot) }
       }
       units.push(unit)

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const adapter = vi.hoisted(() => ({ execute: vi.fn(), select: vi.fn(), ready: vi.fn() }))
 vi.mock('@/services/database/db', () => ({ isDatabaseReady: adapter.ready, getDatabase: () => adapter }))
 import { acquireMemoryWindow, countPendingMemoryWindowSources, deferMemoryWindow, finishMemoryWindow,
-  getMemoryWindowGroupForSource, getMemoryWindowRetryAt, isMemoryWindowLeaseCurrent,
+  getMemoryWindowGroupForSource, getMemoryWindowRetryAt, isMemoryWindowLeaseCurrent, reserveMemoryWindowFormatRepair,
   listPendingMemoryWindowGroups, listPendingMemoryWindowGroupsPage } from '@/services/memory/memoryWindowLedger'
 import type { MemoryWindowGroup } from '@/services/memory/memoryWindowLedger'
 
@@ -43,6 +43,19 @@ beforeEach(() => {
 afterEach(() => { db.close(); vi.clearAllMocks() })
 
 describe('durable v2 window ledger', () => {
+  it('reserves one v3 format correction across foreground deferral and rejects stale claims', async () => {
+    for (let i = 1; i <= 8; i++) addGlobal('g' + i, i)
+    const first = await acquireMemoryWindow(globalGroup, 'B', 'worker', options(now + 1))
+    if (first.kind !== 'claimed') throw new Error('missing claim')
+    const stale = structuredClone(first.claim)
+    expect(await reserveMemoryWindowFormatRepair(first.claim)).toBe('reserved')
+    expect(await reserveMemoryWindowFormatRepair(first.claim)).toBe('used')
+    expect(await reserveMemoryWindowFormatRepair(stale)).toBe('lost_lease')
+    expect(await deferMemoryWindow(first.claim, 'foreground', now + 2)).toBe(true)
+    const resumed = await acquireMemoryWindow(globalGroup, 'B', 'worker', options(now + 3))
+    if (resumed.kind !== 'claimed') throw new Error('missing resumed claim')
+    expect(await reserveMemoryWindowFormatRepair(resumed.claim)).toBe('used')
+  })
   it('keeps sources pending across repeated foreground interruptions without exhausting retries', async () => {
     for (let i = 1; i <= 4; i++) add('u' + i, i)
     for (let attempt = 0; attempt < 4; attempt++) {

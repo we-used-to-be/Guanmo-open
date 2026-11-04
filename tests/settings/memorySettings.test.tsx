@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemorySettings } from '@/features/settings/SettingsPage'
 import type { Memory } from '@/services/database/persistence'
+import { contentHash } from '@/services/memory/memoryPolicy'
 
 const mockLoadMemoryPage = vi.fn()
 const mockLoadMemoryCount = vi.fn()
@@ -24,7 +25,7 @@ vi.mock('@/stores/appStore', () => ({
 vi.mock('@/services/database/persistence', () => ({
   clearAllChatSessions: vi.fn(),
   clearMemoriesByStatus: vi.fn(),
-  confirmMemoryCandidate: (id: string) => mockConfirmMemoryCandidate(id),
+  confirmMemoryCandidate: (id: string, coexist?: boolean) => coexist ? mockConfirmMemoryCandidate(id, true) : mockConfirmMemoryCandidate(id),
   loadMemoryCount: (options: unknown) => mockLoadMemoryCount(options),
   loadMemoryPage: (options: unknown) => mockLoadMemoryPage(options),
   persistMemory: vi.fn(),
@@ -83,6 +84,47 @@ describe('MemorySettings', () => {
     })
     mockRemoveMemory.mockResolvedValue(undefined)
     mockConfirmMemoryCandidate.mockResolvedValue(true)
+  })
+
+  it('shows the user quote when a paraphrased candidate needs review', async () => {
+    const quote = '我的职业是独立开发者，我长期从事软件开发'
+    const evidence = JSON.stringify({ version: 3, policyVersion: 3, sensitivity: 'normal', reviewReason: 'semantic',
+      evidenceQuote: quote, kind: 'semantic', sourceId: 'u1', sessionId: 's', windowId: 'w:1', excerpt: quote,
+      sources: [{ id: 'u1', sessionId: 's', role: 'user', parentId: null, sequence: 1, createdAt: 1700000000000, textHash: 'a'.repeat(64) }] })
+    mockLoadMemoryPage.mockImplementation(async ({ statuses }: { statuses: string[] }) => statuses.includes('candidate')
+      ? { memories: [{ ...candidateMemory, evidence }], total: 1 } : { memories: [activeMemory], total: 1 })
+    render(<MemorySettings />)
+    expect(await screen.findByText(`请核对原文：${quote}`)).toBeInTheDocument()
+  })
+
+  it('shows existing facts and requires explicit coexistence confirmation', async () => {
+    const quote = '我的爱好是绘画。'
+    const evidence = JSON.stringify({ version: 3, policyVersion: 3, sensitivity: 'normal', reviewReason: 'semantic',
+      evidenceQuote: quote, kind: 'semantic', sourceId: 'u1', sessionId: 's', windowId: 'w:1', excerpt: quote,
+      conflicts: [{ id: activeMemory.id, contentHash: contentHash(activeMemory.content), updatedAt: activeMemory.updatedAt }],
+      sources: [{ id: 'u1', sessionId: 's', role: 'user', parentId: null, sequence: 1, createdAt: 1700000000000, textHash: 'a'.repeat(64) }] })
+    mockLoadMemoryPage.mockImplementation(async ({ statuses, ids }: { statuses: string[]; ids?: string[] }) => ids
+      ? { memories: [activeMemory], total: 1 } : statuses.includes('candidate')
+        ? { memories: [{ ...candidateMemory, evidence }], total: 1 } : { memories: [activeMemory], total: 1 })
+    render(<MemorySettings />)
+    expect(await screen.findByText(/确认并存不会覆盖已有记忆/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '确认并存' }))
+    await waitFor(() => expect(mockConfirmMemoryCandidate).toHaveBeenCalledWith(candidateMemory.id, true))
+  })
+
+  it('disables coexistence when an existing fact has changed', async () => {
+    const quote = '我的爱好是绘画。'
+    const evidence = JSON.stringify({ version: 3, policyVersion: 3, sensitivity: 'normal', reviewReason: 'semantic',
+      evidenceQuote: quote, kind: 'semantic', sourceId: 'u1', sessionId: 's', windowId: 'w:1', excerpt: quote,
+      conflicts: [{ id: activeMemory.id, contentHash: contentHash(activeMemory.content), updatedAt: activeMemory.updatedAt }],
+      sources: [{ id: 'u1', sessionId: 's', role: 'user', parentId: null, sequence: 1, createdAt: 1700000000000, textHash: 'a'.repeat(64) }] })
+    mockLoadMemoryPage.mockImplementation(async ({ statuses, ids }: { statuses: string[]; ids?: string[] }) => ids
+      ? { memories: [{ ...activeMemory, content: '已发生变化' }], total: 1 } : statuses.includes('candidate')
+        ? { memories: [{ ...candidateMemory, evidence }], total: 1 } : { memories: [activeMemory], total: 1 })
+    render(<MemorySettings />)
+    expect(await screen.findByText('已有记忆已变化，请刷新后重新核对')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '确认并存' })).toBeDisabled()
+    expect(mockConfirmMemoryCandidate).not.toHaveBeenCalled()
   })
 
   it('loads only filtered lightweight pages and switches stable offsets', async () => {

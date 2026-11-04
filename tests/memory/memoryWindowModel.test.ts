@@ -1,13 +1,13 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ lease: vi.fn() }))
-vi.mock('@/services/memory/memoryWindowLedger', () => ({ isMemoryWindowLeaseCurrent: mocks.lease }))
+const mocks = vi.hoisted(() => ({ lease: vi.fn(), reserve: vi.fn() }))
+vi.mock('@/services/memory/memoryWindowLedger', () => ({ isMemoryWindowLeaseCurrent: mocks.lease, reserveMemoryWindowFormatRepair: mocks.reserve }))
 vi.mock('@/services/database/db', () => ({ isDatabaseReady: () => true, getDatabase: vi.fn() }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 vi.mock('@/services/runtimeCapabilities', () => ({ isWebRuntime: () => false }))
 vi.mock('@/services/externalHttp', () => ({ UnsupportedCapabilityError: class extends Error {} }))
-import { createMemoryWindowRequest, requestMemoryWindowProposals, verifyMemoryWindowProposals } from '@/services/memory/memoryWindowModel'
+import { compareMemoryWindowCandidates, createMemoryWindowRequest, requestMemoryWindowProposals, verifyMemoryWindowProposals } from '@/services/memory/memoryWindowModel'
 import { parseMemoryWindowCandidates } from '@/services/memory/memoryWindowCandidates'
 import type { MemoryWindowPacket } from '@/services/memory/memoryWindowInput'
 import type { MemoryWindowClaim } from '@/services/memory/memoryWindowLedger'
@@ -26,9 +26,47 @@ const memory = (changes: Partial<Memory> = {}): Memory => ({ id: 'm', content: '
 const response = JSON.stringify([{ content: '技术回答优先给出结论', category: 'preference', kind: 'semantic', scope: 'global',
   primarySourceId: 'u1', supportingSourceIds: [], subject: 'user', factKey: 'answer_order', factValue: '结论', confidence: 0.9 }])
 
-beforeEach(() => { vi.clearAllMocks(); mocks.lease.mockResolvedValue(true) })
+beforeEach(() => { vi.clearAllMocks(); mocks.lease.mockResolvedValue(true); mocks.reserve.mockResolvedValue('reserved') })
 
 describe('bounded memory model proposals', () => {
+  it('compares related global memories and rejects hallucinated target IDs', async () => {
+    const input = packet(); input.policyVersion = 3
+    const candidates = parseMemoryWindowCandidates(JSON.stringify([{ content: '用户偏爱回答先给结论', category: 'preference', kind: 'semantic', scope: 'global',
+      primarySourceId: 'u1', supportingSourceIds: [], subject: 'user', factKey: 'answer_order', factValue: '先给结论', confidence: 0.9, sensitivity: 'normal' }]), input, null).candidates
+    const existing = [memory({ id: 'old', scopeType: 'global', scopeKey: null }), memory({ id: 'secret', scopeType: 'global', scopeKey: null, content: '用户患有高血压' })]
+    const chat = vi.fn().mockResolvedValueOnce({ content: '[{"index":0,"action":"duplicate","targetId":"old"}]' })
+      .mockResolvedValueOnce({ content: '[{"index":0,"action":"replace","targetId":"invented"}]' })
+    await expect(compareMemoryWindowCandidates(claim, candidates, existing, { chat }, { foregroundBusy: () => false }))
+      .resolves.toEqual({ kind: 'compared', relations: [{ action: 'duplicate', targetId: 'old' }] })
+    expect(JSON.stringify(chat.mock.calls[0])).not.toContain('高血压')
+    await expect(compareMemoryWindowCandidates(claim, candidates, existing, { chat }, { foregroundBusy: () => false })).resolves.toEqual({ kind: 'retry' })
+  })
+  it('repairs an entirely malformed v3 response once without forwarding model output', async () => {
+    const input = packet(); input.policyVersion = 3
+    const v3Record = { ...record, version: 3, scopeKey: null }
+    const v3Claim = { ...claim, value: JSON.stringify(v3Record), record: v3Record } as unknown as MemoryWindowClaim
+    const candidate = { content: '技术回答优先给出结论', category: 'preference', kind: 'semantic', scope: 'global',
+      primarySourceId: 'u1', supportingSourceIds: [], subject: 'user', factKey: 'answer_order', factValue: '结论', confidence: 0.95, sensitivity: 'normal' }
+    const chat = vi.fn()
+      .mockResolvedValueOnce({ content: JSON.stringify([{ ...candidate, content: 'LEAKED_MODEL_MARKER', confidence: 'high' }]), usage: { promptTokens: 10, completionTokens: 2 } })
+      .mockResolvedValueOnce({ content: JSON.stringify([candidate]), usage: { promptTokens: 11, completionTokens: 3 } })
+    const result = await requestMemoryWindowProposals(v3Claim, input, [], { chat }, { foregroundBusy: () => false })
+    expect(result).toMatchObject({ kind: 'proposals', formatRepaired: true, candidates: [{ factValue: '结论' }], usage: { promptTokens: 21, completionTokens: 5 } })
+    expect(chat).toHaveBeenCalledTimes(2)
+    expect(JSON.stringify(chat.mock.calls[1])).not.toContain('LEAKED_MODEL_MARKER')
+    expect(mocks.reserve).toHaveBeenCalledTimes(1)
+  })
+
+  it('never spends another repair when a durable budget is already used', async () => {
+    const input = packet(); input.policyVersion = 3
+    const v3Record = { ...record, version: 3, scopeKey: null }
+    const v3Claim = { ...claim, value: JSON.stringify(v3Record), record: v3Record } as unknown as MemoryWindowClaim
+    mocks.reserve.mockResolvedValueOnce('used')
+    const chat = vi.fn(async () => ({ content: '[{"confidence":"high"}]' }))
+    const result = await requestMemoryWindowProposals(v3Claim, input, [], { chat }, { foregroundBusy: () => false })
+    expect(result).toMatchObject({ kind: 'proposals', rejected: 1, rejectionReasons: ['shape'] })
+    expect(chat).toHaveBeenCalledTimes(1)
+  })
   it.each(['password=ExampleCredential123', 'secret: ExampleCredential123', 'token:ExampleCredential123', 'token = ExampleCredential123'])('blocks credential markers in both user and assistant turns before any model call: %s', async secret => {
     const chat = vi.fn(async () => ({ content: '[]' }))
     for (const role of ['user', 'assistant'] as const) {

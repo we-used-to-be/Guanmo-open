@@ -27,7 +27,7 @@ export interface MemoryCandidateInput {
 }
 
 export function containsSensitiveMemoryText(text: string): boolean {
-  return /(?:密码|口令|验证码|密钥|私钥|助记词|身份证|银行卡|信用卡|病历|诊断|过敏|疾病|患有|病情|慢性病|高血压|糖尿病|哮喘|心脏病|用药|治疗|就医|健康状况|健康|财务状况|经济状况|财务|收入|工资|月薪|年薪|负债|债务|欠款|存款|投资|资产|住址|家庭地址|电话号码|手机号|api[_ -]?key|password|secret|token\s*[:=])|\b(?:sk-[a-z0-9_-]{10,}|1[3-9]\d{9}|\d{17}[\dXx])\b/i.test(text)
+  return /(?:密码|口令|验证码|密钥|私钥|助记词|身份证|银行卡|信用卡|病历|诊断|过敏|疾病|患有|病情|慢性病|高血压|糖尿病|哮喘|心脏病|用药|治疗|就医|健康状况|财务状况|经济状况|财务|收入|工资|月薪|年薪|负债|债务|欠款|存款|投资|资产|住址|家庭地址|电话号码|手机号|api[_ -]?key|password|secret|token\s*[:=])|\b(?:sk-[a-z0-9_-]{10,}|1[3-9]\d{9}|\d{17}[\dXx])\b/i.test(text)
 }
 
 /** Credentials, identifying numbers, addresses and contact details are never sent for extraction. */
@@ -378,7 +378,7 @@ export function normalizeMemoryCandidate<T extends MemoryCandidateInput>(candida
   }
 }
 
-export function validateMemoryCandidate(candidate: MemoryCandidateInput, options: { allowSensitive?: boolean } = {}): MemoryCandidateValidationResult {
+export function validateMemoryCandidate(candidate: MemoryCandidateInput, options: { allowSensitive?: boolean; allowCurrentForReview?: boolean } = {}): MemoryCandidateValidationResult {
   const content = candidate.content.trim()
   if (!options.allowSensitive && containsSensitiveMemoryText(content)) return { valid: false, reason: 'sensitive' }
   const contentLength = Array.from(content).length
@@ -390,7 +390,8 @@ export function validateMemoryCandidate(candidate: MemoryCandidateInput, options
   if (/^(用户表示|根据(?:对话|用户消息)|从对话中得知)/.test(content)) {
     return { valid: false, reason: 'unstable_restatement' }
   }
-  if (candidate.kind !== 'episodic' && /(这轮|本轮|今天|现在|待会|马上|稍后|刚才|接下来|这一版|当前任务|临时|暂时)/.test(content)) {
+  if (candidate.kind !== 'episodic' && (/(这轮|本轮|今天|待会|马上|稍后|刚才|接下来|这一版|当前任务|临时|暂时)/.test(content)
+    || !options.allowCurrentForReview && /现在/.test(content))) {
     return { valid: false, reason: 'one_off_task' }
   }
   if (/(翻译|改写|润色|重写|仿写|编写|生成|创作|虚构|假设|举例|示例|角色扮演|总结|概括|解释代码|分析代码)/.test(content)) {
@@ -429,7 +430,7 @@ export function shouldExtractMemoryCandidate(userText: string): boolean {
   }
   return [
     /(?:记住|记下来|保存为长期记忆|以后记得|以后都|之后都)/,
-    /(?:我喜欢|我偏好|我的习惯|我的风格|默认用|每次都|总是)/,
+    /(?:我喜欢|我不喜欢|我偏好|我习惯|我的习惯|我的风格|默认用|每次都|总是)/,
     /(?:称呼我|叫我|我的称呼|用中文|中文回答)/,
     /(?:项目约定|项目规则|长期项目|目录职责|工程边界|技术栈)/,
     /(?:我正在学|我开始学|我学完了|学习进度|学习路线)/,
@@ -446,7 +447,7 @@ export function shouldActivateAutomaticMemory(candidate: MemoryCandidateInput, s
     || !sourceText.toLowerCase().includes(candidate.factValue.toLowerCase())) return false
   const genericSubject = /^(?:user|用户|project|项目)$/i.test(candidate.subject)
   if (!genericSubject && !sourceText.toLowerCase().includes(candidate.subject.toLowerCase())) return false
-  const negative = /不(?:再|要|允许|使用|采用|喜欢|是)|禁止|避免|只允许|不得/
+  const negative = /不(?:再|要|允许|使用|采用|喜欢|是|喝|吃|愿|想|去|做|能|会)|禁止|避免|只允许|不得/
   return negative.test(sourceText) === negative.test(candidate.content)
 }
 

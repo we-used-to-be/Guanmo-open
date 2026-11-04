@@ -56,8 +56,8 @@ export function archiveSettingsMemory(id: string): Promise<void> {
   return updateMemoryStatus(id, 'archived')
 }
 
-export function confirmSettingsMemoryCandidate(id: string): Promise<boolean> {
-  return confirmMemoryCandidate(id)
+export function confirmSettingsMemoryCandidate(id: string, coexist = false): Promise<boolean> {
+  return coexist ? confirmMemoryCandidate(id, true) : confirmMemoryCandidate(id)
 }
 
 export function ignoreSettingsMemoryCandidate(id: string): Promise<void> {
