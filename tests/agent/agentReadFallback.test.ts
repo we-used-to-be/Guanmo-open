@@ -9,8 +9,9 @@ import { registerTool } from '@/services/agent/toolRegistry'
 
 const mocks = vi.hoisted(() => ({
   chat: vi.fn<(request: ChatRequest) => Promise<ChatResponse>>(), database: true,
+  agentToolResultMode: undefined as 'text' | undefined,
 }))
-vi.mock('@/services/ai/aiClient', () => ({ getAiClient: () => ({ chat: mocks.chat }), isAiReady: () => true }))
+vi.mock('@/services/ai/aiClient', () => ({ getAiClient: () => ({ chat: mocks.chat, agentToolResultMode: mocks.agentToolResultMode }), isAiReady: () => true }))
 vi.mock('@/hooks/useTauri', async original => ({ ...await original<typeof import('@/hooks/useTauri')>(), isTauri: () => true }))
 vi.mock('@/services/database/db', async original => ({ ...await original<typeof import('@/services/database/db')>(), isDatabaseReady: () => mocks.database }))
 
@@ -22,6 +23,7 @@ describe('read routing and bounded Agent fallback', () => {
   beforeAll(() => executor.initAgent())
   beforeEach(() => {
     mocks.database = true
+    mocks.agentToolResultMode = undefined
     mocks.chat.mockReset()
     search.mockReset().mockResolvedValue(JSON.stringify({ status: 'empty', results: [] }))
     setAgentScopeContext({ contextTags: [] })
@@ -63,6 +65,48 @@ describe('read routing and bounded Agent fallback', () => {
     const result = await executor.runAgent({ query: '看看内容', routingDecision: decision, streamEnabled: false })
     expect(search).toHaveBeenCalledTimes(1)
     expect(result.answer).toBe('未找到相关片段')
+  })
+
+  it('keeps the system prompt stable across preferences while placing them in the current turn', async () => {
+    const decision = { ...makeRoutingDecision('看看内容', {}), mode: 'agent' as const,
+      candidateTools: ['read_context_file' as const], required: [] }
+    mocks.chat.mockResolvedValue(response('回答'))
+    await executor.runAgent({ query: '看看内容', routingDecision: decision, streamEnabled: false, customPreferencePrompt: '简短回答' })
+    await executor.runAgent({ query: '看看内容', routingDecision: decision, streamEnabled: false, customPreferencePrompt: '详细回答' })
+    const first = mocks.chat.mock.calls[0][0].messages
+    const second = mocks.chat.mock.calls[1][0].messages
+    expect(first[0]).toEqual(second[0])
+    expect(second.slice(1).some(message => message.content.includes('详细回答'))).toBe(true)
+  })
+
+  it.each([undefined, 'text'] as const)('uses the provider tool result mode (%s)', async mode => {
+    mocks.agentToolResultMode = mode
+    const decision = { ...makeRoutingDecision('看看内容', {}), mode: 'agent' as const,
+      candidateTools: ['read_context_file' as const], required: [] }
+    mocks.chat.mockResolvedValueOnce({ ...response('检索中'), toolCalls: [{ id: 'call-1', name: 'search_knowledge', args: { query: '回溯' } }] })
+      .mockResolvedValueOnce(response('没有相关片段'))
+    await executor.runAgent({ query: '看看内容', routingDecision: decision, streamEnabled: false })
+    const messages = mocks.chat.mock.calls[1][0].messages
+    if (mode === 'text') {
+      expect(messages.some(message => message.role === 'tool' || 'tool_calls' in message)).toBe(false)
+      expect(messages.at(-1)).toMatchObject({ role: 'user', content: expect.stringContaining('工具返回结果') })
+    } else {
+      expect(messages.at(-2)).toMatchObject({ role: 'assistant', tool_calls: [{ id: 'call-1', function: { name: 'search_knowledge' } }] })
+      expect(messages.at(-1)).toMatchObject({ role: 'tool', tool_call_id: 'call-1' })
+    }
+    expect(search).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to text results when native tool IDs are duplicated', async () => {
+    const decision = { ...makeRoutingDecision('看看内容', {}), mode: 'agent' as const,
+      candidateTools: ['read_context_file' as const], required: [] }
+    mocks.chat.mockResolvedValueOnce({ ...response('检索中'), toolCalls: [
+      { id: 'duplicate', name: 'search_memory', args: { query: '偏好' } },
+      { id: 'duplicate', name: 'search_knowledge', args: { query: '回溯' } },
+    ] }).mockResolvedValueOnce(response('没有相关片段'))
+    await executor.runAgent({ query: '看看内容', routingDecision: decision, streamEnabled: false })
+    expect(mocks.chat.mock.calls[1][0].messages.some(message => message.role === 'tool')).toBe(false)
+    expect(search).toHaveBeenCalledTimes(2)
   })
 
   it('repairs a missing mandatory search once instead of accepting an action-only answer', async () => {

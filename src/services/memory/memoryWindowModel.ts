@@ -230,9 +230,9 @@ export async function requestMemoryWindowProposals(claim: MemoryWindowClaim, pac
     && parsed.rejections.every(reason => reason === 'shape'))
   let formatRepaired = false
   if (packet.policyVersion === 3 && needsFormatRepair) {
-    const correction: ModelRequest = { ...built.request, messages: built.request.messages.map((message, index) => index === 0
-      ? { ...message, content: message.content + '\n上次输出的 JSON 格式或字段类型无效。请重新按要求输出；confidence 必须是 0 至 1 的数字，禁止使用 high 等字符串。不要输出解释。' }
-      : message) }
+    const correction: ModelRequest = { ...built.request, messages: [...built.request.messages, {
+      role: 'user', content: '上次输出的 JSON 格式或字段类型无效。请重新按要求输出；confidence 必须是 0 至 1 的数字，禁止使用 high 等字符串。不要输出解释。',
+    }] }
     if (new TextEncoder().encode(JSON.stringify(correction)).length + 256 <= 36_000) {
       const reservation = await reserveMemoryWindowFormatRepair(claim)
       if (reservation === 'lost_lease') return { kind: 'lost_lease' }

@@ -2,13 +2,14 @@ import type {
   ChatMessage,
   ChatMessageContextMeta,
   ChatMessageTag,
+  ModelMessage,
   ReadingScope,
   ReadingSourceCoverage,
 } from '@/services/ai/types'
 import type { AgentResult } from '@/services/agent/types'
 import type { ContextTag } from '@/types/contextTag'
 import { CONTEXT_BLOCK_PREFIX } from '@/services/contextBuilder'
-import { buildSystemMessages, buildUntrustedContextMessage, type AiAnswerMode } from '@/services/ai/systemPrompts'
+import { buildSystemMessages, buildTurnInstruction, buildUntrustedContextMessage, type AiAnswerMode } from '@/services/ai/systemPrompts'
 import { markCurrentTurnStart } from '@/services/ai/contextBudget'
 
 export function resolveAiAnswerMode(selectionRequestKind: 'none' | 'fast' | 'context' | 'explicit_lookup', useAgentMode: boolean): AiAnswerMode | undefined {
@@ -106,11 +107,13 @@ export function buildMessagesForModel(options: {
     options.supplementalContext?.trim(),
   ].filter(Boolean).join('\n\n')
   const contextMessage = buildUntrustedContextMessage(contextText)
-  markCurrentTurnStart(contextMessage || latestUserMessage)
+  const turnInstruction = buildTurnInstruction(options.customPreferencePrompt, options.answerMode)
+  markCurrentTurnStart(turnInstruction || contextMessage || latestUserMessage)
 
   return [
-    ...buildSystemMessages(options.customPreferencePrompt, options.answerMode),
+    ...buildSystemMessages(),
     ...options.history,
+    ...(turnInstruction ? [turnInstruction] : []),
     ...(contextMessage ? [contextMessage] : []),
     latestUserMessage,
   ]
@@ -176,7 +179,7 @@ export function countRagSourcesInContext(ragContext: string): number {
 
 export function buildAgentFinalAnswerMessages(
   finalMessages: NonNullable<AgentResult['finalMessages']>
-): ChatMessage[] {
+): ModelMessage[] {
   return [
     ...finalMessages,
     {

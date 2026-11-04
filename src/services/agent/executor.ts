@@ -1,5 +1,5 @@
 import type { AgentConfig, AgentProgressStage, AgentStep, AgentResult, AgentRunRequest, RoutingDecision } from './types'
-import type { ChatMessage, ChatMessageSource, ReadingArtifactMessageReference } from '@/services/ai/types'
+import type { ChatMessageSource, ModelMessage, ReadingArtifactMessageReference } from '@/services/ai/types'
 import { getAiClient, isAiReady } from '@/services/ai/aiClient'
 import { getAllTools, getTool, getToolDescriptions, getToolsForLLM } from './toolRegistry'
 import { registerBuiltinTools } from './tools'
@@ -41,7 +41,7 @@ import {
   LOCAL_RESEARCH_ANSWER_PROMPT,
   WEB_COMPARISON_ANSWER_PROMPT,
 } from './answerInstructions'
-import { markCurrentTurnStart, withContextOverflowRecovery } from '@/services/ai/contextBudget'
+import { markCurrentTurnStart, markCompactableReadGroup, withContextOverflowRecovery } from '@/services/ai/contextBudget'
 import { extractReadingArtifactReferences, mergeReadingArtifactReferences } from './readingArtifactReferences'
 import {
   finishAgentTrace,
@@ -166,12 +166,8 @@ export function initAgent() {
 /**
  * Build the system prompt with tool descriptions.
  */
-function buildSystemPrompt(config: AgentConfig, toolNames?: readonly string[], customPreferencePrompt?: string): string {
-  const toolDesc = getToolDescriptions(toolNames)
-  const prompt = config.systemPrompt.replace('{{tool_descriptions}}', toolDesc)
-  const preference = customPreferencePrompt?.trim()
-  if (!preference) return prompt
-  return `${prompt}\n\n${CUSTOM_PROMPT_POLICY}\n\n【用户偏好层】\n${preference}`
+function buildSystemPrompt(config: AgentConfig): string {
+  return `${config.systemPrompt.replace('{{tool_descriptions}}', '本轮可用工具见后续消息和工具定义。')}\n\n${CUSTOM_PROMPT_POLICY}`
 }
 
 /**
@@ -302,7 +298,7 @@ function resolveToolResultMaxChars(toolName: string): number {
   return getToolTokenBudget(toolName)
 }
 
-function buildFinalAnswerMessages(messages: ChatMessage[], finalInstruction?: string): ChatMessage[] {
+function buildFinalAnswerMessages(messages: ModelMessage[], finalInstruction?: string): ModelMessage[] {
   return [
     ...messages,
     {
@@ -1015,15 +1011,20 @@ async function runAgentInternal({
 
   // 构建系统提示
   const activeToolNames = candidateTools
-  const systemPrompt = buildSystemPrompt(mergedConfig, activeToolNames, customPreferencePrompt)
+  const systemPrompt = buildSystemPrompt(mergedConfig)
   const llmTools = candidateTools.length > 0 ? getToolsForLLM(activeToolNames) : []
 
   const contextMessage = buildUntrustedContextMessage(untrustedContext || '')
-  let messages: ChatMessage[] = [
-    { role: 'system', content: systemPrompt + (needsInput.length
-      ? '\n部分候选工具缺少本轮授权的必要输入；如回答依赖这些输入，请用户添加目标文件或选区。不得假装已读取或修改。' : '')
-      + (hasBlockedTools ? '\n部分候选工具当前不可用或未获授权；请说明限制，不得声称已检索、没有资料或已完成操作。' : '') },
+  const turnInstructions = [
+    activeToolNames.length ? `【本轮可用工具】\n${getToolDescriptions(activeToolNames)}` : '',
+    customPreferencePrompt?.trim() ? `【用户偏好层】\n${customPreferencePrompt.trim()}` : '',
+    needsInput.length ? '部分候选工具缺少本轮授权的必要输入；如回答依赖这些输入，请用户添加目标文件或选区。不得假装已读取或修改。' : '',
+    hasBlockedTools ? '部分候选工具当前不可用或未获授权；请说明限制，不得声称已检索、没有资料或已完成操作。' : '',
+  ].filter(Boolean).join('\n\n')
+  let messages: ModelMessage[] = [
+    { role: 'system', content: systemPrompt },
     ...chatHistory,
+    ...(turnInstructions ? [{ role: 'user' as const, content: turnInstructions }] : []),
     ...(contextMessage ? [contextMessage] : []),
     ...(answerInstruction ? [{ role: 'user' as const, content: answerInstruction }] : []),
     { role: 'user', content: query },
@@ -1111,7 +1112,7 @@ async function runAgentInternal({
 
   const requestAgentCompletion = async () => {
     let hasPublishedContent = false
-    const send = async (currentMessages: ChatMessage[]) => {
+    const send = async (currentMessages: ModelMessage[]) => {
       if (signal?.aborted) throw new DOMException('Agent cancelled', 'AbortError')
       if (remainingDeadlineMs() <= 0) throw new DOMException('Agent deadline exceeded', 'TimeoutError')
       const canStreamAnswer = checkRequiredCapabilities(mergedRequired, calledToolNames).length === 0
@@ -1353,7 +1354,8 @@ async function runAgentInternal({
 
     // Get AI response with timeout
     let content: string
-    const nativeToolCalls: Array<{ name: string; args: Record<string, unknown>; actionMessage?: string }> = []
+    const nativeToolCalls: Array<{ id?: string; name: string; args: Record<string, unknown>; actionMessage?: string }> = []
+    let nativeCallsComplete = false
 
     try {
       const response = await requestAgentCompletion()
@@ -1364,9 +1366,10 @@ async function runAgentInternal({
         const actionMessage = normalizeActionMessage(stripToolCallJson(content))
         for (const tc of response.toolCalls) {
           if (getTool(tc.name)) {
-            nativeToolCalls.push({ name: tc.name, args: tc.args, actionMessage })
+            nativeToolCalls.push({ id: tc.id, name: tc.name, args: tc.args, actionMessage })
           }
         }
+        nativeCallsComplete = nativeToolCalls.length === response.toolCalls.length
       }
     } catch (err) {
       if (signal?.reason === 'deadline' || remainingDeadlineMs() <= 0) return deadlineResult()
@@ -1387,7 +1390,7 @@ async function runAgentInternal({
     })
 
     // 解析工具调用（原生优先，JSON降级）
-    let parsedToolCalls: Array<{ name: string; args: Record<string, unknown>; rawJson?: string; actionMessage?: string }> = []
+    let parsedToolCalls: Array<{ id?: string; name: string; args: Record<string, unknown>; rawJson?: string; actionMessage?: string }> = []
 
     if (nativeToolCalls.length > 0) {
       parsedToolCalls = nativeToolCalls.map(tc => ({ ...tc, rawJson: undefined }))
@@ -1512,6 +1515,35 @@ async function runAgentInternal({
       }
     }
 
+    // Only use native protocol when every call has an unambiguous result and provider ID.
+    const ids = parsedToolCalls.map(call => call.id)
+    const nativeResultIds = new Map<string, string[]>()
+    const canUseNative = client.agentToolResultMode !== 'text' && nativeCallsComplete && disallowedToolCalls.length === 0
+      && ids.every((id): id is string => typeof id === 'string' && Boolean(id.trim())) && new Set(ids).size === ids.length
+      && toolResults.length === parsedToolCalls.length
+      && parsedToolCalls.every(call => {
+        const matching = nativeResultIds.get(call.name) || []
+        matching.push(call.id!)
+        nativeResultIds.set(call.name, matching)
+        return true
+      }) && toolResults.every(result => (nativeResultIds.get(result.name)?.length || 0) > 0
+        && Boolean(nativeResultIds.get(result.name)!.shift()))
+    if (canUseNative) {
+      nativeResultIds.clear()
+      for (const call of parsedToolCalls) {
+        const matching = nativeResultIds.get(call.name) || []
+        matching.push(call.id!)
+        nativeResultIds.set(call.name, matching)
+      }
+      const callMessage: ModelMessage = { role: 'assistant', content, tool_calls: parsedToolCalls.map(call => ({
+        id: call.id!, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.args) },
+      })) }
+      if (toolResults.every(result => isReadTool(result.name) && result.status === 'success')) {
+        markCompactableReadGroup(callMessage)
+      }
+      messages.push(callMessage)
+    }
+
     // 添加工具结果到消息
     for (const { name, result, rawResult, executed, reused } of toolResults) {
       rememberArtifactReferences(name, rawResult || result)
@@ -1526,6 +1558,10 @@ async function runAgentInternal({
         ? result
         : truncateToolResultForModel(name, rawResult || result, resolveToolResultMaxChars(name))
       const visibleModelResult = prepareVisibleToolResult(name, modelResult)
+      if (canUseNative) {
+        messages.push({ role: 'tool', tool_call_id: nativeResultIds.get(name)!.shift()!, content: visibleModelResult })
+        continue
+      }
       messages.push({
         role: 'assistant',
         content: reused ? `复用本轮工具结果: ${name}` : executed === false ? `未执行工具: ${name}` : `调用工具: ${name}`,

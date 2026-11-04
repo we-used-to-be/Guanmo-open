@@ -89,7 +89,7 @@ export async function streamDirectChat(options: DirectChatOptions): Promise<void
         : '检索本地已索引文档片段，无需文件标签。仅用于问题需要本地资料且已有上下文不足时，不代表读取全文。',
     } }))
     const messages: ModelMessage[] = tools.length
-      ? [{ role: 'system', content: CORE_INSTRUCTION }, ...options.messages] : options.messages
+      ? [...options.messages.slice(0, -1), { role: 'user', content: CORE_INSTRUCTION }, ...options.messages.slice(-1)] : options.messages
     // Keep this turn's native call/result group atomic during overflow recovery.
     const currentQuestion = [...options.messages].reverse().find(message => message.role === 'user')
     if (currentQuestion) markCurrentTurnStart(currentQuestion)

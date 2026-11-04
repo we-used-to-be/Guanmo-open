@@ -39,6 +39,12 @@ function wrapNetworkError(err: unknown, baseUrl: string): AiNetworkError {
 }
 
 export class OpenAICompatibleProvider implements AiProvider {
+  // DeepSeek thinking mode requires reasoning_content on native tool continuations.
+  // The current adapters do not retain that field.
+  get agentToolResultMode(): 'text' | undefined {
+    return this.config.provider === 'deepseek' ? 'text' : undefined
+  }
+
   constructor(private config: AiConfig, private kind: 'chat' | 'embedding' = 'chat') {
     this.config = { ...config, apiKey: '', embedding: { ...config.embedding, apiKey: '' } }
   }

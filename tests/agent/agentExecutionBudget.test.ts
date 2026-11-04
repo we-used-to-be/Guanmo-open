@@ -196,7 +196,7 @@ describe('Agent execution budget', () => {
     const secondRequest = streamChat.mock.calls[1][0]
     expect(secondRequest.tools?.some((tool) => tool.function.name === 'get_current_time')).toBe(true)
     expect(secondRequest.messages.some((message) => message.content.includes('工具返回结果'))).toBe(true)
-    expect(secondRequest.messages[0].content).toContain('get_current_time')
+    expect(secondRequest.messages.slice(1).some((message) => message.content.includes('get_current_time'))).toBe(true)
     expect(result.answer).toBe('基于证据的匿名答案')
   })
 

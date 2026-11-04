@@ -276,6 +276,7 @@ export interface ValidateResult {
 }
 
 export interface AiProvider {
+  readonly agentToolResultMode?: 'text'
   chat(request: ChatRequest): Promise<ChatResponse>
   streamChat(request: ChatRequest): AsyncIterable<StreamChunk>
   embedding(text: string, signal?: AbortSignal): Promise<EmbeddingResponse>

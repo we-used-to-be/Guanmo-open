@@ -32,6 +32,17 @@ beforeEach(() => {
 afterEach(() => db.close())
 
 describe('memory writes against isolated SQLite', () => {
+  it('keeps the extraction system prompt stable when existing memories change', async () => {
+    const chat = vi.fn(async (_request: ChatRequest) => ({ content: '[]' }))
+    const messages = [{ role: 'user' as const, content: '我喜欢使用中文回答' }]
+    await extractMemories(messages, { chat })
+    await persistMemory(record({ status: 'active' }))
+    await extractMemories(messages, { chat })
+    const first = chat.mock.calls[0][0] as ChatRequest
+    const second = chat.mock.calls[1][0] as ChatRequest
+    expect(second.messages[0]).toEqual(first.messages[0])
+    expect(second.messages.slice(1).some(message => message.content.includes('默认使用中文回答'))).toBe(true)
+  })
   it('snapshots only injected active memory content within the context budget', () => {
     const records = [record({ status: 'active', content: '已确认的长事实'.repeat(300) }),
       record({ id: 'later', status: 'active', content: '预算外事实' }), record({ id: 'candidate', content: '待确认事实' })]

@@ -114,17 +114,14 @@ describe('A/B 评测口径', () => {
 
 describe('版本切换不修改用户数据', () => {
   it('buildSystemMessages 为纯组装且结构稳定', () => {
-    const first = buildSystemMessages('匿名偏好示例', 'selection_direct')
-    const second = buildSystemMessages('匿名偏好示例', 'selection_direct')
+    const first = buildSystemMessages()
+    const second = buildSystemMessages()
     expect(second).toEqual(first)
     expect(first[0].role).toBe('system')
     expect(first[1].role).toBe('system')
-    expect(first.some((message) => message.content.includes('用户偏好层'))).toBe(true)
-    expect(first.some((message) => message.content.includes('唯一主要对象'))).toBe(true)
+    expect(first.some((message) => message.content.includes('用户自定义提示词规则'))).toBe(true)
     expect(first.some((message) => message.content.includes('信息充分、已经能够回答时不要追加免责声明'))).toBe(true)
-    expect(first.filter((message) => message.content.includes('根据已有信息，以上内容仅供参考。'))).toHaveLength(2)
-    expect(first.filter((message) => message.content.includes('不加粗、不加标题或其他修饰'))).toHaveLength(2)
-    expect(first.some((message) => message.content.includes('短词、术语或代码标识符'))).toBe(true)
+    expect(first.some((message) => message.content.includes('根据已有信息，以上内容仅供参考。'))).toBe(true)
   })
 })
 

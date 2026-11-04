@@ -168,13 +168,19 @@ describe('context overflow recovery at production entry points', () => {
     expect(result.reason).toBe('deadline')
   })
 
-  it('reduces identical cached tool groups without deleting the only evidence or replaying the tool', async () => {
-    const tool = { ...answer, content: '', toolCalls: [{ name: 'get_current_time', args: {} }] }
-    responses.push(tool, tool, overflow(), answer)
+  it.each([false, true])('reduces identical cached tool groups without replaying the tool (native=%s)', async native => {
+    const tool = (id: string) => ({ ...answer, content: '', toolCalls: [{ id: native ? id : undefined, name: 'get_current_time', args: {} }] })
+    responses.push(tool('first'), tool('second'), overflow(), answer)
     const result = await runAgent({ query: 'current question', candidateToolNames: ['get_current_time'], streamEnabled: false })
     expect(requests).toHaveLength(4)
     expect(requests[2].filter(m => m.content.includes('anonymous evidence'))).toHaveLength(2)
     expect(requests[3].filter(m => m.content.includes('anonymous evidence'))).toHaveLength(1)
+    if (native) {
+      expect(requests[3].filter(message => 'tool_calls' in message || message.role === 'tool')).toMatchObject([
+        { role: 'assistant', tool_calls: [{ id: 'second' }] },
+        { role: 'tool', tool_call_id: 'second' },
+      ])
+    }
     expect(execute).toHaveBeenCalledTimes(1)
     expect(result.toolCalls).toBe(1)
     expect(result.answer).toBe('answer')

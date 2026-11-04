@@ -53,6 +53,8 @@ describe('bounded memory model proposals', () => {
     const result = await requestMemoryWindowProposals(v3Claim, input, [], { chat }, { foregroundBusy: () => false })
     expect(result).toMatchObject({ kind: 'proposals', formatRepaired: true, candidates: [{ factValue: '结论' }], usage: { promptTokens: 21, completionTokens: 5 } })
     expect(chat).toHaveBeenCalledTimes(2)
+    expect(chat.mock.calls[1][0].messages.slice(0, -1)).toEqual(chat.mock.calls[0][0].messages)
+    expect(chat.mock.calls[1][0].messages.at(-1)).toMatchObject({ role: 'user', content: expect.stringContaining('格式或字段类型无效') })
     expect(JSON.stringify(chat.mock.calls[1])).not.toContain('LEAKED_MODEL_MARKER')
     expect(mocks.reserve).toHaveBeenCalledTimes(1)
   })

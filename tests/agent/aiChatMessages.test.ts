@@ -34,6 +34,15 @@ describe('aiChatMessages natural history', () => {
     expect(userMessages[1]).toEqual({ role: 'user', content: 'question' })
   })
 
+  it('keeps system messages stable when preferences and selection mode change', () => {
+    const base = { history: [] as ChatMessage[], userMessage: { role: 'user' as const, content: 'question' } }
+    const ordinary = buildMessagesForModel(base)
+    const selected = buildMessagesForModel({ ...base, customPreferencePrompt: '简短回答', answerMode: 'selection_direct' })
+    expect(selected.filter(message => message.role === 'system')).toEqual(ordinary.filter(message => message.role === 'system'))
+    expect(selected.at(-2)?.content).toContain('简短回答')
+    expect(selected.at(-2)?.content).toContain('唯一主要对象')
+  })
+
   it('counts stable RAG references without counting repeated inline citations twice', () => {
     expect(countRagSourcesInContext('【知识库检索结果】\n[S1] 内容\n---\n[S2] 内容\n正文再次提到 [S1]')).toBe(2)
   })

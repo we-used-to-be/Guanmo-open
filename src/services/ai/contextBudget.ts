@@ -29,6 +29,11 @@ export function isModelContextOverflowError(error: unknown): boolean {
 
 // 请求副本的对象身份标记；不改变消息字段、Provider payload 或持久化格式。
 const currentTurnStarts = new WeakSet<ModelMessage>()
+const compactableReadGroups = new WeakSet<ModelMessage>()
+
+export function markCompactableReadGroup(message: ModelMessage): void {
+  compactableReadGroups.add(message)
+}
 
 export function markCurrentTurnStart(message: ModelMessage): void {
   currentTurnStarts.add(message)
@@ -66,6 +71,18 @@ export function compactOverflowMessages<T extends ModelMessage>(messages: T[]): 
       removed.add(i)
     } else seen.add(key)
     i--
+  }
+  const seenNative = new Set<string>()
+  for (let i = messages.length - 1; i > start; i--) {
+    const call = messages[i]
+    if (!compactableReadGroups.has(call) || !('tool_calls' in call)) continue
+    const results = messages.slice(i + 1, i + 1 + call.tool_calls.length)
+    const resultById = new Map(results.flatMap(result => result.role === 'tool' ? [[result.tool_call_id, result.content] as const] : []))
+    if (results.length !== call.tool_calls.length || !call.tool_calls.every(tool => resultById.has(tool.id))) continue
+    const key = JSON.stringify([call.content, call.tool_calls.map(tool => [tool.function, resultById.get(tool.id)])])
+    if (seenNative.has(key)) {
+      for (let j = i; j <= i + results.length; j++) removed.add(j)
+    } else seenNative.add(key)
   }
   return messages.filter((_, index) => !removed.has(index))
 }

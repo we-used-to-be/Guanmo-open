@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatMessageSource, ReadingArtifactMessageReference, ReadingScope } from '@/services/ai/types'
+import type { ChatMessage, ChatMessageSource, ModelMessage, ReadingArtifactMessageReference, ReadingScope } from '@/services/ai/types'
 import type { SourceReferenceId, SourceReferenceRegistry } from '@/services/ai/sourceReferences'
 import type { Capability, IntentScore, SelectionRequestKind } from './intentDetector'
 import type { AgentToolName } from './toolSelector'
@@ -64,7 +64,7 @@ export interface AgentResult {
   steps: AgentStep[]
   toolCalls: number
   reason: AgentResultReason
-  finalMessages?: ChatMessage[]
+  finalMessages?: ModelMessage[]
   sources?: ChatMessageSource[]
   sourceRegistry?: SourceReferenceRegistry
   referencedSourceIds?: SourceReferenceId[]
