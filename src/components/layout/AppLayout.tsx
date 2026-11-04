@@ -769,7 +769,7 @@ export function AppLayout({ databaseReady }: AppLayoutProps) {
       {!isFullscreen && <TitleBar />}
 
       {/* Main Content Area */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="relative flex flex-1 overflow-hidden">
         {/* Sidebar */}
         {!isFullscreen && (
           <Sidebar

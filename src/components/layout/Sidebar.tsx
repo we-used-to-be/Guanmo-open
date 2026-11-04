@@ -32,7 +32,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpenSearch }: SidebarProps) {
-  const { contentRef, present } = useSidebarContent(!collapsed, '[data-product-tour="sidebar-toggle"]')
+  const { contentRef, present } = useSidebarContent(!collapsed, '[data-product-tour="sidebar-toggle"]', { keepMounted: true })
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
   const sidebarSectionExpanded = useAppStore((s) => s.sidebarSectionExpanded)
   const setSidebarSectionExpanded = useAppStore((s) => s.setSidebarSectionExpanded)
@@ -136,7 +136,7 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
 
   return (
     <div
-      className="animal-cursor gm-instant-color gm-layout-sidebar relative flex-shrink-0 overflow-hidden bg-gm-surface border-r border-gm-border"
+      className="animal-cursor gm-instant-color gm-layout-sidebar relative flex-shrink-0 bg-gm-surface border-r border-gm-border"
       style={{ width: collapsed ? 56 : width }}
     >
       {collapsed && (
@@ -184,7 +184,7 @@ export function Sidebar({ collapsed, width, onResizeStart, onOpenSettings, onOpe
       ref={contentRef}
       aria-hidden={collapsed}
       data-product-tour={collapsed ? undefined : 'sidebar-panel'}
-      className="gm-layout-sidebar-content relative h-full flex flex-col overflow-hidden"
+      className="gm-layout-sidebar-content relative h-full flex flex-col overflow-hidden bg-gm-surface"
       style={{ width: width - 1, pointerEvents: collapsed ? 'none' : undefined }}
     >
       <div
