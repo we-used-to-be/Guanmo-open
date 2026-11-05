@@ -1191,7 +1191,7 @@ fn memory_operation_id(memory: &MemoryV2Record, evidence: &serde_json::Value) ->
     ]);
     let mut canonical = String::new();
     for part in parts {
-        canonical.push_str(&part.as_bytes().len().to_string());
+        canonical.push_str(&part.len().to_string());
         canonical.push(':');
         canonical.push_str(&part);
     }
@@ -1199,11 +1199,15 @@ fn memory_operation_id(memory: &MemoryV2Record, evidence: &serde_json::Value) ->
     Some(digest.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
+#[cfg(test)]
 fn memory_v2_operation_id(memory: &MemoryV2Record, evidence: &serde_json::Value) -> Option<String> {
     memory_operation_id(memory, evidence)
 }
 
-fn memory_snapshot_visible_text(snapshot: &MemoryV2Snapshot, policy_version: u64) -> Option<String> {
+fn memory_snapshot_visible_text(
+    snapshot: &MemoryV2Snapshot,
+    policy_version: u64,
+) -> Option<String> {
     let metadata = snapshot
         .metadata
         .as_deref()
@@ -1223,7 +1227,8 @@ fn memory_snapshot_visible_text(snapshot: &MemoryV2Snapshot, policy_version: u64
     if context.is_some_and(|value| !value.is_object()) {
         return None;
     }
-    if policy_version != 3 && snapshot.role == "assistant"
+    if policy_version != 3
+        && snapshot.role == "assistant"
         && metadata.as_ref().is_some_and(|value| {
             value.get("tags").is_some()
                 || value.get("sources").is_some_and(|sources| {
@@ -1624,7 +1629,8 @@ async fn run_persist_memory_policy(
         let Some(snapshot) = snapshot else {
             return Err("invalid_memory_v2_sources".into());
         };
-        let visible = memory_snapshot_visible_text(snapshot, policy_version).ok_or("invalid_memory_v2_sources")?;
+        let visible = memory_snapshot_visible_text(snapshot, policy_version)
+            .ok_or("invalid_memory_v2_sources")?;
         if policy_version == 3 && snapshot.role == "user" && obvious_forbidden_memory(&visible) {
             return Err("invalid_memory_v3_source".into());
         }
@@ -2023,6 +2029,7 @@ pub async fn persist_memory_v3_transaction(
     run_persist_memory_v3(&pool, request).await
 }
 
+#[cfg(test)]
 async fn run_confirm_memory_candidate(pool: &SqlitePool, id: &str) -> Result<bool, String> {
     run_confirm_memory_candidate_with_coexist(pool, id, false).await
 }
@@ -2061,7 +2068,7 @@ async fn run_confirm_memory_candidate_with_coexist(
         .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok());
     let version = evidence.as_ref().and_then(|value| value.get("version"));
     let version_number = version.and_then(|value| value.as_i64());
-    if (supersedes_id.is_some() && version.is_some() && !matches!(version_number, Some(1 | 2 | 3)))
+    if (supersedes_id.is_some() && version.is_some() && !matches!(version_number, Some(1..=3)))
         || (id.starts_with("mem-v2-") && version_number != Some(2))
         || (id.starts_with("mem-v3-")
             && (version_number != Some(3)
@@ -2190,7 +2197,7 @@ async fn run_confirm_memory_candidate_with_coexist(
                 .map_err(|error| error.to_string())?;
             return Ok(false);
         }
-        if let Some(snapshot) = replacement.filter(|_| matches!(version_number, Some(1 | 2 | 3))) {
+        if let Some(snapshot) = replacement.filter(|_| matches!(version_number, Some(1..=3))) {
             let snapshot = serde_json::from_value::<MemoryReplacementSnapshot>(snapshot.clone());
             let current = sqlx::query(
                 "SELECT content, updated_at FROM memories WHERE id = ? AND status = 'active'",
@@ -2802,13 +2809,22 @@ mod tests {
     #[test]
     fn memory_v3_visible_reply_accepts_tool_metadata() {
         let snapshot = MemoryV2Snapshot {
-            id: "a1".into(), session_id: "s".into(), role: "assistant".into(),
-            parent_id: Some("u1".into()), content: "原始正文".into(),
-            metadata: Some(serde_json::json!({"displayContent":"可见回复", "sources":[{"text":"工具原文"}],
-                "contextMeta":{"webSearchUsed":true,"ragSourceCount":1}}).to_string()),
+            id: "a1".into(),
+            session_id: "s".into(),
+            role: "assistant".into(),
+            parent_id: Some("u1".into()),
+            content: "原始正文".into(),
+            metadata: Some(
+                serde_json::json!({"displayContent":"可见回复", "sources":[{"text":"工具原文"}],
+                "contextMeta":{"webSearchUsed":true,"ragSourceCount":1}})
+                .to_string(),
+            ),
             created_at: 1,
         };
-        assert_eq!(memory_snapshot_visible_text(&snapshot, 3).as_deref(), Some("可见回复"));
+        assert_eq!(
+            memory_snapshot_visible_text(&snapshot, 3).as_deref(),
+            Some("可见回复")
+        );
         assert_eq!(memory_snapshot_visible_text(&snapshot, 2), None);
     }
 
@@ -3613,7 +3629,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn memory_intake_full_capacity_must_preserve_saved_source_work() {
+    async fn memory_intake_full_capacity_preserves_saved_source_and_rejects_registration() {
         let pool = test_pool().await;
         intake_session(&pool).await;
         let request = intake("capacity-source", Some("P"));
@@ -3631,13 +3647,19 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let _ = run_persist_memory_intake(&pool, request).await;
+        assert_eq!(
+            run_persist_memory_intake(&pool, request).await.unwrap_err(),
+            "memory_intake_capacity"
+        );
+        let source_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM chat_messages WHERE id = 'capacity-source'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(source_count, 1);
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM settings WHERE key = 'memory-extraction:v2:intake:capacity-source' OR key = 'memory-extraction:v2:outbox:capacity-source'")
             .fetch_one(&pool).await.unwrap();
-        assert_eq!(
-            count, 1,
-            "saved source must retain durable extraction work when intake is full"
-        );
+        assert_eq!(count, 0);
     }
 
     #[tokio::test]

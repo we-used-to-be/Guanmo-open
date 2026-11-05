@@ -12,7 +12,7 @@ const gold = read<Gold>('docs/memory/evaluation/extraction-v5-holdout/gold.jsonl
 
 describe('unreviewed replacement holdout', () => {
   it('matches the published draft hashes', () => {
-    const hash = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex')
+    const hash = (path: string) => createHash('sha256').update(readFileSync(path, 'utf8').replace(/\r\n/g, '\n')).digest('hex')
     expect(hash('docs/memory/evaluation/extraction-v5-holdout/cases.jsonl')).toBe('ee16948e8bc6ef62595cea4324ea2239313dffe84763df2eed1c8cf8ed343d9b')
     expect(hash('docs/memory/evaluation/extraction-v5-holdout/gold.jsonl')).toBe('39b4a5f04f2b4107f5266f9a5593838fc2f2e2c561d9a7c017132a9f749626f6')
   })

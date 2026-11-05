@@ -19,7 +19,7 @@ const memory = (id: string, content: string, embedding: number[] | null, extra: 
 })
 beforeEach(() => {
   db = new DatabaseSync(':memory:')
-  for (const sql of splitDatabaseSchemaStatements(DB_SCHEMA)) if (/^CREATE TABLE IF NOT EXISTS (?:memories|chat_sessions|chat_messages)\b/.test(sql)) db.exec(sql)
+  for (const sql of splitDatabaseSchemaStatements(DB_SCHEMA)) if (/^CREATE TABLE IF NOT EXISTS (?:memories|chat_sessions|chat_messages|settings)\b/.test(sql)) db.exec(sql)
   adapter.execute.mockImplementation(async (sql: string, params: unknown[] = []) => ({ rowsAffected: Number(db.prepare(sql).run(bindings(params)).changes) }))
   adapter.select.mockImplementation(async (sql: string, params: unknown[] = []) => db.prepare(sql).all(bindings(params)))
 })
