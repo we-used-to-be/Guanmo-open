@@ -98,6 +98,7 @@ describe('AI 面板视图返回', () => {
   const scrollTo = vi.fn()
 
   beforeEach(() => {
+    aiChat.streaming = false
     aiChat.messages = [
       { id: 'user-1', role: 'user' as const, content: '匿名问题', timestamp: 1 },
       { id: 'assistant-1', parentId: 'user-1', role: 'assistant' as const, content: '匿名回答', timestamp: 2 },
@@ -135,6 +136,75 @@ describe('AI 面板视图返回', () => {
     vi.useRealTimers()
     vi.unstubAllGlobals()
     delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo
+  })
+
+  it('流式输出按间隔分段滚动，手动离开后暂停并可在底部恢复', () => {
+    let now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    let frameTime = performance.now()
+    const performanceClock = vi.spyOn(performance, 'now').mockImplementation(() => frameTime)
+    const frames = new Map<number, FrameRequestCallback>()
+    let frameId = 0
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId })
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => { frames.delete(id) })
+    const flushFrames = () => { const pending = [...frames.values()]; frames.clear(); act(() => pending.forEach((callback) => callback(frameTime))) }
+    const view = render(<AiPanel />)
+    flushFrames()
+    const container = document.querySelector<HTMLElement>('[data-chat-message-id="assistant-1"]')!.parentElement!.parentElement!
+    Object.defineProperty(container, 'clientHeight', { configurable: true, value: 400 })
+    Object.defineProperty(container, 'scrollHeight', { configurable: true, value: 800 })
+    aiChat.streaming = true
+    aiChat.messages = [...aiChat.messages.slice(0, 1), { ...aiChat.messages[1], content: '流式内容' }]
+    scrollTo.mockClear()
+    view.rerender(<AiPanel />)
+    flushFrames()
+    frameTime += 300
+    flushFrames()
+    const halfwayTop = container.scrollTop
+    expect(halfwayTop).toBeGreaterThan(0)
+    expect(halfwayTop).toBeLessThan(240)
+    frameTime += 150
+    flushFrames()
+    const nearEndTop = container.scrollTop
+    frameTime += 150
+    flushFrames()
+    expect(container.scrollTop).toBe(240)
+    expect(240 - nearEndTop).toBeLessThan(nearEndTop - halfwayTop)
+
+    scrollTo.mockClear()
+    aiChat.messages = [...aiChat.messages.slice(0, 1), { ...aiChat.messages[1], content: '流式内容继续' }]
+    view.rerender(<AiPanel />)
+    flushFrames()
+    expect(scrollTo).not.toHaveBeenCalled()
+
+    now += 3000
+    container.scrollTop = 240
+    Object.defineProperty(container, 'scrollHeight', { configurable: true, value: 1100 })
+    aiChat.messages = [...aiChat.messages.slice(0, 1), { ...aiChat.messages[1], content: '流式内容继续增长' }]
+    view.rerender(<AiPanel />)
+    flushFrames()
+    frameTime += 600
+    flushFrames()
+    expect(container.scrollTop).toBe(480)
+
+    fireEvent.wheel(container)
+    scrollTo.mockClear()
+    now += 3000
+    aiChat.messages = [...aiChat.messages.slice(0, 1), { ...aiChat.messages[1], content: '用户阅读历史' }]
+    view.rerender(<AiPanel />)
+    flushFrames()
+    expect(scrollTo).not.toHaveBeenCalled()
+    container.scrollTop = 700
+    fireEvent.scroll(container)
+    Object.defineProperty(container, 'scrollHeight', { configurable: true, value: 1500 })
+    aiChat.messages = [...aiChat.messages.slice(0, 1), { ...aiChat.messages[1], content: '恢复跟随' }]
+    view.rerender(<AiPanel />)
+    flushFrames()
+    frameTime += 600
+    flushFrames()
+    expect(container.scrollTop).toBe(940)
+    clock.mockRestore()
+    performanceClock.mockRestore()
   })
 
   it('普通模式移除顶部导航，切回聊天保留滚动位置', () => {
