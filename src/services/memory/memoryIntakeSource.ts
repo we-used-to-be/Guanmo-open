@@ -1,7 +1,7 @@
 import { getDatabase, isDatabaseReady } from '@/services/database/db'
 import type { MemorySourceSnapshot } from '@/services/database/persistence'
 import { fingerprintGlobalMemorySource, fingerprintMemorySource } from './memoryIntake'
-import { classifyGlobalMemoryInputGap } from './memoryInputPolicy'
+import { classifyGlobalMemoryInputGap, isVisibleSelectionQuestion } from './memoryInputPolicy'
 
 export interface MemoryIntakeIdentity {
   sourceId: string
@@ -90,7 +90,7 @@ export async function readMemoryIntakeSource(identity: MemoryIntakeIdentity): Pr
     : await fingerprintMemorySource(row.content, row.metadata, row.created_at)
   if (!isDatabaseReady()) return { kind: 'blocked' }
   if (fingerprint !== identity.sourceFingerprint) return { kind: 'invalidated' }
-  const gap = classifyGlobalMemoryInputGap(text)
+  const gap = classifyGlobalMemoryInputGap(text, identity.policyVersion === 3 && isVisibleSelectionQuestion(text, row.metadata))
   if (gap) return { kind: 'gap', reason: gap }
   const segments = splitMemoryInput(text)
   if (!segments) return { kind: 'oversize' }

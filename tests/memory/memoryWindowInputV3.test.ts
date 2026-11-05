@@ -43,6 +43,23 @@ afterEach(() => { db.close(); vi.clearAllMocks() })
 
 import { createMemoryWindowRequest, requestMemoryWindowProposals } from '@/services/memory/memoryWindowModel'
 describe('single-request v3 input and model boundary', () => {
+  it('includes selection questions and paired answers without sending selection content', async () => {
+    const question = '请解释这段内容'
+    await addUser('u1', 1, question, JSON.stringify({ displayContent: question,
+      tags: [{ type: 'selection', content: '匿名选中文档原文' }] }))
+    addAssistant('a1', 'u1', '这是可见回复。')
+    await addUser('u2', 2, '翻译：我喜欢早起')
+    for (let i = 3; i <= 8; i++) await addUser('u' + i, i, '请继续说明。')
+    const result = await buildMemoryWindowInput(await claim())
+    if (result.kind !== 'ready') throw new Error(result.kind)
+    const packet = result.packets[0]
+    expect(packet.turns).toContainEqual(expect.objectContaining({ id: 'u1', text: question }))
+    expect(packet.turns).toContainEqual(expect.objectContaining({ id: 'a1', text: '这是可见回复。' }))
+    expect(packet.turns).toContainEqual(expect.objectContaining({ id: 'u2', gap: 'transformation' }))
+    const request = createMemoryWindowRequest(packet, null, [])
+    expect(request.kind).toBe('ready')
+    expect(JSON.stringify(request)).not.toContain('匿名选中文档原文')
+  })
   it.each(['password=ExampleCredential123', 'secret: ExampleCredential123', 'token:ExampleCredential123', 'token = ExampleCredential123'])('redacts credential sources during input construction and makes no model call: %s', async secret => {
     for (let i = 1; i <= 8; i++) await addUser('u' + i, i, secret)
     const locked = await claim(), result = await buildMemoryWindowInput(locked)

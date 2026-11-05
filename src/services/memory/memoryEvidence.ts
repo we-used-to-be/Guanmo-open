@@ -1,6 +1,6 @@
 import type { ChatMessage } from '@/services/ai/types'
 import { containsForbiddenMemorySecret, contentHash } from './memoryPolicy'
-import { classifyGlobalMemoryInputGap } from './memoryInputPolicy'
+import { classifyGlobalMemoryInputGap, isVisibleSelectionQuestion } from './memoryInputPolicy'
 import type { MemoryWindowPacket } from './memoryWindowInput'
 import type { MemoryWindowCandidate } from './memoryWindowCandidates'
 import type { MemoryWindowClaim } from './memoryWindowLedger'
@@ -88,7 +88,8 @@ export async function encodeWindowMemoryEvidence(claim: MemoryWindowClaim, packe
       || !Number.isSafeInteger(snapshot.createdAt) || snapshot.createdAt <= 0 || snapshot.createdAt > 8.64e15
       || containsForbiddenMemorySecret(turn.text!) || turn.text!.includes('【上下文')
       || (turn.role === 'user' && ![...locked.sourceIds, ...(locked.prefixIds || [])].includes(turn.id))
-      || (turn.role === 'user' && classifyGlobalMemoryInputGap(turn.text!))) throw new Error('invalid_memory_evidence_source')
+      || (turn.role === 'user' && classifyGlobalMemoryInputGap(turn.text!, locked.version === 3
+        && isVisibleSelectionQuestion(turn.text!, snapshot.metadata)))) throw new Error('invalid_memory_evidence_source')
     return { turn, index, snapshot }
   }).sort((a, b) => a.index - b.index)
   const primary = selected.find(item => item.turn.id === candidate.primarySourceId)
