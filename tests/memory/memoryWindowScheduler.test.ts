@@ -66,6 +66,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 
 import { scheduleGlobalWindowExtraction, schedulePersistedWindowExtraction, scheduleWindowExtraction,
   setWindowSchedulerForegroundBusy, __resetMemoryWindowSchedulerForTests } from '@/services/memory/memoryWindowScheduler'
+import { useSettingsStore } from '@/stores/settingsStore'
 
 const client = { chat: vi.fn() }
 
@@ -93,6 +94,7 @@ const claimedAcquire = (version: 2 | 3 = 2) => {
 }
 
 beforeEach(() => {
+  useSettingsStore.getState().updateKnowledgeSettings({ autoMemoryExtractionEnabled: true })
   __resetMemoryWindowSchedulerForTests()
   vi.clearAllMocks()
   mocks.idleQueue.length = 0
@@ -105,6 +107,16 @@ beforeEach(() => {
 })
 
 describe('scheduleWindowExtraction – intake and B scheduling', () => {
+  it('does not register or run queued extraction while disabled', async () => {
+    await scheduleWindowExtraction(message(), group(), 'B', client)
+    useSettingsStore.getState().updateKnowledgeSettings({ autoMemoryExtractionEnabled: false })
+    mocks.persistIntake.mockClear()
+    await scheduleWindowExtraction(message('u2'), group(), 'B', client)
+    await runIdleQueue()
+    expect(mocks.persistIntake).not.toHaveBeenCalled()
+    expect(mocks.acquire).not.toHaveBeenCalled()
+  })
+
   it('registers the message via persistMemoryIntake before scheduling', async () => {
     mocks.acquire.mockResolvedValue({ kind: 'not_due' })
     await scheduleWindowExtraction(message(), group(), 'B', client)

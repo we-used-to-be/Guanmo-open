@@ -1830,6 +1830,8 @@ function memoryConflictSnapshots(memory: Memory) {
 export function MemorySettings() {
   const workspacePath = useAppStore(selectPrimaryWorkspacePath)
   const databaseEnabled = getRuntimeCapabilities().database
+  const autoMemoryExtractionEnabled = useSettingsStore(s => s.knowledge.autoMemoryExtractionEnabled)
+  const updateKnowledgeSettings = useSettingsStore(s => s.updateKnowledgeSettings)
   const [memories, setMemories] = useState<Memory[]>([])
   const [candidateMemories, setCandidateMemories] = useState<Memory[]>([])
   const [conflictMemories, setConflictMemories] = useState<Memory[]>([])
@@ -2024,6 +2026,9 @@ export function MemorySettings() {
   return (
     <div className="w-full pb-6">
       <SectionTitle>长期记忆</SectionTitle>
+      <SettingField label="自动提取记忆" description="从对话中自动提取长期记忆；关闭期间的对话不会加入提取队列">
+        <Switch checked={databaseEnabled && autoMemoryExtractionEnabled} onChange={v => updateKnowledgeSettings({ autoMemoryExtractionEnabled: v })} disabled={!databaseEnabled} />
+      </SettingField>
       {databaseEnabled && <MemoryExtractionStatus />}
       {databaseEnabled && <MemoryExtractionSimulator />}
       {!isTauri() && (

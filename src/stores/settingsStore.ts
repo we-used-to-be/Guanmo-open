@@ -73,6 +73,7 @@ interface AppearanceSettings extends AppearanceConfigV1 {
 
 interface KnowledgeSettings {
   autoIndexEnabled: boolean
+  autoMemoryExtractionEnabled: boolean
 }
 
 interface UsageTrackingSettings {
@@ -188,6 +189,7 @@ const DEFAULT_WEB_SEARCH: WebSearchConfig = {
 
 const DEFAULT_KNOWLEDGE_SETTINGS: KnowledgeSettings = {
   autoIndexEnabled: true,
+  autoMemoryExtractionEnabled: true,
 }
 
 const DEFAULT_USAGE_TRACKING_SETTINGS: UsageTrackingSettings = {

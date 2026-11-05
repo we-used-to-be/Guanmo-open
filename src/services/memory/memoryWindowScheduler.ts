@@ -17,6 +17,7 @@ import { getDatabase, isDatabaseReady } from '@/services/database/db'
 import { loadMemories } from '@/services/database/persistence'
 import { idleScheduler } from '@/services/idleScheduler'
 import { isWebRuntime } from '@/services/runtimeCapabilities'
+import { useSettingsStore } from '@/stores/settingsStore'
 import type { ChatRequest } from '@/services/ai/types'
 import { persistMemoryIntake } from './memoryIntake'
 import { acquireMemoryWindow, countPendingMemoryWindowSources, deferMemoryWindow, finishMemoryWindow,
@@ -56,6 +57,17 @@ const cRecoveryScheduled = new Set<2 | 3>()
 let lastActivityAt = 0
 let foregroundBusy = false
 let activeWindowController: AbortController | null = null
+let recoveryClient: ModelClient | null = null
+
+const extractionEnabled = () => useSettingsStore.getState().knowledge.autoMemoryExtractionEnabled
+useSettingsStore.subscribe((state, previous) => {
+  if (state.knowledge.autoMemoryExtractionEnabled === previous.knowledge.autoMemoryExtractionEnabled) return
+  if (!state.knowledge.autoMemoryExtractionEnabled) {
+    activeWindowController?.abort('memory_extraction_disabled')
+    for (const entry of cIdleEntries.values()) if (entry.timer !== null) clearTimeout(entry.timer)
+    cIdleEntries.clear()
+  } else if (recoveryClient) scheduleWindowRecovery(recoveryClient, 3)
+})
 
 /** Reset module-local scheduling state for deterministic scheduler tests. */
 export function __resetMemoryWindowSchedulerForTests(): void {
@@ -104,7 +116,7 @@ export function setWindowSchedulerForegroundBusy(busy: boolean): void {
 
 async function runScheduledWindow(group: MemoryWindowGroup, strategy: 'B' | 'C', client: ModelClient,
   groupLastActivityAt = lastActivityAt): Promise<void> {
-  if (!isDatabaseReady()) return
+  if (!isDatabaseReady() || !extractionEnabled()) return
   const controller = new AbortController()
   activeWindowController = controller
   try { await runOneWindow(group, strategy, client, controller.signal, groupLastActivityAt) }
@@ -112,7 +124,7 @@ async function runScheduledWindow(group: MemoryWindowGroup, strategy: 'B' | 'C',
 }
 
 function armCIdleTail(key: string, entry: CIdleEntry): void {
-  if (foregroundBusy || isWebRuntime() || !entry.retryReady) return
+  if (foregroundBusy || isWebRuntime() || !entry.retryReady || !extractionEnabled()) return
   const remaining = Math.max(idleMs(entry.group) - (Date.now() - entry.lastActivityAt), (entry.retryAt ?? 0) - Date.now(), 0)
   entry.timer = setTimeout(() => {
     entry.timer = null
@@ -295,12 +307,13 @@ async function runOneWindow(group: MemoryWindowGroup, strategy: 'B' | 'C', clien
 // ---------------------------------------------------------------------------
 
 function scheduleB(group: MemoryWindowGroup, client: ModelClient): void {
-  if (isWebRuntime()) return
+  if (isWebRuntime() || !extractionEnabled()) return
   const key = groupKey(group)
   if (scheduledB.has(key)) return
   scheduledB.add(key)
   idleScheduler.enqueueOptional(async () => {
     scheduledB.delete(key)
+    if (!extractionEnabled()) return
     if (foregroundBusy) {
       scheduleCIdleTail(group, client, cIdleEntries.get(key)?.lastActivityAt ?? Date.now())
       return
@@ -326,7 +339,7 @@ function scheduleB(group: MemoryWindowGroup, client: ModelClient): void {
 // ---------------------------------------------------------------------------
 
 function scheduleCIdleTail(group: MemoryWindowGroup, client: ModelClient, lastActivityAt = Date.now()): void {
-  if (isWebRuntime()) return
+  if (isWebRuntime() || !extractionEnabled()) return
   const key = groupKey(group)
   const previous = cIdleEntries.get(key)
   if (previous?.timer !== null && previous?.timer !== undefined) clearTimeout(previous.timer)
@@ -347,13 +360,15 @@ function scheduleCIdleTail(group: MemoryWindowGroup, client: ModelClient, lastAc
 // ---------------------------------------------------------------------------
 
 export function scheduleWindowRecovery(client: ModelClient, policyVersion: 2 | 3 = 2): void {
-  if (isWebRuntime() || cRecoveryScheduled.has(policyVersion)) return
+  if (policyVersion === 3) recoveryClient = client
+  if (isWebRuntime() || !extractionEnabled() || cRecoveryScheduled.has(policyVersion)) return
   cRecoveryScheduled.add(policyVersion)
   if (!isDatabaseReady()) { cRecoveryScheduled.delete(policyVersion); return }
   idleScheduler.enqueueOptional(async () => {
     try {
       let cursor: string | null = null
       for (;;) {
+        if (!extractionEnabled()) return
         const page = await listPendingMemoryWindowGroupsPage(policyVersion, cursor)
         for (const pending of page.groups) {
           if (!isDatabaseReady()) return
@@ -375,7 +390,8 @@ export function scheduleWindowRecovery(client: ModelClient, policyVersion: 2 | 3
 
 /** Schedule only v3 global intake receipts created by the atomic chat-message command. */
 export async function scheduleGlobalWindowExtraction(sourceId: string, sessionId: string, client: ModelClient): Promise<void> {
-  if (isWebRuntime() || !isDatabaseReady()) return
+  recoveryClient = client
+  if (isWebRuntime() || !isDatabaseReady() || !extractionEnabled()) return
   const group = await getMemoryWindowGroupForSource(sourceId, sessionId, null, 3)
   if (!group) return
   const pending = await countPendingMemoryWindowSources(group)
@@ -397,7 +413,7 @@ interface PersistedUserSource {
 /** Read the already-persisted source and capture the scope before background work. */
 export async function schedulePersistedWindowExtraction(sourceId: string, sessionId: string,
   scopeKey: string | null, strategy: 'B' | 'C', client: ModelClient): Promise<void> {
-  if (isWebRuntime() || !isDatabaseReady()) return
+  if (isWebRuntime() || !isDatabaseReady() || !extractionEnabled()) return
   const [source] = await getDatabase().select<PersistedUserSource>(
     "SELECT id, session_id, role, parent_id, content, metadata, created_at FROM chat_messages WHERE id = $1 AND session_id = $2 AND role = 'user'",
     [sourceId, sessionId],
@@ -425,7 +441,7 @@ export async function scheduleWindowExtraction(
   strategy: 'B' | 'C',
   client: ModelClient,
 ): Promise<void> {
-  if (isWebRuntime() || !isDatabaseReady()) return
+  if (isWebRuntime() || !isDatabaseReady() || !extractionEnabled()) return
   lastActivityAt = Date.now()
   for (const [key, entry] of cIdleEntries) {
     if (entry.timer !== null) clearTimeout(entry.timer)

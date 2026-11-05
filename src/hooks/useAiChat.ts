@@ -19,6 +19,8 @@ import { hideLikelyToolJsonPrefix, stripToolCallJson } from '@/services/agent/to
 import { buildMemoryContextWithSources, isPersonalizedRewriteMemoryIntent, loadMemorySourceContext, searchMemories } from '@/services/memory/memoryService'
 import { scheduleGlobalWindowExtraction, setWindowSchedulerForegroundBusy } from '@/services/memory/memoryWindowScheduler'
 import { persistGlobalMemoryMessage } from '@/services/memory/memoryIntake'
+import { persistChatMessage } from '@/services/database/persistence'
+import { getDatabase, isDatabaseReady } from '@/services/database/db'
 import { normalizeMemoryScopeKey } from '@/services/memory/memoryPolicy'
 import type { ManualCapability } from '@/components/ai/ManualToolToggle'
 import { ensureSettingsSecretsHydrated } from '@/services/settingsSecrets'
@@ -295,6 +297,18 @@ export function useAiChat() {
         if (isWebRuntime()) return
         const message = initialUserMessage
         const title = (message.displayContent || message.content).slice(0, 30).replace(/\n/g, ' ') || '新对话'
+        if (!useSettingsStore.getState().knowledge.autoMemoryExtractionEnabled) {
+          if (!isDatabaseReady()) throw new Error('memory_intake_database_not_ready')
+          const now = Math.floor(Date.now() / 1000)
+          await getDatabase().execute(`INSERT INTO chat_sessions (id, title, created_at, updated_at)
+            VALUES ($1, $2, $3, $3) ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at`,
+          [memorySourceSessionId, title, now])
+          await persistChatMessage({
+            id: message.id!, sessionId: memorySourceSessionId, role: 'user', content: message.content,
+            metadata: encodeChatMessageMetadata(message), createdAt: message.timestamp!,
+          })
+          return
+        }
         await persistGlobalMemoryMessage({ id: memorySourceSessionId, title }, {
           id: message.id!, sessionId: memorySourceSessionId, content: message.content,
           metadata: encodeChatMessageMetadata(message), createdAt: message.timestamp!,
