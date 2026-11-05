@@ -207,6 +207,28 @@ describe('AI 面板视图返回', () => {
     performanceClock.mockRestore()
   })
 
+  it('短回复结束后滚动到底部', () => {
+    const frames = new Map<number, FrameRequestCallback>()
+    let frameId = 0
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId })
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => { frames.delete(id) })
+    const flushFrames = () => { const pending = [...frames.values()]; frames.clear(); act(() => pending.forEach((callback) => callback(performance.now()))) }
+    const view = render(<AiPanel />)
+    flushFrames()
+    const container = document.querySelector<HTMLElement>('[data-chat-message-id="assistant-1"]')!.parentElement!.parentElement!
+    Object.defineProperty(container, 'clientHeight', { configurable: true, value: 400 })
+    Object.defineProperty(container, 'scrollHeight', { configurable: true, value: 500 })
+    aiChat.streaming = true
+    aiChat.messages = [...aiChat.messages.slice(0, 1), { ...aiChat.messages[1], content: '短回复' }]
+    view.rerender(<AiPanel />)
+    flushFrames()
+    scrollTo.mockClear()
+    aiChat.streaming = false
+    view.rerender(<AiPanel />)
+    flushFrames()
+    expect(scrollTo).toHaveBeenCalledWith({ top: 500, behavior: 'smooth' })
+  })
+
   it('普通模式移除顶部导航，切回聊天保留滚动位置', () => {
     render(<AiPanel />)
     const container = document.querySelector<HTMLElement>('.overflow-y-auto')!

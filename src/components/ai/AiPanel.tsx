@@ -510,6 +510,10 @@ export function AiPanel({ fullscreenDragHandleProps, productTourActive = false }
 
       if (streamingMessageIdRef.current !== null) {
         streamingMessageIdRef.current = null
+        if (!lastStreamScrollAtRef.current) {
+          programmaticScrollUntilRef.current = Date.now() + 120
+          container.scrollTo({ top: container.scrollHeight, behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' })
+        }
         return
       }
       programmaticScrollUntilRef.current = Date.now() + 120
