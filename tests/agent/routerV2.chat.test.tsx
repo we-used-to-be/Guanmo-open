@@ -72,6 +72,15 @@ beforeEach(() => {
 })
 
 describe('Router V2 real chat orchestration', () => {
+  it('shows the current route in the timeline and clears the previous route on a new request', async () => {
+    const { result } = renderHook(() => useAiChat())
+    await act(async () => { await result.current.sendMessage('你好') })
+    expect(useChatStore.getState().timeline.map(item => item.label)).toContain('普通请求 · 快速回答问题')
+    await act(async () => { await result.current.sendMessage('再看看', true) })
+    const labels = useChatStore.getState().timeline.map(item => item.label)
+    expect(labels).toContain('Agent 流程 · 处理复杂任务')
+    expect(labels).not.toContain('普通请求 · 快速回答问题')
+  })
   it.each(['context', 'client-ready', 'client-unconfigured'] as const)('keeps the new foreground request busy when the cancelled request returns late from %s', async stage => {
     const prepared = await prepareConversationContext({ content: '匿名上下文', readFile: async () => '' })
     vi.mocked(prepareConversationContext).mockClear()

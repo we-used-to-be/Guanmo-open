@@ -447,6 +447,8 @@ export function useAiChat() {
       const mergedCandidates = routingDecision.candidates
       const mergedRequired = routingDecision.required
       const useAgentMode = routingDecision.mode === 'agent'
+      if (isCurrentRequest()) addTimelineItem({ type: 'local_search_found',
+        label: useAgentMode ? 'Agent 流程 · 处理复杂任务' : '普通请求 · 快速回答问题' })
 
       // --- 记忆预检索 ---
       let memoryContext = ''
