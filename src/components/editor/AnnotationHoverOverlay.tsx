@@ -35,11 +35,13 @@ interface OverlayState {
 }
 
 const HIDE_DELAY = 600
+const HOVER_REST_DELAY = 200
 
 export const AnnotationHoverOverlay = forwardRef<AnnotationHoverOverlayHandle, AnnotationHoverOverlayProps>(function AnnotationHoverOverlay({ onUpdate, onDelete }, ref) {
   const [state, setState] = useState<OverlayState | null>(null)
   const stateRef = useRef<OverlayState | null>(null)
   const hideTimerRef = useRef<number | null>(null)
+  const showTimerRef = useRef<number | null>(null)
   const closeTimerRef = useRef<number | null>(null)
   const textInputRef = useRef<HTMLTextAreaElement | null>(null)
   const [saving, setSaving] = useState(false)
@@ -64,6 +66,10 @@ export const AnnotationHoverOverlay = forwardRef<AnnotationHoverOverlayHandle, A
   }, [])
 
   const cancelHide = useCallback(() => {
+    if (showTimerRef.current !== null) {
+      window.clearTimeout(showTimerRef.current)
+      showTimerRef.current = null
+    }
     if (hideTimerRef.current !== null) {
       window.clearTimeout(hideTimerRef.current)
       hideTimerRef.current = null
@@ -92,17 +98,21 @@ export const AnnotationHoverOverlay = forwardRef<AnnotationHoverOverlayHandle, A
   const show = useCallback((mark: ReadingMark, anchor: AnnotationHoverAnchor) => {
     if (stateRef.current?.mode === 'text') return
     cancelHide()
-    const next: OverlayState = {
-      mark,
-      anchor,
-      mode: 'colors',
-      expanded: false,
-      textDraft: mark.note ?? '',
-      color: mark.color,
-      deleteConfirm: false,
-    }
-    stateRef.current = next
-    setState(next)
+    if (stateRef.current?.mark.id === mark.id) return
+    showTimerRef.current = window.setTimeout(() => {
+      showTimerRef.current = null
+      const next: OverlayState = {
+        mark,
+        anchor,
+        mode: 'colors',
+        expanded: false,
+        textDraft: mark.note ?? '',
+        color: mark.color,
+        deleteConfirm: false,
+      }
+      stateRef.current = next
+      setState(next)
+    }, HOVER_REST_DELAY)
   }, [cancelHide])
 
   const open = useCallback((mark: ReadingMark, anchor: AnnotationHoverAnchor) => {

@@ -209,13 +209,15 @@ function getSourceRangeAnchorRect(root: Element | null, from: number, to: number
   if (!root) return fallback
   const rects = getSourceRangeClientRects(root, from, to)
   if (rects.length === 0) return fallback
-  return {
-    top: Math.min(...rects.map((rect) => rect.top)),
-    right: Math.max(...rects.map((rect) => rect.right)),
-    bottom: Math.max(...rects.map((rect) => rect.bottom)),
-    left: Math.min(...rects.map((rect) => rect.left)),
-    triggerPoint: fallback.triggerPoint,
+  const point = fallback.triggerPoint
+  if (!point) return { ...rects[0] }
+  const distance = (rect: FloatingAnchorRect) => {
+    const dx = Math.max(rect.left - point.x, 0, point.x - rect.right)
+    const dy = Math.max(rect.top - point.y, 0, point.y - rect.bottom)
+    return dx * dx + dy * dy
   }
+  const closest = rects.reduce((best, rect) => distance(rect) < distance(best) ? rect : best)
+  return { ...closest, triggerPoint: point }
 }
 
 function countLineBreaks(text: string): number {
@@ -1486,7 +1488,7 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
   }, [])
 
   // 批注 Hover 仅在 Preview Root 做事件委托：高亮片段本身是渲染派生数据，
-  // 不为每条 ReadingMark 注册监听器，也不通过 pointermove 跟踪鼠标。
+  // 不为每条 ReadingMark 注册监听器；移动时等待鼠标停稳再切换。
   useEffect(() => {
     const root = rootRef.current
     if (!root || !annotationOverlayRef) return
@@ -1501,7 +1503,8 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       const markId = hit.dataset.gmReadingMarkId?.split(',')[0]
       const mark = markId ? readingMarksByIdRef.current.get(markId) : undefined
       if (!mark) return
-      const rect = hit.getBoundingClientRect()
+      const rects = Array.from(hit.getClientRects())
+      const rect = rects.find((item) => event.clientY >= item.top && event.clientY <= item.bottom && event.clientX >= item.left && event.clientX <= item.right) ?? hit.getBoundingClientRect()
       const anchor: AnnotationHoverAnchor = { top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left, triggerPoint: { x: event.clientX, y: event.clientY } }
       annotationOverlayRef.current?.show(mark, anchor)
     }
@@ -1514,10 +1517,13 @@ export const MarkdownPreview = memo(forwardRef(function MarkdownPreview({
       if (related instanceof Node && (hit.contains(related) || (related instanceof Element && related.closest('[data-annotation-hover-overlay="true"]')))) return
       annotationOverlayRef.current?.scheduleHide()
     }
+    const handlePointerMove = (event: PointerEvent) => handlePointerOver(event)
     root.addEventListener('pointerover', handlePointerOver)
+    root.addEventListener('pointermove', handlePointerMove)
     root.addEventListener('pointerout', handlePointerOut)
     return () => {
       root.removeEventListener('pointerover', handlePointerOver)
+      root.removeEventListener('pointermove', handlePointerMove)
       root.removeEventListener('pointerout', handlePointerOut)
     }
   }, [annotationOverlayRef])

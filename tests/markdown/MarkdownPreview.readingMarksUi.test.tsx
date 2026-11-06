@@ -200,6 +200,7 @@ describe('MarkdownPreview 批注浮层', () => {
     const entry = host!.querySelector<HTMLElement>('[data-gm-reading-mark-id]')
     expect(entry).not.toBeNull()
     fireEvent.pointerOver(entry!)
+    act(() => vi.advanceTimersByTime(200))
     fireEvent.pointerOut(entry!, { relatedTarget: document.body })
     act(() => vi.advanceTimersByTime(599))
     expect(screen.getByRole('button', { name: '查看高亮批注' })).toBeInTheDocument()
@@ -207,6 +208,7 @@ describe('MarkdownPreview 批注浮层', () => {
     expect(screen.queryByRole('button', { name: '查看高亮批注' })).not.toBeInTheDocument()
 
     fireEvent.pointerOver(entry!)
+    act(() => vi.advanceTimersByTime(200))
     const reopenedTrigger = screen.getByRole('button', { name: '查看高亮批注' })
     const reopenedOverlay = reopenedTrigger.closest('[data-annotation-hover-overlay="true"]') as HTMLElement
     fireEvent.pointerOver(reopenedOverlay)
@@ -218,6 +220,37 @@ describe('MarkdownPreview 批注浮层', () => {
     act(() => vi.advanceTimersByTime(1))
     expect(screen.queryByRole('button', { name: '查看高亮批注' })).not.toBeInTheDocument()
     vi.useRealTimers()
+  })
+
+  it('经过相邻批注时保留原入口，停稳后才切换', () => {
+    vi.useFakeTimers()
+    const first = makeMark('hover-first', '第一段批注目标', '第一条')
+    const second = makeMark('hover-second', '第二段批注目标', '第二条')
+    const overlayRef = { current: null } as MutableRefObject<AnnotationHoverOverlayHandle | null>
+    render(<>
+      <MarkdownPreview content={content} documentKey="doc-hover" documentVersion={1} filePath={documentPath} readingMarks={[first, second]} annotationOverlayRef={overlayRef} />
+      <AnnotationHoverOverlay ref={overlayRef} onUpdate={async (mark, patch) => ({ ...mark, ...patch })} onDelete={async () => undefined} />
+    </>, { container: host! })
+    const entries = host!.querySelectorAll<HTMLElement>('[data-gm-reading-mark-id]')
+    fireEvent.pointerOver(entries[0], { clientX: 120, clientY: 140 })
+    act(() => vi.advanceTimersByTime(199))
+    expect(screen.queryByRole('button', { name: '查看文字批注' })).not.toBeInTheDocument()
+    act(() => vi.advanceTimersByTime(1))
+    fireEvent.pointerOut(entries[0], { relatedTarget: entries[1] })
+    fireEvent.pointerOver(entries[1], { clientX: 120, clientY: 120 })
+    act(() => vi.advanceTimersByTime(150))
+    fireEvent.pointerMove(entries[1], { clientX: 120, clientY: 110 })
+    act(() => vi.advanceTimersByTime(150))
+    const trigger = screen.getByRole('button', { name: '查看文字批注' })
+    fireEvent.pointerEnter(trigger.closest('[data-annotation-hover-overlay="true"]')!)
+    act(() => vi.advanceTimersByTime(200))
+    fireEvent.click(trigger)
+    expect(screen.getByRole('textbox', { name: '批注内容' })).toHaveValue('第一条')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    fireEvent.pointerOver(entries[1], { clientX: 120, clientY: 120 })
+    act(() => vi.advanceTimersByTime(200))
+    fireEvent.click(screen.getByRole('button', { name: '查看文字批注' }))
+    expect(screen.getByRole('textbox', { name: '批注内容' })).toHaveValue('第二条')
   })
 
   it('已有纯高亮 Hover 展开操作并支持二次确认删除', async () => {
@@ -276,17 +309,18 @@ describe('MarkdownPreview 批注浮层', () => {
       range.setEnd(textNode, offset)
       return range
     }
+    vi.mocked(Range.prototype.getClientRects).mockReturnValue([makeRect(100, 80, 180, 20), makeRect(160, 80, 180, 20)] as unknown as DOMRectList)
     render(<MarkdownPreview content={content} documentKey="doc-selection" documentVersion={1} filePath={documentPath} onCreateReadingMark={async () => ({ status: 'created' as const, mark: makeMark('created', '第一段批注目标', '新批注') })} />, { container: host! })
     const block = host!.querySelector<HTMLElement>('[data-md-block-index]')
     expect(block).not.toBeNull()
     fireEvent.mouseDown(block!, { button: 0, clientX: 4, clientY: 110 })
-    fireEvent.mouseUp(document, { clientX: 120, clientY: 110 })
+    fireEvent.mouseUp(document, { clientX: 120, clientY: 170 })
 
     const trigger = await waitFor(() => screen.getByRole('button', { name: '添加批注' }))
     const toolbar = trigger.closest('.gm-reading-mark-toolbar')
     expect(toolbar).not.toBeNull()
     expect(Number.parseFloat((toolbar as HTMLElement).style.left)).toBe(120)
-    expect(Number.parseFloat((toolbar as HTMLElement).style.top)).toBe(62)
+    expect(Number.parseFloat((toolbar as HTMLElement).style.top)).toBe(122)
     fireEvent.mouseEnter(toolbar!)
     expect(toolbar!.querySelector('.gm-reading-mark-toolbar-actions')?.className).toContain('is-expanded')
     fireEvent.mouseLeave(toolbar!)
