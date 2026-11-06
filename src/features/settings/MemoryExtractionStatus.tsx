@@ -139,7 +139,7 @@ export function MemoryExtractionStatus() {
                 ? `模型返回 ${summary.proposed} 条候选，其中 ${summary.rejected} 条未通过格式或来源等校验；最终写入 ${summary.inserted} 条，另有 ${summary.skipped} 条被跳过或已存在。`
                 : '本批未获得模型判断（没有可用输入或输入超限）。'}</p>
               {summary.formatRepaired && <p className="mb-2 text-micro text-gm-text-secondary">本批已使用一次格式纠错预算。</p>}
-              <p className="mb-3 text-micro text-gm-text-tertiary">模型不提供逐条判断理由；候选与写入数量可能不同。</p>
+              {summary.modelCalled && <p className="mb-3 whitespace-pre-wrap break-words text-micro text-gm-text-tertiary">{summary.reasons ? `模型判断：${summary.reasons}` : '本批没有可显示的模型判断理由。'}</p>}
               {summary.rejectionReasons?.map((reason, index) => <p key={index} className="mb-1 text-caption text-gm-text-secondary">校验拒绝：{REJECTION_LABELS[reason] ?? '未知原因'}</p>)}
             </div>}
             {page ? (

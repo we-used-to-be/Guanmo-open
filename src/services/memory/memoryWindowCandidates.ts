@@ -131,16 +131,21 @@ function validateItem(item: unknown, packet: MemoryWindowPacket, scopeKey: strin
 
 /** Parses proposals only; accepted items are not permission to persist without semantic validation. */
 export function parseMemoryWindowCandidates(text: string, packet: MemoryWindowPacket, scopeKey: string | null): {
-  candidates: MemoryWindowCandidate[]; rejections: Rejection[]
+  candidates: MemoryWindowCandidate[]; rejections: Rejection[]; reasons?: string
 } {
   const trimmed = text.trim(), fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
   const parsed: unknown = JSON.parse(fenced ? fenced[1] : trimmed)
-  if (!Array.isArray(parsed) || parsed.length > 6) throw new Error('invalid_memory_window_model_output')
+  const object = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null
+  const items = object ? object.candidates : parsed
+  if (!Array.isArray(items) || items.length > 6) throw new Error('invalid_memory_window_model_output')
+  const reason = typeof object?.reasons === 'string' ? object.reasons.trim() : ''
+  const reasons = reason && reason.length <= 200 && !containsForbiddenMemorySecret(reason) && !containsSensitiveMemoryText(reason)
+    ? reason : undefined
   const candidates: MemoryWindowCandidate[] = [], rejections: Rejection[] = []
-  for (const item of parsed) {
+  for (const item of items) {
     const checked = validateItem(item, packet, scopeKey)
     if (typeof checked === 'string') rejections.push(checked)
     else candidates.push(checked)
   }
-  return { candidates, rejections }
+  return { candidates, rejections, ...(reasons ? { reasons } : {}) }
 }

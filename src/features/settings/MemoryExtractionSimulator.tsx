@@ -106,7 +106,7 @@ export function MemoryExtractionSimulator() {
       try { parsed = parseMemoryWindowCandidates(response.content, packet, null) } catch { /* Retry malformed output once. */ }
       if (!parsed || (!parsed.candidates.length && parsed.rejections.length > 0 && parsed.rejections.every(reason => reason === 'shape'))) {
         const correction = { ...request.request, messages: request.request.messages.map((message, index) => index === 0
-          ? { ...message, content: message.content + '\n上次输出的 JSON 格式或字段类型无效。请重新按要求输出；confidence 必须是 0 至 1 的数字，禁止使用 high 等字符串。不要输出解释。' }
+          ? { ...message, content: message.content + '\n上次输出的 JSON 格式或字段类型无效。请重新按要求输出；confidence 必须是 0 至 1 的数字，禁止使用 high 等字符串。' }
           : message) }
         if (new TextEncoder().encode(JSON.stringify(correction)).length + 256 > 36000) throw new Error('格式纠错请求超过输入预算')
         parsed = parseMemoryWindowCandidates((await client.chat(correction)).content, packet, null)

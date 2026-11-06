@@ -199,6 +199,7 @@ async function runOneWindow(group: MemoryWindowGroup, strategy: 'B' | 'C', clien
       }
       if (proposals.kind !== 'proposals') continue
       history.modelCalled = true
+      if (proposals.reasons) history.reasons = proposals.reasons
       if (proposals.formatRepaired || claim.record.formatRepairAttempted) history.formatRepaired = true
       history.proposed += proposals.candidates.length + proposals.rejected
       history.rejected += proposals.rejected

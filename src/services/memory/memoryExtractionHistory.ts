@@ -7,6 +7,7 @@ export interface ExtractionHistory {
   sources: Array<{ sourceId: string; sessionId: string; sourceFingerprint: string }>
   modelCalled: boolean
   formatRepaired?: boolean
+  reasons?: string
   proposed: number
   rejected: number
   rejectionReasons?: string[]
@@ -17,7 +18,7 @@ export interface ExtractionHistory {
 
 const KEY = 'memory-extraction:v3:history'
 
-/** One atomic SQLite statement keeps two summaries, without copying chat or model text. */
+/** One atomic SQLite statement keeps two summaries without copying source messages. */
 export async function saveExtractionHistory(claim: MemoryWindowClaim, summary: Omit<ExtractionHistory, 'id' | 'completedAt' | 'sources'>): Promise<void> {
   if (!isDatabaseReady()) return
   const sources = claim.record.receiptValues.map(value => {
@@ -50,6 +51,7 @@ export async function loadExtractionHistory(): Promise<ExtractionHistory[]> {
       && (item.rejectionReasons === undefined || Array.isArray(item.rejectionReasons) && item.rejectionReasons.length <= 6
         && item.rejectionReasons.every((reason: unknown) => typeof reason === 'string' && ['shape', 'source', 'sensitive', 'scope', 'unsupported_value', 'content_mismatch', 'undecided', 'negation', 'policy'].includes(reason)))
       && (item.formatRepaired === undefined || typeof item.formatRepaired === 'boolean')
+      && (item.reasons === undefined || typeof item.reasons === 'string' && item.reasons.length <= 200)
       && typeof item.modelCalled === 'boolean' && ['proposed', 'rejected', 'inserted', 'skipped']
         .every(key => Number.isSafeInteger(item[key]) && item[key] >= 0))
   } catch { return [] }

@@ -8,8 +8,8 @@ import { isMemoryWindowLeaseCurrent, reserveMemoryWindowFormatRepair } from './m
 import type { MemoryWindowClaim } from './memoryWindowLedger'
 import { classifyGlobalMemoryInputGap, isVisibleSelectionQuestion } from './memoryInputPolicy'
 
-export const MEMORY_WINDOW_PROMPT = `从连续对话中提取适合跨所有工作区和文档长期使用的全局记忆。只提取用户明确表达或明确接受的稳定事实；用户明确陈述的长期学习方向和长期目标也是稳定事实，应分别提取，不因“正在学习”而一概忽略。用户明确表达并长期保持的重复习惯也应提取，保留实际频率和持续时间，不要将一次性行为当作习惯。用户明确表达的长期否定偏好也应提取，保留“不喜欢”等否定词，不要误写为肯定偏好。助手建议、引用、临时请求、普通闲聊和项目/文档限定内容不保存。逐项判断适用范围，跳过仅在某个项目、文档、工作区或当前任务内生效的约定，继续检查其他事实。用户明确表达的稳定身份（例如“我是某项目的开发者”）描述的是用户本人，可以跨工作区提取。把“以后聊到时留意一下”理解为可能希望在未来对话复用的信号，提取其中明确的稳定事实，保留“可能”等限定，不要把试验说明或临时说法提取为长期指令。前缀只提供上下文，事实来源必须包含新用户消息。含糊、推测或来源不足时返回空数组。
-只输出 JSON 数组，最多六项；无事实输出 []。每项包含 content、category（preference/learning/profile/instruction）、kind（semantic/episodic）、scope（必须为 global）、primarySourceId、supportingSourceIds、subject、factKey、factValue、evidenceQuote、confidence 和 sensitivity（normal/sensitive）。evidenceQuote 必须从 primarySourceId 对应的用户消息逐字复制能支持该事实的完整片段，不得改写；content 是事实概括，不得扩大含义。supportingSourceIds 只包含其他必要来源的消息 ID，不能包含 primarySourceId；没有其他来源时使用空数组 []。confidence 必须是 0 到 1 之间的 JSON 数字，例如 0.95，不能写 high 或字符串。优先让 factValue 是来源文本和 content 中同时逐字出现的简短核心词；允许基于原文忠实概括，禁止添加原文没有的事实。拆分两个独立事实，同一批次的同义事实只返回一次。例如用户说“我的职业是独立开发者，我长期从事软件开发”，可使用 factValue“独立开发者”、content“用户的职业是独立开发者”、evidenceQuote“我的职业是独立开发者”。疾病、诊断、治疗或具体财务状态标记 sensitive；普通的健康饮食偏好不因此标记 sensitive。密码、密钥、验证码、证件号、账户号、精确地址及联系方式不得提取。来源必须使用消息 ID；引用助手建议时，必须同时提供该助手回复及其 parent 用户消息，并由 primarySourceId 对应的新用户消息明确接受。`
+export const MEMORY_WINDOW_PROMPT = `从连续对话中提取适合跨所有工作区和文档长期使用的全局记忆。只提取用户明确表达或明确接受的稳定事实；用户明确陈述的长期学习方向和长期目标也是稳定事实，应分别提取，不因“正在学习”而一概忽略。用户明确表达并长期保持的重复习惯也应提取，保留实际频率和持续时间，不要将一次性行为当作习惯。用户明确表达的长期否定偏好也应提取，保留“不喜欢”等否定词，不要误写为肯定偏好。助手建议、引用、临时请求、普通闲聊和项目/文档限定内容不保存。逐项判断适用范围，跳过仅在某个项目、文档、工作区或当前任务内生效的约定，继续检查其他事实。用户明确表达的稳定身份（例如“我是某项目的开发者”）描述的是用户本人，可以跨工作区提取。把“以后聊到时留意一下”理解为可能希望在未来对话复用的信号，提取其中明确的稳定事实，保留“可能”等限定，不要把试验说明或临时说法提取为长期指令。前缀只提供上下文，事实来源必须包含新用户消息。含糊、推测或来源不足时不提取候选。
+只输出 JSON 对象，格式为 {"reasons":"简短总结","candidates":[]}。reasons 用不超过 100 字概括提取了哪些类型的事实及其长期价值；没有提取时简要说明原因。不要复述隐私、敏感信息或具体事实值，不要声称候选已经保存。candidates 最多六项；无事实时为空数组。每项包含 content、category（preference/learning/profile/instruction）、kind（semantic/episodic）、scope（必须为 global）、primarySourceId、supportingSourceIds、subject、factKey、factValue、evidenceQuote、confidence 和 sensitivity（normal/sensitive）。evidenceQuote 必须从 primarySourceId 对应的用户消息逐字复制能支持该事实的完整片段，不得改写；content 是事实概括，不得扩大含义。supportingSourceIds 只包含其他必要来源的消息 ID，不能包含 primarySourceId；没有其他来源时使用空数组 []。confidence 必须是 0 到 1 之间的 JSON 数字，例如 0.95，不能写 high 或字符串。优先让 factValue 是来源文本和 content 中同时逐字出现的简短核心词；允许基于原文忠实概括，禁止添加原文没有的事实。拆分两个独立事实，同一批次的同义事实只返回一次。例如用户说“我的职业是独立开发者，我长期从事软件开发”，可使用 factValue“独立开发者”、content“用户的职业是独立开发者”、evidenceQuote“我的职业是独立开发者”。疾病、诊断、治疗或具体财务状态标记 sensitive；普通的健康饮食偏好不因此标记 sensitive。密码、密钥、验证码、证件号、账户号、精确地址及联系方式不得提取。来源必须使用消息 ID；引用助手建议时，必须同时提供该助手回复及其 parent 用户消息，并由 primarySourceId 对应的新用户消息明确接受。`
 export const MEMORY_WINDOW_VERIFY_PROMPT = `逐项核对候选是否完全由可见用户来源支持。不得把助手建议、提问、未决定、引用、暂时任务或缺失片段当作用户决定；不得扩大项目范围、时间范围或否定含义。任何细节不确定时判 false。只输出 JSON 数组，每项包含 index（从 0 开始）和 supported（布尔值），必须覆盖每个候选一次。`
 
 interface ModelRequest { messages: ChatMessage[]; temperature: number; maxTokens: number; reasoningMode: 'off' }
@@ -92,7 +92,7 @@ export function createMemoryWindowRequest(packet: MemoryWindowPacket, scopeKey: 
 
 type CallResult = { kind: 'response'; content: string; usage: { promptTokens: number; completionTokens: number } | null; elapsedMs: number }
   | { kind: 'deferred' | 'lost_lease' | 'retry' }
-type ProposalResult = { kind: 'proposals'; candidates: MemoryWindowCandidate[]; rejected: number; rejectionReasons: string[]; formatRepaired?: boolean;
+type ProposalResult = { kind: 'proposals'; candidates: MemoryWindowCandidate[]; rejected: number; rejectionReasons: string[]; reasons?: string; formatRepaired?: boolean;
   usage: { promptTokens: number; completionTokens: number } | null; elapsedMs: number }
   | { kind: 'noop' | 'deferred' | 'lost_lease' | 'oversize' | 'retry' }
 
@@ -233,7 +233,7 @@ export async function requestMemoryWindowProposals(claim: MemoryWindowClaim, pac
   let formatRepaired = false
   if (packet.policyVersion === 3 && needsFormatRepair) {
     const correction: ModelRequest = { ...built.request, messages: [...built.request.messages, {
-      role: 'user', content: '上次输出的 JSON 格式或字段类型无效。请重新按要求输出；confidence 必须是 0 至 1 的数字，禁止使用 high 等字符串。不要输出解释。',
+      role: 'user', content: '上次输出的 JSON 格式或字段类型无效。请重新按要求输出；confidence 必须是 0 至 1 的数字，禁止使用 high 等字符串。',
     }] }
     if (new TextEncoder().encode(JSON.stringify(correction)).length + 256 <= 36_000) {
       const reservation = await reserveMemoryWindowFormatRepair(claim)
@@ -253,7 +253,7 @@ export async function requestMemoryWindowProposals(claim: MemoryWindowClaim, pac
       completionTokens: firstUsage.completionTokens + result.usage.completionTokens } : null
     : firstUsage
   return { kind: 'proposals', candidates: parsed.candidates, rejected: parsed.rejections.length, rejectionReasons: parsed.rejections,
-    usage, elapsedMs: formatRepaired ? firstElapsedMs + result.elapsedMs : firstElapsedMs,
+    ...(parsed.reasons ? { reasons: parsed.reasons } : {}), usage, elapsedMs: formatRepaired ? firstElapsedMs + result.elapsedMs : firstElapsedMs,
     ...(formatRepaired ? { formatRepaired: true } : {}) }
 }
 

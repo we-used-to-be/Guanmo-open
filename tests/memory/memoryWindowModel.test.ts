@@ -29,6 +29,17 @@ const response = JSON.stringify([{ content: '技术回答优先给出结论', ca
 beforeEach(() => { vi.clearAllMocks(); mocks.lease.mockResolvedValue(true); mocks.reserve.mockResolvedValue('reserved') })
 
 describe('bounded memory model proposals', () => {
+  it('returns a bounded explanation with candidates or an empty result, and accepts legacy arrays', async () => {
+    const chat = vi.fn().mockResolvedValueOnce({ content: JSON.stringify({ reasons: '提取了稳定的回答偏好，适合长期使用。', candidates: JSON.parse(response) }) })
+      .mockResolvedValueOnce({ content: JSON.stringify({ reasons: '只有临时问题，没有长期事实。', candidates: [] }) })
+      .mockResolvedValueOnce({ content: response })
+      .mockResolvedValueOnce({ content: JSON.stringify({ reasons: '邮箱 anon@example.invalid', candidates: [] }) })
+    const call = () => requestMemoryWindowProposals(claim, packet(), [], { chat }, { foregroundBusy: () => false })
+    expect(await call()).toMatchObject({ kind: 'proposals', reasons: '提取了稳定的回答偏好，适合长期使用。', candidates: [{}] })
+    expect(await call()).toMatchObject({ kind: 'proposals', reasons: '只有临时问题，没有长期事实。', candidates: [] })
+    expect(await call()).not.toHaveProperty('reasons')
+    expect(await call()).not.toHaveProperty('reasons')
+  })
   it('compares related global memories and rejects hallucinated target IDs', async () => {
     const input = packet(); input.policyVersion = 3
     const candidates = parseMemoryWindowCandidates(JSON.stringify([{ content: '用户偏爱回答先给结论', category: 'preference', kind: 'semantic', scope: 'global',

@@ -21,11 +21,13 @@ it('retains only two summaries without copying message content', async () => {
   state.db.exec('CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER)')
   for (const id of ['one', 'two', 'three']) {
     const claim = { record: { windowId: id, receiptValues: [JSON.stringify({ sourceId: id, sessionId: 'session', sourceFingerprint: 'hash', content: 'private' })] } } as MemoryWindowClaim
-    await saveExtractionHistory(claim, { modelCalled: true, proposed: 1, rejected: 0, inserted: 0, skipped: 1,
+    await saveExtractionHistory(claim, { modelCalled: true, proposed: 1, rejected: 0, inserted: 0, skipped: 1, ...(id === 'three' ? { reasons: '稳定的回答偏好适合长期使用。' } : {}),
       decisions: [{ sourceId: id, outcome: 'skipped', reason: 'conflict' }] })
   }
   expect((await loadExtractionHistory()).map(item => item.id)).toEqual(['three', 'two'])
   expect((await loadExtractionHistory())[0].decisions).toEqual([{ sourceId: 'three', outcome: 'skipped', reason: 'conflict' }])
+  expect((await loadExtractionHistory())[0].reasons).toBe('稳定的回答偏好适合长期使用。')
+  expect((await loadExtractionHistory())[1].reasons).toBeUndefined()
   const stored = state.db.prepare('SELECT value FROM settings').get() as { value: string }
   expect(stored.value).not.toContain('private')
 })
