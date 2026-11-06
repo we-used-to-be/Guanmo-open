@@ -206,7 +206,7 @@ export function adaptAiReadingArtifact(
     quote: artifact.source?.quote || getAnnotationStructuredContent(artifact)?.quote || undefined,
     content: artifact.content,
     question: getReadingArtifactQuestion(artifact) || undefined,
-    references,
+    references: getReadingArtifactReferences(artifact, true),
     originalSelections: getReadingArtifactOriginalSelections(artifact),
     referencedSourceIds: getReadingArtifactReferencedSourceIds(artifact),
     createdAt: artifact.createdAt,

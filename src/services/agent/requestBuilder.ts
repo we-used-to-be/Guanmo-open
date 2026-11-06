@@ -2,6 +2,7 @@ import type { ChatMessage } from '@/services/ai/types'
 import type { ContextTag } from '@/types/contextTag'
 import type { AgentEditTarget } from '@/services/aiScope'
 import { prepareChatHistoryForModel } from '@/services/aiChatMessages'
+import { annotateMemoryContext, createSourceReferenceRegistry } from '@/services/ai/sourceReferences'
 import type { AppContext } from './intentDetector'
 import type { AgentRunRequest, AgentStep, RoutingDecision } from './types'
 
@@ -86,7 +87,9 @@ export function buildAgentRunRequest(options: {
     (tag) => tag.type === 'selection' || tag.type === 'file'
   ).length
   const editTargetsContext = buildEditTargetsContext(editTargets)
-  const untrustedContexts = [options.tagContext, editTargetsContext, options.memoryContext].filter(Boolean)
+  const memorySources = options.prefetchedMemory?.sources || []
+  const memoryContext = annotateMemoryContext(options.memoryContext, memorySources, createSourceReferenceRegistry(memorySources))
+  const untrustedContexts = [options.tagContext, editTargetsContext, memoryContext].filter(Boolean)
   const untrustedContext = untrustedContexts.join('\n\n')
   const currentUserIntent = options.routingDecision.explicitMemoryWriteIntent
     ? `记住：${content}`

@@ -127,7 +127,9 @@ describe('AI chat orchestration helpers', () => {
       messages: [],
       contextTags: [selectionTag],
       tagContext: '【当前上下文】匿名内容',
-      memoryContext: '',
+      memoryContext: '【长期记忆】\n[记忆 1]\n分类：偏好\n内容：简洁回答',
+      prefetchedMemory: { query: '翻译并替换原文', result: '简洁回答', topK: 3,
+        sources: [{ kind: 'memory', memoryId: 'anonymous', content: '简洁回答' }] },
       routingDecision,
       hasRecentEditContext: false,
       hasPrefetchedMemoryLookup: false,
@@ -143,6 +145,7 @@ describe('AI chat orchestration helpers', () => {
     expect(built.request.currentEditTargetCount).toBe(1)
     expect(built.request.hasCurrentEditTarget).toBe(true)
     expect(built.request.untrustedContext).toContain('targetId: edit-target-1')
+    expect(built.request.untrustedContext).toContain('[S1]\n分类：偏好\n内容：简洁回答')
   })
 
   it('maps Agent result sources and final messages without changing user-visible text', () => {

@@ -1586,7 +1586,7 @@ function ReadingArtifactCard({
     ? getAnnotationStructuredContent(artifact)
     : null
   const question = getReadingArtifactQuestion(artifact)
-  const references = getReadingArtifactReferences(artifact)
+  const references = getReadingArtifactReferences(artifact, true)
 
   const sourceLabel = artifact.source?.fileName
     ? [

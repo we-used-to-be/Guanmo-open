@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   createSourceReferenceRegistry,
+  annotateMemoryContext,
   normalizeSafeWebSourceUrl,
   parseSourceReferences,
   registerSourceReferences,
@@ -24,12 +25,24 @@ const webSource: ChatMessageSource = {
 }
 
 describe('source reference registry', () => {
-  it('deduplicates memory snapshots and keeps them visible alongside cited documents', () => {
+  it('deduplicates memory snapshots and selects only cited sources of any kind', () => {
     const memory = { kind: 'memory' as const, memoryId: 'anonymous-memory', content: '默认中文回答' }
     const registry = createSourceReferenceRegistry([localSource, memory, { ...memory }])
     expect(registry.entries.map(entry => entry.id)).toEqual(['S1', 'S2'])
-    expect(resolveStoredSourceReferences(registry.entries.map(entry => entry.source), ['S1']).sources).toEqual([localSource, memory])
+    expect(resolveStoredSourceReferences(registry.entries.map(entry => entry.source), ['S1']).sources).toEqual([localSource])
     expect(resolveStoredSourceReferences(registry.entries.map(entry => entry.source), ['S2']).sources).toEqual([memory])
+  })
+  it('binds prefetched memory headings to shared IDs without renumbering existing knowledge sources', () => {
+    const memories = [{ kind: 'memory' as const, memoryId: 'm1', content: '偏好甲' },
+      { kind: 'memory' as const, memoryId: 'm2', content: '偏好乙' }]
+    const first = createSourceReferenceRegistry([localSource])
+    const registry = registerSourceReferences(first, memories)
+    const context = '【长期记忆】\n[记忆 1]\n分类：偏好\n内容：偏好甲\n\n[记忆 2]\n分类：偏好\n内容：偏好乙'
+    expect(annotateMemoryContext(context, memories, registry)).toContain('[S2]\n分类：偏好\n内容：偏好甲')
+    expect(annotateMemoryContext(context, memories, registry)).toContain('[S3]\n分类：偏好\n内容：偏好乙')
+    expect(registerSourceReferences(registry, memories)).toEqual(registry)
+    expect(resolveStoredSourceReferences(registry.entries.map(entry => entry.source), []).sources).toHaveLength(3)
+    expect(resolveStoredSourceReferences(registry.entries.map(entry => entry.source), ['S99']).sources).toHaveLength(3)
   })
   it('assigns continuous IDs from included sources instead of original RAG numbers', () => {
     const registry = createSourceReferenceRegistry([

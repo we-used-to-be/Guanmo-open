@@ -196,6 +196,19 @@ export function parseSourceReferences(
   }
 }
 
+/** Bind only generated memory headings to this request's shared source IDs. */
+export function annotateMemoryContext(
+  context: string,
+  sources: readonly ChatMessageSource[],
+  registry: SourceReferenceRegistry,
+): string {
+  return context.replace(/^\[记忆 (\d+)\](?=\n分类：)/gm, (heading, number: string) => {
+    const source = sources[Number(number) - 1]
+    const id = source?.kind === 'memory' ? findSourceReferenceId(registry, source) : undefined
+    return id ? `[${id}]` : heading
+  })
+}
+
 /**
  * 从持久化的完整候选来源中恢复正文实际引用的展示子集。
  * 旧消息没有 ID 时，以及所有 ID 都无效时，安全降级为完整候选来源。
@@ -225,7 +238,6 @@ export function resolveStoredSourceReferences(
   }
 
   return selected.length > 0
-    ? { sources: [...selected, ...candidates.filter(source => source.kind === 'memory'
-      && !selected.some(item => item.kind === 'memory' && item.memoryId === source.memoryId))], hasValidReferences: true }
+    ? { sources: selected, hasValidReferences: true }
     : { sources: candidates, hasValidReferences: false }
 }

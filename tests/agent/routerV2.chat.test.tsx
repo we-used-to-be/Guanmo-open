@@ -193,6 +193,8 @@ describe('Router V2 real chat orchestration', () => {
     const { result } = renderHook(() => useAiChat())
     await act(async () => { await result.current.sendMessage('这个说法靠谱吗？') })
     expect(mocks.agent).not.toHaveBeenCalled()
+    expect(JSON.stringify(mocks.answer.mock.calls[0][0].messages)).toContain('[S1]')
+    expect(JSON.stringify(mocks.answer.mock.calls[0][0].messages)).not.toContain('[记忆 1]')
     expect(useChatStore.getState().messages.find(message => message.role === 'assistant')?.sources).toEqual([
       { kind: 'memory', memoryId: memory.id, content: memory.content },
     ])

@@ -11,7 +11,7 @@ import { getDatabase, isDatabaseReady } from './db'
 import type { ChatMessageSource, MemoryChatMessageSource, ReadingScope } from '@/services/ai/types'
 import { parseMarkdownBlocks, type MarkdownBlock } from '@/services/markdownBlocks'
 import { decodeOriginalSelections, type OriginalSelectionSnapshot } from '@/services/originalSelections'
-import { buildReadingArtifactReferences, type SourceReferenceId } from '@/services/ai/sourceReferences'
+import { buildReadingArtifactReferences, resolveStoredSourceReferences, type SourceReferenceId } from '@/services/ai/sourceReferences'
 
 export { buildReadingArtifactReferences }
 
@@ -280,8 +280,16 @@ export function getReadingArtifactReferencedSourceIds(artifact: ReadingArtifact)
 }
 
 /** 安全读取成果来源；旧成果或损坏项降级为空数组。 */
-export function getReadingArtifactReferences(artifact: ReadingArtifact): ReadingArtifactReference[] {
+export function getReadingArtifactReferences(artifact: ReadingArtifact, citedOnly = false): ReadingArtifactReference[] {
   if (!isPlainObject(artifact.structuredContent)) return []
+  if (citedOnly && Array.isArray(artifact.structuredContent.sourceCandidates)) {
+    const candidates = artifact.structuredContent.sourceCandidates.flatMap(item => {
+      const decoded = decodeReadingArtifactReference(item)
+      return decoded ? [decoded] : []
+    })
+    const selected = resolveStoredSourceReferences(candidates, getReadingArtifactReferencedSourceIds(artifact))
+    if (selected.hasValidReferences) return buildReadingArtifactReferences(selected.sources, getReadingArtifactOriginalSelections(artifact))
+  }
   const value = artifact.structuredContent.references
   const references = Array.isArray(value) ? value.flatMap((item) => {
     const decoded = decodeReadingArtifactReference(item)

@@ -7,7 +7,7 @@ import { getAiClient, getEmbeddingClient, getEmbeddingConfig, initAiClient, init
 import { SYSTEM_TEMPERATURE, type ChatMessage } from '@/services/ai/types'
 import { initAgent, runAgent } from '@/services/agent'
 import type { AgentRunRequest, AgentStep, AgentTaskContext } from '@/services/agent/types'
-import { registerSourceReferences, type SourceReferenceRegistry } from '@/services/ai/sourceReferences'
+import { annotateMemoryContext, registerSourceReferences, type SourceReferenceRegistry } from '@/services/ai/sourceReferences'
 import { createAgentTaskContext, decodeAgentStepEvent, decodeKnowledgeSearchOutcome } from '@/services/agent/session'
 import { createActionProposal } from '@/services/agent/actionProposal'
 import type { ContextTag } from '@/types/contextTag'
@@ -875,10 +875,17 @@ export function useAiChat() {
         }
       }
 
-      // 注入 RAG 上下文和 Memory 上下文
+      const ragMessageSources = directRagRegistry.entries.map((entry) => entry.source)
+      const tagMessageSources = routingDecision.readingScope === 'selection'
+        ? toContextTagSources(contextTags || [])
+        : []
+      const messageSources = [...(ragMessageSources.length > 0 ? ragMessageSources : tagMessageSources), ...(prefetchedMemory?.sources || [])]
+      directRagRegistry = registerSourceReferences(directRagRegistry, messageSources)
+
+      // 注入 RAG 上下文和 Memory 上下文，共用消息来源编号。
       const injectedContext = buildSupplementalAiContext({
         knowledgeContext: ragContext,
-        memoryContext,
+        memoryContext: annotateMemoryContext(memoryContext, prefetchedMemory?.sources || [], directRagRegistry),
       })
       const finalMessages = buildMessagesForModel({
         history: modelHistory,
@@ -888,12 +895,6 @@ export function useAiChat() {
         answerMode: resolveAiAnswerMode(selectionRequestKind, useAgentMode),
       })
 
-      const ragMessageSources = directRagRegistry.entries.map((entry) => entry.source)
-      const tagMessageSources = routingDecision.readingScope === 'selection'
-        ? toContextTagSources(contextTags || [])
-        : []
-      const messageSources = [...(ragMessageSources.length > 0 ? ragMessageSources : tagMessageSources), ...(prefetchedMemory?.sources || [])]
-      directRagRegistry = registerSourceReferences(directRagRegistry, messageSources)
       const contextMeta = createContextMeta({
         tagCount: tagMetadata.length,
         ragSourceCount: countRagSourcesInContext(ragContext),

@@ -73,7 +73,7 @@ export function loadReadingArtifactsPageCommand(
 
 export function getAnnotationStructuredContent(_artifact: ReadingArtifact): AnnotationStructuredContent | null { return unsupported() }
 export function getReadingArtifactQuestion(_artifact: ReadingArtifact): string | null { return unsupported() }
-export function getReadingArtifactReferences(_artifact: ReadingArtifact): ReadingArtifactReference[] { return unsupported() }
+export function getReadingArtifactReferences(_artifact: ReadingArtifact, _citedOnly = false): ReadingArtifactReference[] { return unsupported() }
 export function resolveAnnotationPosition(
   _content: string,
   _annotation: AnnotationStructuredContent,

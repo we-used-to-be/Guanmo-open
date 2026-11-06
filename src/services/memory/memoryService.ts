@@ -688,7 +688,8 @@ export async function searchMemories(
   const semanticOnlyThreshold = options.embeddingModel === 'BAAI/bge-large-zh-v1.5' ? 0.4 : SEMANTIC_ONLY_THRESHOLD
   const lexicalScored = allMemories.map((memory) => ({
     memory,
-    similarity: Math.min(1, lexicalMemorySimilarity(query, memory.content) + (
+    similarity: lexicalMemorySimilarity(query, memory.content),
+    rankingBonus: (
       [memory.subject, memory.factKey, memory.factValue].some((value) => value && query.includes(value)) ? 0.2 : 0
     ) + (
       /偏好|习惯|风格|语气|语言|称呼|格式/.test(query) && ['preference', 'instruction'].includes(memory.category) ? 0.22 : 0
@@ -696,7 +697,7 @@ export async function searchMemories(
       /背景|身份|专业|职业/.test(query) && memory.category === 'profile' ? 0.22 : 0
     ) + (
       /之前|上次|当时|决定|决策/.test(query) && decodeMemoryEvidence(memory.evidence)?.kind === 'episodic' ? 0.18 : 0
-    )),
+    ),
   }))
   const lexicalMatches = sortMemoryScores(lexicalScored.filter((item) => item.similarity > 0), requestedScopeKey)
   const lexicalCandidates = lexicalMatches.slice(0,
@@ -770,7 +771,7 @@ export async function searchMemories(
       const importance = candidate.memory.source === 'auto_extracted' ? 0 : 0.02
       const ageDays = Math.max(0, Date.now() - candidate.memory.updatedAt) / 86400_000
       const recency = 0.02 / (1 + ageDays / 90)
-      scored.push({ memory: candidate.memory, similarity: similarity + importance + recency })
+      scored.push({ memory: candidate.memory, similarity: similarity + candidate.rankingBonus + importance + recency })
     }
   }
 

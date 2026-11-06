@@ -32,6 +32,17 @@ beforeEach(() => {
 afterEach(() => db.close())
 
 describe('memory writes against isolated SQLite', () => {
+  it('requires content relevance before category and structured-field bonuses can rank results', async () => {
+    await persistMemory(record({ id: 'major', status: 'active', category: 'profile', content: '用户的专业是计算机科学' }))
+    await persistMemory(record({ id: 'unrelated-profile', status: 'active', category: 'profile', content: '每年秋季参加马拉松', subject: 'user', factKey: '专业' }))
+    await persistMemory(record({ id: 'burger', status: 'active', content: '用户偏好双层牛肉汉堡' }))
+    await persistMemory(record({ id: 'unrelated-preference', status: 'active', content: '技术回答先给结论', factValue: '汉堡' }))
+    const major = await searchMemories('专业', { mode: 'strong' })
+    expect(major.map(item => item.id)).toEqual(['major'])
+    const burger = await searchMemories('汉堡偏好', { mode: 'strong' })
+    expect(burger.map(item => item.id)).toEqual(['burger'])
+    expect(await searchMemories('职业背景', { mode: 'strong' })).toEqual([])
+  })
   it('keeps the extraction system prompt stable when existing memories change', async () => {
     const chat = vi.fn(async (_request: ChatRequest) => ({ content: '[]' }))
     const messages = [{ role: 'user' as const, content: '我喜欢使用中文回答' }]
