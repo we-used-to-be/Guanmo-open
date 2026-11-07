@@ -412,6 +412,7 @@ export function useAiChat() {
       let semanticStatus: Awaited<ReturnType<typeof resolveSemanticRouting>>['status'] | undefined
       if (triggers.length > 0) {
         initAgent() // One-time registration; never initialize on an ordinary Direct request.
+        if (isCurrentRequest()) addTimelineItem({ type: 'local_search_start', label: '模型辅助判断' })
         const semantic = await resolveSemanticRouting({
           query: content, original: routingDecision, context: routingContext,
           config: routerConfig, signal: requestController.signal,
