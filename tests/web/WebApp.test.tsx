@@ -242,7 +242,7 @@ describe('WebApp', () => {
     await user.click(openaiOptions[openaiOptions.length - 1])
 
     expect(screen.getByLabelText('对话 API 地址')).toHaveValue('https://api.openai.com/v1')
-    expect(screen.getByLabelText('对话模型')).toHaveValue('gpt-4o-mini')
+    expect(screen.getByLabelText('对话模型')).toHaveValue('gpt-6-luna')
   })
 
   it('明文 LocalStorage 必须经过风险确认后才保存双 Key', async () => {
