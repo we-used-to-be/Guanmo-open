@@ -25,8 +25,8 @@ interface ReasoningAdapter {
 /** DeepSeek 适配器 */
 const deepseekAdapter: ReasoningAdapter = {
   supportsReasoning(model) {
-    // deepseek-v4-flash、deepseek-reasoner 等支持
-    if (model.includes('v4') || model.includes('reasoner')) return true
+    // DeepSeek Flash/V4、reasoner 等支持
+    if (model === 'deepseek-flash' || model.includes('v4') || model.includes('reasoner')) return true
     return 'unknown'
   },
   probeWhenRequested: true,
@@ -41,8 +41,8 @@ const deepseekAdapter: ReasoningAdapter = {
 /** OpenAI 适配器 */
 const openaiAdapter: ReasoningAdapter = {
   supportsReasoning(model) {
-    // o1、o3 系列支持
-    if (model.startsWith('o1') || model.startsWith('o3')) return true
+    // GPT-6 与 o1、o3 系列支持
+    if (model.startsWith('gpt-6') || model.startsWith('o1') || model.startsWith('o3')) return true
     return 'unknown'
   },
   probeWhenRequested: true,
